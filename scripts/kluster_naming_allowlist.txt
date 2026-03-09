@@ -1,0 +1,84 @@
+# Legacy `cluster` references allowed temporarily.
+# Keep this file shrinking. New entries should be avoided.
+MISSIONCONTROL_PHILOSOPHY.md:138:-   Klusters - knoweldge cluster inside mission for a targeted outcome
+README.md:200:- Create actions (mission/cluster/task) attempt immediate bootstrap Git commit to initialize location with pending metadata.
+README.md:3:A local-first pilot implementation of the AI Mission Control platform: knowledge clusters, task coordination with overlap detection, MCP-style agent tools, and ingestion stubs. Now includes a local vector store for search + similarity.
+README.md:55:1. Start local API container against cluster services:
+README.md:58:bash scripts/dev-up-cluster.sh
+README.md:64:bash scripts/dev-down-cluster.sh
+README.md:70:artifact publish to commit/push into a Git repo during local cluster-backed testing.
+backend/app/db.py:47:if "cluster" in tables and "kluster" not in tables:
+backend/app/db.py:48:conn.execute(text("ALTER TABLE cluster RENAME TO kluster"))
+backend/tests/test_owner_requirements.py:51:KlusterCreate(name="cluster-a", owners="   "),
+backend/tests/test_owner_requirements.py:58:KlusterCreate(name="cluster-a", owners="owner@example.com"),
+backend/tests/test_owner_requirements.py:65:KlusterCreate(name="cluster-a", owners=""),
+distribution/mc-integration/missioncontrol-mcp/README.md:11:- Includes `missioncontrol-explorer` terminal helper for mission/cluster/task tree browsing.
+distribution/mc-integration/missioncontrol-mcp/README.md:120:"MQTT_HOST": "mosquitto.missioncontrol.svc.cluster.local",
+distribution/mc-integration/missioncontrol-mcp/README.md:95:MC_BASE_URL="http://localhost:8008" MC_TOKEN="..." missioncontrol-explorer show cluster <cluster-hash>
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:12:f"{cluster_count} clusters, {tree.get('task_count', 0)} tasks",
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:136:tree = sub.add_parser("tree", help="render mission/cluster/task explorer tree")
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:139:tree.add_argument("--limit-tasks-per-cluster", type=int, default=5)
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:144:show.add_argument("node_type", choices=["mission", "cluster", "task"])
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:17:clusters = mission.get("clusters")
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:18:if clusters is None:
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:19:clusters = mission.get("klusters", [])
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:20:for cluster in clusters:
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:21:lines.append(f"  - Cluster: {cluster['name']} ({cluster['id']}) tasks={cluster['task_count']}")
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:22:for task in cluster.get("recent_tasks", []):
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:29:for cluster in unassigned:
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:30:lines.append(f"  - {cluster['name']} ({cluster['id']}) tasks={cluster['task_count']}")
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:44:f"clusters={cluster_count} tasks={tree.get('task_count', 0)}"
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:49:clusters = mission.get("clusters")
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:50:if clusters is None:
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:51:clusters = mission.get("klusters", [])
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:52:for cluster in clusters:
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:53:lines.append(f"  {c_node}C {cluster['name']} ({cluster['id']}){c_reset}")
+distribution/mc-integration/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:54:for task in cluster.get("recent_tasks", []):
+distribution/mc-integration/missioncontrol-mcp/tests/test_explorer.py:35:self.assertIn("1 clusters", rendered)
+docs/AGENT-INSTALL.md:95:- create a task in cluster 1
+docs/AGENT-INSTALL.md:96:- list tasks in cluster 1
+docs/DEPLOYMENT.md:158:- Mission Control page lists clusters and tasks.
+docs/RELEASE-UPGRADE-CHECKLIST.md:43:- Create and update mission/cluster/task.
+docs/architecture.md:4:- **Knowledge Service**: clusters, docs, artifacts with publish/draft status.
+docs/schema-packs/alternative-product.json:10:"cluster": {
+docs/schema-packs/main.json:10:"cluster": {
+integrations/missioncontrol-mcp/README.md:11:- Includes `missioncontrol-explorer` terminal helper for mission/cluster/task tree browsing.
+integrations/missioncontrol-mcp/README.md:120:"MQTT_HOST": "mosquitto.missioncontrol.svc.cluster.local",
+integrations/missioncontrol-mcp/README.md:95:MC_BASE_URL="http://localhost:8008" MC_TOKEN="..." missioncontrol-explorer show cluster <cluster-hash>
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:11:f"{tree.get('cluster_count', 0)} clusters, {tree.get('task_count', 0)} tasks",
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:125:tree = sub.add_parser("tree", help="render mission/cluster/task explorer tree")
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:128:tree.add_argument("--limit-tasks-per-cluster", type=int, default=5)
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:133:show.add_argument("node_type", choices=["mission", "cluster", "task"])
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:16:for cluster in mission.get("clusters", []):
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:17:lines.append(f"  - Cluster: {cluster['name']} ({cluster['id']}) tasks={cluster['task_count']}")
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:18:for task in cluster.get("recent_tasks", []):
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:22:for cluster in tree["unassigned_clusters"]:
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:23:lines.append(f"  - {cluster['name']} ({cluster['id']}) tasks={cluster['task_count']}")
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:36:f"clusters={tree.get('cluster_count', 0)} tasks={tree.get('task_count', 0)}"
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:41:for cluster in mission.get("clusters", []):
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:42:lines.append(f"  {c_node}C {cluster['name']} ({cluster['id']}){c_reset}")
+integrations/missioncontrol-mcp/build/lib/missioncontrol_mcp/explorer.py:43:for task in cluster.get("recent_tasks", []):
+integrations/missioncontrol-mcp/src/missioncontrol_mcp.egg-info/PKG-INFO:19:- Includes `missioncontrol-explorer` terminal helper for mission/cluster/task tree browsing.
+integrations/missioncontrol-mcp/src/missioncontrol_mcp.egg-info/PKG-INFO:72:MC_BASE_URL="http://localhost:8008" MC_TOKEN="..." missioncontrol-explorer show cluster <cluster-hash>
+integrations/missioncontrol-mcp/src/missioncontrol_mcp.egg-info/PKG-INFO:97:"MQTT_HOST": "mosquitto.missioncontrol.svc.cluster.local",
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:12:f"{cluster_count} clusters, {tree.get('task_count', 0)} tasks",
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:136:tree = sub.add_parser("tree", help="render mission/cluster/task explorer tree")
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:139:tree.add_argument("--limit-tasks-per-cluster", type=int, default=5)
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:144:show.add_argument("node_type", choices=["mission", "cluster", "task"])
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:17:clusters = mission.get("clusters")
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:18:if clusters is None:
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:19:clusters = mission.get("klusters", [])
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:20:for cluster in clusters:
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:21:lines.append(f"  - Cluster: {cluster['name']} ({cluster['id']}) tasks={cluster['task_count']}")
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:22:for task in cluster.get("recent_tasks", []):
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:29:for cluster in unassigned:
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:30:lines.append(f"  - {cluster['name']} ({cluster['id']}) tasks={cluster['task_count']}")
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:44:f"clusters={cluster_count} tasks={tree.get('task_count', 0)}"
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:49:clusters = mission.get("clusters")
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:50:if clusters is None:
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:51:clusters = mission.get("klusters", [])
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:52:for cluster in clusters:
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:53:lines.append(f"  {c_node}C {cluster['name']} ({cluster['id']}){c_reset}")
+integrations/missioncontrol-mcp/src/missioncontrol_mcp/explorer.py:54:for task in cluster.get("recent_tasks", []):
+integrations/missioncontrol-mcp/tests/test_explorer.py:35:self.assertIn("1 clusters", rendered)
+scripts/dev-up-cluster.sh:27:if [[ "$host" == *.svc.cluster.local ]]; then

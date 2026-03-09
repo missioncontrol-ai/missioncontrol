@@ -1,0 +1,162 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Bash syntax checks
+        run: |
+          bash -n install.sh
+          bash -n scripts/doctor.sh
+      - name: missioncontrol-mcp unit tests
+        run: |
+          PYTHONPATH=missioncontrol-mcp/src \
+          python -m unittest -v missioncontrol-mcp/tests/test_server.py missioncontrol-mcp/tests/test_explorer.py
+      - name: Template render smoke
+        run: |
+          chmod +x install.sh scripts/doctor.sh
+          ./install.sh --help
+          bash scripts/doctor.sh || true
+      - name: Bash runtime smoke
+        run: |
+          set -euo pipefail
+          ROOT="$PWD"
+          WORK="$(mktemp -d)"
+          HOME="$WORK/home"
+          BIN="$WORK/bin"
+          mkdir -p "$HOME" "$BIN"
+          export HOME
+          export PATH="$BIN:$PATH"
+
+          cat > "$BIN/pipx" <<'SH'
+          #!/usr/bin/env bash
+          echo "[mock pipx] $*"
+          exit 0
+          SH
+          chmod +x "$BIN/pipx"
+
+          cat > "$BIN/missioncontrol-mcp" <<'SH'
+          #!/usr/bin/env bash
+          if [[ "${1:-}" == "--help" ]]; then
+            echo "missioncontrol-mcp mock help"
+            exit 0
+          fi
+          echo "missioncontrol-mcp mock run $*"
+          exit 0
+          SH
+          chmod +x "$BIN/missioncontrol-mcp"
+
+          cat > "$BIN/curl" <<'SH'
+          #!/usr/bin/env bash
+          exit 1
+          SH
+          chmod +x "$BIN/curl"
+
+          bash "$ROOT/install.sh"
+          bash "$ROOT/scripts/doctor.sh"
+
+          STREAM_DIR="$WORK/stream"
+          mkdir -p "$STREAM_DIR"
+          cd "$STREAM_DIR"
+          cat "$ROOT/install.sh" | bash -s --
+          cd "$ROOT"
+
+          TOKEN='ab"cd\ef'
+          CUSTOM_INSTALL="$WORK/custom-install"
+          bash "$ROOT/install.sh" \
+            --endpoint "https://missioncontrol.example.com" \
+            --token "$TOKEN" \
+            --agent both \
+            --install-dir "$CUSTOM_INSTALL"
+
+          python3 -m json.tool "$CUSTOM_INSTALL/config/claude.mcp.json" >/dev/null
+          python3 - "$CUSTOM_INSTALL/config/codex.mcp.toml" <<'PY'
+          import pathlib
+          import sys
+          import tomllib
+          tomllib.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          PY
+
+  powershell-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell parse checks
+        shell: pwsh
+        run: |
+          $errors = @()
+          $null = [System.Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$null, [ref]$errors)
+          if ($errors.Count -gt 0) { throw "install.ps1 parse errors: $($errors | ForEach-Object Message -join '; ')" }
+          $errors = @()
+          $null = [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/doctor.ps1", [ref]$null, [ref]$errors)
+          if ($errors.Count -gt 0) { throw "doctor.ps1 parse errors: $($errors | ForEach-Object Message -join '; ')" }
+          Write-Host "PowerShell scripts parse successfully"
+      - name: PowerShell runtime smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = (Get-Location).Path
+          $work = Join-Path $env:RUNNER_TEMP "mc-integration-smoke"
+          $home = Join-Path $work "home"
+          $bin = Join-Path $work "bin"
+          New-Item -ItemType Directory -Force -Path $work,$home,$bin | Out-Null
+
+          @"
+          @echo off
+          echo [mock pipx] %*
+          exit /b 0
+          "@ | Set-Content -Path (Join-Path $bin "pipx.cmd") -Encoding Ascii
+
+          @"
+          @echo off
+          if "%1"=="--help" (
+            echo missioncontrol-mcp mock help
+            exit /b 0
+          )
+          echo missioncontrol-mcp mock run %*
+          exit /b 0
+          "@ | Set-Content -Path (Join-Path $bin "missioncontrol-mcp.cmd") -Encoding Ascii
+
+          $env:USERPROFILE = $home
+          $env:HOME = $home
+          $env:PATH = "$bin;$env:PATH"
+
+          pwsh -NoProfile -File (Join-Path $root "install.ps1")
+          pwsh -NoProfile -File (Join-Path $root "scripts/doctor.ps1")
+
+          $streamDir = Join-Path $work "stream"
+          New-Item -ItemType Directory -Force -Path $streamDir | Out-Null
+          Push-Location $streamDir
+          try {
+            Get-Content -Raw (Join-Path $root "install.ps1") | Invoke-Expression
+          } finally {
+            Pop-Location
+          }
+
+          $token = 'ab\"cd\ef'
+          $escapeInstallDir = Join-Path $work "escape-install"
+          pwsh -NoProfile -File (Join-Path $root "install.ps1") -Endpoint "https://missioncontrol.example.com" -Token $token -Agent both -InstallDir $escapeInstallDir
+
+          $jsonPath = Join-Path $escapeInstallDir "config/claude.mcp.json"
+          $tomlPath = Join-Path $escapeInstallDir "config/codex.mcp.toml"
+          $null = Get-Content -Raw $jsonPath | ConvertFrom-Json
+
+          $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+          if ($pythonCmd) {
+            python -c "import pathlib,tomllib,sys; tomllib.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))" $tomlPath
+          } else {
+            $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+            if (-not $pyCmd) { throw "python/py not found for TOML validation" }
+            py -3 -c "import pathlib,tomllib,sys; tomllib.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))" $tomlPath
+          }
+
+          Write-Host "PowerShell runtime checks passed"

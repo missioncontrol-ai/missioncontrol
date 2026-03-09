@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MissionControl Explorer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <section id="login-gate" class="login-gate">
+      <div class="login-card">
+        <div class="brand">MissionControl</div>
+        <h1>Team Testing Login</h1>
+        <p class="detail-empty">Enter the shared test token to access MissionControl.</p>
+        <label>
+          Access Token
+          <input id="login-token-input" type="password" placeholder="MC_TOKEN" />
+        </label>
+        <div class="login-actions">
+          <button id="login-submit">Continue</button>
+        </div>
+        <div id="login-error" class="error hidden"></div>
+      </div>
+    </section>
+
+    <div id="app-shell" class="hidden">
+      <header class="shell-header">
+        <div>
+          <div class="brand">MissionControl</div>
+          <h1>Mission and Kluster Explorer</h1>
+        </div>
+        <div class="header-actions">
+          <button id="refresh-btn" class="ghost">Refresh</button>
+          <button id="logout-btn" class="ghost">Logout</button>
+        </div>
+      </header>
+
+      <section class="tabs">
+        <button id="tab-explorer" class="tab active">Explorer</button>
+        <button id="tab-onboarding" class="tab">Agent Activation</button>
+        <button id="tab-admin" class="tab">Admin</button>
+      </section>
+
+      <section class="filters" id="filters-bar">
+        <label>
+          Token
+          <input id="token-input" type="password" placeholder="MC_TOKEN" />
+        </label>
+        <label>
+          Search
+          <input id="search-input" type="text" placeholder="Search missions, klusters, tasks" />
+        </label>
+        <label>
+          View
+          <select id="tree-view-filter">
+            <option value="tasks">tasks</option>
+            <option value="artifacts">artifacts</option>
+            <option value="governance">governance</option>
+          </select>
+        </label>
+        <label>
+          Task Status
+          <select id="status-filter">
+            <option value="">All</option>
+            <option value="proposed">proposed</option>
+            <option value="in_progress">in_progress</option>
+            <option value="blocked">blocked</option>
+            <option value="done">done</option>
+          </select>
+        </label>
+        <button id="apply-btn">Apply</button>
+      </section>
+
+      <section class="summary" id="summary"></section>
+      <section class="error hidden" id="error-banner"></section>
+
+      <main class="shell" id="explorer-view">
+        <section class="panel explorer">
+          <h2>Tree</h2>
+          <div id="tree-root"></div>
+        </section>
+
+        <section class="panel detail">
+          <h2>Details</h2>
+          <div id="detail-root" class="detail-empty">Select a mission, kluster, or task</div>
+        </section>
+      </main>
+
+      <section id="onboarding-view" class="panel hidden">
+        <h2>Agent Activation</h2>
+        <p class="detail-empty">
+          Use this generated manifest to automate onboarding in Codex, Claude Code, OpenClaw, and NanoClaw.
+        </p>
+        <div class="detail-card">
+          <h3>Access Endpoint</h3>
+          <p class="detail-empty">Enter the MissionControl endpoint to generate instance-specific onboarding config.</p>
+          <div class="onboarding-actions">
+            <input id="onboarding-endpoint-input" type="text" placeholder="mc-dev.merlinlabs.cloud or https://mc-dev.merlinlabs.cloud" />
+            <button id="apply-onboarding-endpoint" class="ghost">Apply Endpoint</button>
+          </div>
+        </div>
+        <div class="onboarding-actions">
+          <button id="refresh-manifest" class="ghost">Refresh Manifest</button>
+          <button id="copy-manifest-url" class="ghost">Copy Manifest URL</button>
+        </div>
+        <div class="detail-card">
+          <h3>Manifest Endpoint</h3>
+          <code id="manifest-url"></code>
+        </div>
+        <div class="detail-card">
+          <h3>MCP Server Config</h3>
+          <pre id="mcp-config"></pre>
+        </div>
+        <div class="detail-card">
+          <h3>Bootstrap Commands</h3>
+          <pre id="bootstrap-commands"></pre>
+        </div>
+        <div class="detail-card">
+          <h3>Full Manifest JSON</h3>
+          <pre id="manifest-json"></pre>
+        </div>
+      </section>
+
+      <section id="admin-view" class="panel hidden">
+        <h2>Governance Admin</h2>
+        <p class="detail-empty">Manage global governance policy drafts and publishing.</p>
+        <div class="onboarding-actions">
+          <button id="refresh-governance" class="ghost">Refresh</button>
+          <button id="create-governance-draft" class="ghost">Create Draft From Active</button>
+          <button id="publish-governance-draft" class="ghost">Publish Current Draft</button>
+        </div>
+        <div class="detail-card">
+          <h3>Active Policy (Effective)</h3>
+          <pre id="governance-active"></pre>
+        </div>
+        <div class="detail-card">
+          <h3>Draft Policy JSON</h3>
+          <textarea id="governance-draft-json" class="policy-editor" spellcheck="false"></textarea>
+        </div>
+        <div class="onboarding-actions">
+          <button id="validate-governance-draft" class="ghost">Validate Draft</button>
+          <button id="save-governance-draft" class="ghost">Save Draft</button>
+        </div>
+        <div class="detail-card">
+          <h3>Policy Versions</h3>
+          <pre id="governance-versions"></pre>
+        </div>
+        <div class="detail-card">
+          <h3>Policy Events</h3>
+          <pre id="governance-events"></pre>
+        </div>
+      </section>
+
+      <footer>
+        <span>Explorer API: <code>/explorer/tree</code></span>
+        <span>Node API: <code>/explorer/node/{type}/{id}</code></span>
+        <span>Agent Manifest: <code>/agent-onboarding.json</code></span>
+      </footer>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

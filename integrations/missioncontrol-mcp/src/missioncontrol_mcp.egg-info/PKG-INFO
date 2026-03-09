@@ -1,0 +1,110 @@
+Metadata-Version: 2.4
+Name: missioncontrol-mcp
+Version: 0.1.1
+Summary: MCP stdio bridge for MissionControl API
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: paho-mqtt
+
+# missioncontrol-mcp
+
+MCP stdio bridge so Codex/Claude can use MissionControl tools as first-class MCP tools.
+
+## What It Does
+
+- Exposes `tools/list` and `tools/call` over MCP stdio.
+- Bridges those calls to MissionControl API:
+  - `GET /mcp/tools`
+  - `POST /mcp/call`
+- Includes `missioncontrol-explorer` terminal helper for mission/cluster/task tree browsing.
+
+## Install (pipx recommended)
+
+```bash
+pipx install /path/to/missioncontrol/integrations/missioncontrol-mcp
+```
+
+Or from git:
+
+```bash
+pipx install "git+ssh://git@github.com/ryanmerlin/missioncontrol.git#subdirectory=integrations/missioncontrol-mcp"
+```
+
+## Env Vars
+
+- `MC_BASE_URL` (default: `http://localhost:8008`)
+- `MC_BASE_URLS` (optional comma-separated fallback URLs)
+- `MC_TOKEN` (required for MCP in MVP dual-auth mode)
+- `MC_STARTUP_PREFLIGHT` (`none|health|tools`, default: `health`)
+- `MC_HTTP_TIMEOUT_SEC` (default: `20`)
+- `MC_HTTP_RETRIES` (default: `2`)
+- `MC_HTTP_RETRY_BACKOFF_MS` (default: `250`)
+- `MC_FAIL_OPEN_ON_LIST` (default: `false`)
+- `MC_AGENT_ID` (required to subscribe to MQTT inbox)
+- `MQTT_HOST` (required for MQTT inbox)
+- `MQTT_PORT` (default: `1883`)
+- `MQTT_USERNAME` (default: `missioncontrol`)
+- `MQTT_PASSWORD` (required for MQTT inbox)
+
+## Quick Local Test
+
+```bash
+MC_BASE_URLS="https://missioncontrol.hartley-neon.ts.net,https://mc.merlinlabs.cloud,http://localhost:8008" \
+MC_TOKEN="..." \
+missioncontrol-mcp
+```
+
+Doctor command:
+
+```bash
+MC_BASE_URLS="https://missioncontrol.hartley-neon.ts.net,https://mc.merlinlabs.cloud" \
+MC_TOKEN="..." \
+missioncontrol-mcp doctor
+```
+
+Explorer CLI examples:
+
+```bash
+MC_BASE_URL="http://localhost:8008" MC_TOKEN="..." missioncontrol-explorer tree --format ansi
+```
+
+```bash
+MC_BASE_URL="http://localhost:8008" MC_TOKEN="..." missioncontrol-explorer show cluster <cluster-hash>
+```
+
+Governance admin examples:
+
+```bash
+MC_BASE_URL="http://localhost:8008" MC_TOKEN="..." missioncontrol-explorer admin policy show
+```
+
+```bash
+MC_BASE_URL="http://localhost:8008" MC_TOKEN="..." missioncontrol-explorer admin policy draft-create --note "harden policy"
+```
+
+## MCP Client Config Snippet
+
+Use this server command in your MCP client config:
+
+```json
+{
+  "missioncontrol": {
+    "command": "missioncontrol-mcp",
+    "env": {
+      "MC_BASE_URL": "https://missioncontrol.hartley-neon.ts.net",
+      "MC_TOKEN": "denali-everest-orion-sequoia-atlas",
+      "MC_AGENT_ID": "1",
+      "MQTT_HOST": "mosquitto.missioncontrol.svc.cluster.local",
+      "MQTT_PORT": "1883",
+      "MQTT_USERNAME": "missioncontrol",
+      "MQTT_PASSWORD": "change-me"
+    }
+  }
+}
+```
+
+## Notes
+
+- This bridge intentionally keeps no state.
+- It is safe for multiple local clients to run independently.
+- For team agents, prefer Tailscale route `missioncontrol.hartley-neon.ts.net` over public ingress.

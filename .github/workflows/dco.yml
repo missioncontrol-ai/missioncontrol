@@ -1,0 +1,48 @@
+name: DCO Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Signed-off-by trailers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            BASE_REF="${{ github.base_ref }}"
+            git fetch origin "${BASE_REF}" --depth=1
+            RANGE="origin/${BASE_REF}..HEAD"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [[ -z "${BEFORE}" || "${BEFORE}" == "0000000000000000000000000000000000000000" ]]; then
+              RANGE="HEAD"
+            else
+              RANGE="${BEFORE}..HEAD"
+            fi
+          fi
+
+          FAIL=0
+          while IFS= read -r COMMIT; do
+            [[ -z "${COMMIT}" ]] && continue
+            if ! git show -s --format=%B "${COMMIT}" | grep -qi '^Signed-off-by:'; then
+              echo "Missing Signed-off-by trailer in commit ${COMMIT}"
+              FAIL=1
+            fi
+          done < <(git rev-list "${RANGE}")
+
+          if [[ "${FAIL}" -ne 0 ]]; then
+            echo "DCO check failed. Recreate commit(s) with: git commit -s"
+            exit 1
+          fi

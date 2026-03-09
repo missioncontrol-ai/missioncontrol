@@ -1,0 +1,36 @@
+{
+  "version": "v1",
+  "name": "alternative-product",
+  "description": "Alternative schema pack for product delivery teams with explicit priority and target dates",
+  "entities": {
+    "mission": {
+      "required": ["name", "owners"],
+      "optional": ["description", "contributors", "tags", "visibility", "status"]
+    },
+    "cluster": {
+      "required": ["name", "mission_id"],
+      "optional": ["description", "owners", "contributors", "tags", "status"]
+    },
+    "task": {
+      "required": ["cluster_id", "title", "owner"],
+      "optional": [
+        "description",
+        "status",
+        "contributors",
+        "dependencies",
+        "definition_of_done",
+        "related_artifacts",
+        "priority",
+        "target_date"
+      ]
+    },
+    "doc": {
+      "required": ["cluster_id", "title", "body"],
+      "optional": ["doc_type", "status", "provenance"]
+    },
+    "artifact": {
+      "required": ["cluster_id", "name", "uri"],
+      "optional": ["artifact_type", "status", "provenance"]
+    }
+  }
+}

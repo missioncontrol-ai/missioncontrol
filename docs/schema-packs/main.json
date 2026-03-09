@@ -1,0 +1,35 @@
+{
+  "version": "v1",
+  "name": "main",
+  "description": "Default schema pack for general mission execution workflows",
+  "entities": {
+    "mission": {
+      "required": ["name"],
+      "optional": ["description", "owners", "contributors", "tags", "visibility", "status"]
+    },
+    "cluster": {
+      "required": ["name"],
+      "optional": ["mission_id", "description", "owners", "contributors", "tags", "status"]
+    },
+    "task": {
+      "required": ["cluster_id", "title"],
+      "optional": [
+        "description",
+        "status",
+        "owner",
+        "contributors",
+        "dependencies",
+        "definition_of_done",
+        "related_artifacts"
+      ]
+    },
+    "doc": {
+      "required": ["cluster_id", "title", "body"],
+      "optional": ["doc_type", "status", "provenance"]
+    },
+    "artifact": {
+      "required": ["cluster_id", "name", "uri"],
+      "optional": ["artifact_type", "status", "provenance"]
+    }
+  }
+}

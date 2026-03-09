@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+pydantic
+python-multipart
+rapidfuzz
+chromadb
+numpy
+psycopg[binary]
+PyJWT[crypto]
+paho-mqtt
+alembic
+boto3

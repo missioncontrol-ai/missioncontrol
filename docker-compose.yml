@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.2-pg18-trixie
+    container_name: missioncontrol-postgres
+    environment:
+      POSTGRES_DB: missioncontrol
+      POSTGRES_USER: missioncontrol
+      POSTGRES_PASSWORD: missioncontrol
+    ports:
+      - "5432:5432"
+    volumes:
+      - missioncontrol-postgres-data:/var/lib/postgresql
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: missioncontrol-mosquitto
+    ports:
+      - "1884:1883"
+    volumes:
+      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: missioncontrol-api
+    depends_on:
+      - postgres
+      - mosquitto
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://missioncontrol:missioncontrol@postgres:5432/missioncontrol
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_USERNAME: ""
+      MQTT_PASSWORD: ""
+      MC_OBJECT_STORAGE_ENDPOINT: ${MC_OBJECT_STORAGE_ENDPOINT:-}
+      MC_OBJECT_STORAGE_REGION: ${MC_OBJECT_STORAGE_REGION:-us-east-1}
+      MC_OBJECT_STORAGE_BUCKET: ${MC_OBJECT_STORAGE_BUCKET:-missioncontrol}
+      MC_OBJECT_STORAGE_SECURE: ${MC_OBJECT_STORAGE_SECURE:-true}
+      MC_OBJECT_STORAGE_ACCESS_KEY: ${MC_OBJECT_STORAGE_ACCESS_KEY:-}
+      MC_OBJECT_STORAGE_ACCESS_SECRET: ${MC_OBJECT_STORAGE_ACCESS_SECRET:-}
+    ports:
+      - "8008:8008"
+    volumes:
+      - ./backend/chroma:/app/chroma
+
+  mcpd:
+    build:
+      context: .
+      dockerfile: integrations/missioncontrol-mcp/Dockerfile
+    container_name: missioncontrol-mcpd
+    depends_on:
+      - api
+    environment:
+      MC_MCP_MODE: daemon
+      MC_BASE_URL: http://api:8008
+      MC_DAEMON_HOST: 0.0.0.0
+      MC_DAEMON_PORT: "8765"
+      MC_TOKEN: ${MC_TOKEN:-}
+    ports:
+      - "8765:8765"
+
+volumes:
+  missioncontrol-postgres-data:

@@ -1,0 +1,171 @@
+
+# Local DB
+backend/taskman.db
+backend/ci_migrations*.db
+.dev/
+
+# Vector store
+backend/chroma/
+
+# OS
+.DS_Store
+Thumbs.db
+
+taskman.db
+
+# Claude
+tmpclaude*
+.claude/
+**/.claude/
+
+# Local .terraform directories
+.terraform/
+
+# .tfstate files
+*.tfstate
+*.tfstate.*
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Exclude all .tfvars files, which are likely to contain sensitive data, such as
+# password, private keys, and other secrets. These should not be part of version 
+# control as they are data points which are potentially sensitive and subject 
+# to change depending on the environment.
+*.tfvars
+*.tfvars.json
+
+# Ignore override files as they are usually used to override resources locally and so
+# are not checked in
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Ignore transient lock info files created by terraform apply
+.terraform.tfstate.lock.info
+
+# Include override files you do wish to add to version control using negated pattern
+# !example_override.tf
+
+# Include tfplan files to ignore the plan output of command: terraform plan -out=tfplan
+# example: *tfplan*
+
+# Ignore CLI configuration files
+.terraformrc
+terraform.rc
+
+############################################
+# Kubernetes / Argo CD / GitOps
+############################################
+
+# kubeconfigs (never commit)
+kubeconfig
+kubeconfig.*
+*.kubeconfig
+**/kubeconfig
+**/*.kubeconfig
+
+# kubectl / kustomize / helm local artifacts
+*.rendered.yaml
+*.rendered.yml
+*.local.yaml
+*.local.yml
+*.patched.yaml
+*.patched.yml
+*.tmp.yaml
+*.tmp.yml
+
+# Helm
+charts/**/charts/
+charts/**/Chart.lock
+**/Chart.lock
+**/values.local.yaml
+**/values.local.yml
+**/values-private.yaml
+**/values-private.yml
+**/values.secret.yaml
+**/values.secret.yml
+
+# Kustomize build output (if you generate manifests locally)
+kustomize.build/
+**/.kustomize/
+**/kustomize.build/
+
+############################################
+# Secrets / SOPS / External Secrets
+############################################
+
+# Generic secrets (common patterns)
+# **/secret*.yaml
+# **/secret*.yml
+# **/*secrets*.yaml
+# **/*secrets*.yml
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# SOPS
+*.sops.yaml
+*.sops.yml
+.sops.yaml
+.sops.yml
+.sops-age-key.txt
+age-key.txt
+*.agekey
+
+############################################
+# Argo CD / tooling caches
+############################################
+
+# Argo CD CLI local config/cache (if used)
+.argocd/
+**/.argocd/
+
+# Task runners / local env files
+*.env
+.env
+.env.*
+!.env.example
+!.env.sample
+
+############################################
+# Editor / OS / misc
+############################################
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+.*.swp
+.*.swo
+
+# Windows
+Thumbs.db
+
+# VS Code / JetBrains
+.vscode/
+.idea/
+*.iml
+
+############################################
+# Python / Node (if you use helpers/scripts)
+############################################
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

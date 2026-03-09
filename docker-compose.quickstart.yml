@@ -1,0 +1,50 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: missioncontrol-mosquitto
+    volumes:
+      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: missioncontrol-api
+    depends_on:
+      - mosquitto
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite:////data/taskman.db
+      VECTOR_STORE_BACKEND: chroma
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_USERNAME: ""
+      MQTT_PASSWORD: ""
+      MC_OBJECT_STORAGE_ENDPOINT: ${MC_OBJECT_STORAGE_ENDPOINT:-}
+      MC_OBJECT_STORAGE_REGION: ${MC_OBJECT_STORAGE_REGION:-us-east-1}
+      MC_OBJECT_STORAGE_BUCKET: ${MC_OBJECT_STORAGE_BUCKET:-missioncontrol}
+      MC_OBJECT_STORAGE_SECURE: ${MC_OBJECT_STORAGE_SECURE:-true}
+      MC_OBJECT_STORAGE_ACCESS_KEY: ${MC_OBJECT_STORAGE_ACCESS_KEY:-}
+      MC_OBJECT_STORAGE_ACCESS_SECRET: ${MC_OBJECT_STORAGE_ACCESS_SECRET:-}
+    ports:
+      - "8008:8008"
+    volumes:
+      - ./backend/chroma:/app/chroma
+      - ./backend/dev-data:/data
+
+  mcpd:
+    build:
+      context: .
+      dockerfile: integrations/missioncontrol-mcp/Dockerfile
+    container_name: missioncontrol-mcpd
+    depends_on:
+      - api
+    environment:
+      MC_MCP_MODE: daemon
+      MC_BASE_URL: http://api:8008
+      MC_DAEMON_HOST: 0.0.0.0
+      MC_DAEMON_PORT: "8765"
+      MC_TOKEN: ${MC_TOKEN:-}
+    ports:
+      - "8765:8765"
