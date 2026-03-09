@@ -15,7 +15,7 @@ bash scripts/dev-up.sh
 2. Smoke test:
 
 ```bash
-curl -H "Authorization: Bearer denali-everest-orion-sequoia-atlas" http://localhost:8008/
+curl -H "Authorization: Bearer Change-Now-Socrates-Plato-Aristotle-Aurelius" http://localhost:8008/
 ```
 
 or run automated profile smoke checks:

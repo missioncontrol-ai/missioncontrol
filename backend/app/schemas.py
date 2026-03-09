@@ -574,3 +574,35 @@ class FeedbackTriageUpdate(BaseModel):
     owner: Optional[str] = None
     disposition: Optional[str] = None
     outcome_ref: Optional[str] = None
+
+
+class UserProfileCreate(BaseModel):
+    name: str
+    description: str = ""
+    is_default: bool = False
+    manifest: List[dict] = Field(default_factory=list)
+    tarball_b64: str
+
+
+class UserProfileUpdate(BaseModel):
+    description: Optional[str] = None
+    is_default: Optional[bool] = None
+    manifest: Optional[List[dict]] = None
+    tarball_b64: Optional[str] = None
+
+
+class UserProfileRead(BaseModel):
+    id: int
+    name: str
+    owner_subject: str
+    description: str
+    is_default: bool
+    manifest: List[dict]
+    sha256: Optional[str]
+    size_bytes: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserProfileDownloadRead(UserProfileRead):
+    tarball_b64: str

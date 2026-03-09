@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from sqlmodel import Field, SQLModel
-from sqlalchemy import CheckConstraint, Column, Text
+from sqlalchemy import CheckConstraint, Column, Text, UniqueConstraint
 
 
 class Kluster(SQLModel, table=True):
@@ -345,6 +345,21 @@ class FeedbackEntry(SQLModel, table=True):
     outcome_ref: str = ""
     metadata_json: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class UserProfile(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("owner_subject", "name", name="uq_userprofile_owner_name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    owner_subject: str = Field(index=True)
+    description: str = ""
+    is_default: bool = False
+    manifest_json: str = "[]"
+    tarball_b64: Optional[str] = Field(default=None, sa_column=Column("tarball_b64", Text))
+    sha256: Optional[str] = None
+    size_bytes: int = 0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 

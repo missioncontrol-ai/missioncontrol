@@ -1053,10 +1053,212 @@ def doctor() -> int:
     return 0
 
 
+def _mc_home() -> Path:
+    root = Path(os.getenv("MC_HOME", "~/.missioncontrol")).expanduser()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def _skills_home() -> Path:
     root = Path(os.getenv("MC_SKILLS_HOME", "~/.missioncontrol/skills")).expanduser()
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+# ──────────────────────────────────────────────────────────────
+# Profile local state management
+# ──────────────────────────────────────────────────────────────
+
+class ProfileStore:
+    """Manages ~/.missioncontrol/state.json and profile directories."""
+
+    def __init__(self) -> None:
+        self._home = _mc_home()
+        self._state_file = self._home / "state.json"
+        self._profiles_dir = self._home / "profiles"
+
+    def _load_state(self) -> dict[str, Any]:
+        if self._state_file.exists():
+            try:
+                return json.loads(self._state_file.read_text("utf-8"))
+            except Exception:
+                return {}
+        return {}
+
+    def _save_state(self, state: dict[str, Any]) -> None:
+        self._home.mkdir(parents=True, exist_ok=True)
+        self._state_file.write_text(json.dumps(state, indent=2), "utf-8")
+
+    def get_last_profile(self) -> str | None:
+        return self._load_state().get("last_profile") or None
+
+    def set_last_profile(self, name: str) -> None:
+        state = self._load_state()
+        state["last_profile"] = name
+        self._save_state(state)
+
+    def get_profile_meta(self, name: str) -> dict[str, Any]:
+        return self._load_state().get("profiles", {}).get(name, {})
+
+    def set_profile_meta(self, name: str, sha256: str, last_sync_at: str) -> None:
+        state = self._load_state()
+        state.setdefault("profiles", {})[name] = {
+            "sha256": sha256,
+            "last_sync_at": last_sync_at,
+        }
+        self._save_state(state)
+
+    def profile_dir(self, name: str) -> Path:
+        return self._profiles_dir / name
+
+    def active_link(self) -> Path:
+        return self._profiles_dir / "active"
+
+    def resolve_active_symlink_name(self) -> str | None:
+        link = self.active_link()
+        if link.is_symlink():
+            try:
+                target = os.readlink(str(link))
+                return Path(target).name
+            except Exception:
+                return None
+        return None
+
+
+class ProfileSyncManager:
+    """Downloads and extracts profile bundles, manages the active symlink."""
+
+    def __init__(self, store: ProfileStore, http: MissionControlHttpClient) -> None:
+        self._store = store
+        self._http = http
+
+    def sync(self, name: str, force: bool = False) -> dict[str, Any]:
+        downloaded = self._http.http_json("GET", f"/me/profiles/{name}/download")
+        remote_sha = str(downloaded.get("sha256") or "")
+
+        if not force:
+            local_meta = self._store.get_profile_meta(name)
+            local_sha = local_meta.get("sha256", "")
+            if local_sha and local_sha == remote_sha:
+                return {"ok": True, "changed": False, "sha256": remote_sha}
+
+        tarball_b64 = str(downloaded.get("tarball_b64") or "")
+        target_dir = self._store.profile_dir(name)
+        tmp_dir = self._store.profile_dir(f".tmp-{name}-{os.getpid()}")
+
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir)
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+        _extract_snapshot_to_dir(tarball_b64, tmp_dir)
+
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        tmp_dir.rename(target_dir)
+
+        self.update_symlink(name)
+
+        now = datetime.utcnow().isoformat()
+        self._store.set_profile_meta(name, remote_sha, now)
+        self._store.set_last_profile(name)
+
+        return {"ok": True, "changed": True, "sha256": remote_sha}
+
+    def update_symlink(self, name: str) -> None:
+        active = self._store.active_link()
+        active.parent.mkdir(parents=True, exist_ok=True)
+        tmp = active.parent / f".active-tmp-{os.getpid()}"
+        if tmp.exists() or tmp.is_symlink():
+            tmp.unlink()
+        os.symlink(name, str(tmp))
+        os.replace(str(tmp), str(active))
+
+
+def _resolve_profile_name(store: ProfileStore) -> str | None:
+    """Priority: MC_PROFILE env var → state.json last_profile."""
+    env = os.getenv("MC_PROFILE", "").strip()
+    if env:
+        return env
+    return store.get_last_profile()
+
+
+# Profile MCP tools exposed locally (not forwarded to backend)
+_PROFILE_LOCAL_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "list_profiles",
+        "description": "List your personal profiles in MissionControl",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "switch_profile",
+        "description": "Switch to a named profile (syncs bundle and updates active symlink)",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Profile name to switch to"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "sync_profile",
+        "description": "Resync the current active profile bundle",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "force": {"type": "boolean", "description": "Force re-download even if sha256 matches"},
+            },
+        },
+    },
+]
+
+_PROFILE_TOOL_NAMES = {t["name"] for t in _PROFILE_LOCAL_TOOLS}
+
+
+def _handle_profile_tool(
+    msg_id: Any,
+    tool_name: str,
+    tool_args: dict[str, Any],
+    http: MissionControlHttpClient,
+    store: ProfileStore,
+    sync_mgr: ProfileSyncManager,
+) -> dict[str, Any]:
+    try:
+        if tool_name == "list_profiles":
+            profiles = http.http_json("GET", "/me/profiles")
+            return rpc_result(msg_id, {
+                "content": [{"type": "text", "text": json.dumps(profiles, indent=2)}],
+                "isError": False,
+            })
+
+        if tool_name == "switch_profile":
+            name = str(tool_args.get("name") or "").strip()
+            if not name:
+                return rpc_result(msg_id, {"content": [{"type": "text", "text": "name is required"}], "isError": True})
+            result = sync_mgr.sync(name)
+            return rpc_result(msg_id, {
+                "content": [{"type": "text", "text": json.dumps(result)}],
+                "isError": False,
+            })
+
+        if tool_name == "sync_profile":
+            force = bool(tool_args.get("force", False))
+            name = _resolve_profile_name(store)
+            if not name:
+                return rpc_result(msg_id, {"content": [{"type": "text", "text": "No active profile configured"}], "isError": True})
+            result = sync_mgr.sync(name, force=force)
+            return rpc_result(msg_id, {
+                "content": [{"type": "text", "text": json.dumps(result)}],
+                "isError": False,
+            })
+
+    except Exception as exc:
+        return rpc_result(msg_id, {
+            "content": [{"type": "text", "text": f"Profile tool error: {exc}"}],
+            "isError": True,
+        })
+
+    return rpc_error(msg_id, -32601, f"Unknown profile tool: {tool_name}")
 
 
 def _scope_key(mission_id: str, kluster_id: str) -> str:

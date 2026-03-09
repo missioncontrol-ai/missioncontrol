@@ -37,6 +37,7 @@ from app.routers import (
     google_chat_integrations,
     teams_integrations,
     chat_integrations,
+    profiles,
 )
 
 app = FastAPI(
@@ -342,6 +343,7 @@ app.include_router(feedback.router)
 app.include_router(skills.router)
 app.include_router(google_chat_integrations.router)
 app.include_router(teams_integrations.router)
+app.include_router(profiles.router)
 
 
 def _web_dir() -> Path | None:
