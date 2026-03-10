@@ -18,6 +18,7 @@ from app.services.git_ledger import (
 from app.services.schema_pack import enforce_schema_pack
 from app.services.governance import extract_approval_context, require_policy_action
 from app.services.task_identity import ensure_task_public_id, resolve_task_by_ref
+from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(prefix="/missions/{mission_id}/k/{kluster_id}/t", tags=["tasks"])
 
@@ -57,7 +58,13 @@ def create_task(mission_id: str, kluster_id: str, payload: TaskCreate, request: 
             {"kluster_id": task.kluster_id, "status": task.status},
         )
 
-        candidates = session.exec(select(Task).where(Task.id != task.id)).all()
+        candidates = session.exec(
+            select(Task)
+            .where(Task.id != task.id)
+            .where(Task.kluster_id == kluster_id)
+            .order_by(Task.updated_at.desc())
+            .limit(200)
+        ).all()
         overlaps = score_overlap(task, candidates)
         for cand, score, evidence in overlaps[:5]:
             suggestion = OverlapSuggestion(
@@ -106,7 +113,13 @@ def create_task(mission_id: str, kluster_id: str, payload: TaskCreate, request: 
 
 
 @router.get("", response_model=list[TaskRead])
-def list_tasks(mission_id: str, kluster_id: str, status: Optional[str] = None, request: Request = None):
+def list_tasks(
+    mission_id: str,
+    kluster_id: str,
+    status: Optional[str] = None,
+    request: Request = None,
+    limit: int = limit_query(),
+):
     with get_session() as session:
         kluster = session.get(Kluster, kluster_id)
         if not kluster or kluster.mission_id != mission_id:
@@ -115,7 +128,7 @@ def list_tasks(mission_id: str, kluster_id: str, status: Optional[str] = None, r
         stmt = select(Task).where(Task.kluster_id == kluster_id)
         if status is not None:
             stmt = stmt.where(Task.status == status)
-        tasks = session.exec(stmt.order_by(Task.updated_at.desc())).all()
+        tasks = session.exec(stmt.order_by(Task.updated_at.desc()).limit(bounded_limit(limit))).all()
         for task in tasks:
             ensure_task_public_id(session, task)
         return tasks
@@ -190,7 +203,7 @@ def update_task(mission_id: str, kluster_id: str, task_id: str, payload: TaskUpd
 
 
 @router.get("/{task_id}/overlaps", response_model=list[OverlapSuggestionRead])
-def list_overlaps(mission_id: str, kluster_id: str, task_id: str):
+def list_overlaps(mission_id: str, kluster_id: str, task_id: str, limit: int = limit_query(default=20, maximum=100)):
     with get_session() as session:
         kluster = session.get(Kluster, kluster_id)
         if not kluster or kluster.mission_id != mission_id:
@@ -199,7 +212,7 @@ def list_overlaps(mission_id: str, kluster_id: str, task_id: str):
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         suggestions = session.exec(
-            select(OverlapSuggestion).where(OverlapSuggestion.task_id == task.id)
+            select(OverlapSuggestion).where(OverlapSuggestion.task_id == task.id).limit(bounded_limit(limit, default=20, maximum=100))
         ).all()
         return suggestions
 

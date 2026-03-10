@@ -1,3 +1,4 @@
+import hmac
 import json
 import os
 from dataclasses import dataclass
@@ -179,7 +180,8 @@ class GoogleChatProvider(ChatProvider):
             return False, "google_chat_verification_token_missing"
         header_value = _header(headers, "x-goog-chat-token")
         if header_value:
-            return (header_value == expected, "ok" if header_value == expected else "google_chat_token_invalid")
+            ok = hmac.compare_digest(header_value, expected)
+            return (ok, "ok" if ok else "google_chat_token_invalid")
         try:
             payload = json.loads(body.decode("utf-8") or "{}")
         except Exception:
@@ -187,7 +189,8 @@ class GoogleChatProvider(ChatProvider):
         token = str(payload.get("token") or "").strip()
         if not token:
             return False, "google_chat_token_missing"
-        return (token == expected, "ok" if token == expected else "google_chat_token_invalid")
+        ok = hmac.compare_digest(token, expected)
+        return (ok, "ok" if ok else "google_chat_token_invalid")
 
     def send_event_notification(
         self,
@@ -254,7 +257,8 @@ class TeamsProvider(ChatProvider):
             return False, "teams_verification_token_missing"
         header_value = _header(headers, "x-missioncontrol-teams-token")
         if header_value:
-            return (header_value == expected, "ok" if header_value == expected else "teams_token_invalid")
+            ok = hmac.compare_digest(header_value, expected)
+            return (ok, "ok" if ok else "teams_token_invalid")
         try:
             payload = json.loads(body.decode("utf-8") or "{}")
         except Exception:
@@ -262,7 +266,8 @@ class TeamsProvider(ChatProvider):
         token = str(payload.get("token") or "").strip()
         if not token:
             return False, "teams_token_missing"
-        return (token == expected, "ok" if token == expected else "teams_token_invalid")
+        ok = hmac.compare_digest(token, expected)
+        return (ok, "ok" if ok else "teams_token_invalid")
 
     def send_event_notification(
         self,

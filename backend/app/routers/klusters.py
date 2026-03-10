@@ -1,5 +1,6 @@
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
+from sqlalchemy import func
 from sqlmodel import select
 from app.db import get_session
 from app.models import Artifact, Kluster, Doc, Epic, IngestionJob, Mission, Task
@@ -19,6 +20,7 @@ from app.services.ids import new_hash_id
 from app.services.schema_pack import enforce_schema_pack
 from app.services.governance import extract_approval_context, require_policy_action
 from app.services.keystone import ensure_kluster_workstream
+from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(prefix="/missions/{mission_id}/k", tags=["klusters"])
 
@@ -81,14 +83,14 @@ def create_kluster(mission_id: str, payload: KlusterCreate, request: Request):
 
 
 @router.get("", response_model=list[KlusterRead])
-def list_klusters(mission_id: str, request: Request):
+def list_klusters(mission_id: str, request: Request, limit: int = limit_query()):
     with get_session() as session:
         mission = session.get(Mission, mission_id)
         if not mission:
             raise HTTPException(status_code=404, detail="Mission not found")
         assert_mission_reader_or_admin(session=session, request=request, mission_id=mission_id)
         query = select(Kluster).where(Kluster.mission_id == mission_id)
-        klusters = session.exec(query.order_by(Kluster.updated_at.desc())).all()
+        klusters = session.exec(query.order_by(Kluster.updated_at.desc()).limit(bounded_limit(limit))).all()
         return klusters
 
 
@@ -175,13 +177,15 @@ def delete_kluster(mission_id: str, kluster_id: str, request: Request):
         assert_mission_owner_or_admin(session=session, request=request, mission_id=mission_id)
 
         blockers = {
-            "tasks": len(session.exec(select(Task.id).where(Task.kluster_id == kluster_id)).all()),
-            "docs": len(session.exec(select(Doc.id).where(Doc.kluster_id == kluster_id)).all()),
-            "artifacts": len(session.exec(select(Artifact.id).where(Artifact.kluster_id == kluster_id)).all()),
-            "epics": len(session.exec(select(Epic.id).where(Epic.kluster_id == kluster_id)).all()),
-            "ingestion_jobs": len(
-                session.exec(select(IngestionJob.id).where(IngestionJob.kluster_id == kluster_id)).all()
-            ),
+            "tasks": session.exec(select(func.count()).select_from(Task).where(Task.kluster_id == kluster_id)).one(),
+            "docs": session.exec(select(func.count()).select_from(Doc).where(Doc.kluster_id == kluster_id)).one(),
+            "artifacts": session.exec(
+                select(func.count()).select_from(Artifact).where(Artifact.kluster_id == kluster_id)
+            ).one(),
+            "epics": session.exec(select(func.count()).select_from(Epic).where(Epic.kluster_id == kluster_id)).one(),
+            "ingestion_jobs": session.exec(
+                select(func.count()).select_from(IngestionJob).where(IngestionJob.kluster_id == kluster_id)
+            ).one(),
         }
         blocking = {k: v for k, v in blockers.items() if v}
         if blocking:

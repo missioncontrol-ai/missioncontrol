@@ -271,8 +271,6 @@ def subject_can_publish_mission(
     mission_id: str,
     subject: str,
 ) -> bool:
-    if subject == "service-token":
-        return True
     mission = session.get(Mission, mission_id)
     if not mission:
         return False

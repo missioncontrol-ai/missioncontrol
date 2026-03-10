@@ -49,9 +49,9 @@ class McpKlusterCreateTests(unittest.TestCase):
         self.assertFalse(response.ok)
         self.assertEqual(response.error, "name is required")
 
-    def test_create_mission_requires_owner_when_service_token_actor(self):
+    def test_create_mission_requires_owner_when_token_actor(self):
         request = SimpleNamespace(
-            state=SimpleNamespace(principal={"email": "", "subject": "service-token"}),
+            state=SimpleNamespace(principal={"email": "", "subject": "token-client"}),
             headers={},
             url=SimpleNamespace(path="/mcp/call"),
         )

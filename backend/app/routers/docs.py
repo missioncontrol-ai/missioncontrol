@@ -20,6 +20,7 @@ from app.services.git_ledger import enqueue_ledger_event, actor_subject_from_req
 from app.services.schema_pack import enforce_schema_pack
 from app.services.governance import extract_approval_context, require_policy_action
 from app.services.object_storage import build_scoped_key, object_storage_enabled, put_bytes
+from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(prefix="/docs", tags=["docs"])
 logger = logging.getLogger(__name__)
@@ -103,12 +104,12 @@ def create_doc(payload: DocCreate, request: Request):
 
 
 @router.get("", response_model=list[DocRead])
-def list_docs(kluster_id: Optional[str] = None, request: Request = None):
+def list_docs(kluster_id: Optional[str] = None, request: Request = None, limit: int = limit_query()):
     with get_session() as session:
         stmt = select(Doc)
         if kluster_id is not None:
             stmt = stmt.where(Doc.kluster_id == kluster_id)
-        docs = session.exec(stmt.order_by(Doc.updated_at.desc())).all()
+        docs = session.exec(stmt.order_by(Doc.updated_at.desc()).limit(bounded_limit(limit))).all()
         if is_platform_admin(request):
             return docs
         readable_ids = readable_mission_ids_for_request(session=session, request=request)

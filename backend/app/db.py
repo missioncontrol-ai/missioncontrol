@@ -29,13 +29,29 @@ DATABASE_URL = _build_database_url()
 engine_kwargs = {"echo": False}
 if DATABASE_URL.startswith("sqlite"):
     engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    engine_kwargs.update(
+        {
+            "pool_size": int(os.getenv("DB_POOL_SIZE", "20")),
+            "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "10")),
+            "pool_pre_ping": os.getenv("DB_POOL_PRE_PING", "true").strip().lower() in {"1", "true", "yes", "on"},
+            "pool_recycle": int(os.getenv("DB_POOL_RECYCLE_SECONDS", "3600")),
+        }
+    )
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 
 
 def init_db() -> None:
-    SQLModel.metadata.create_all(engine)
-    _migrate_schema()
+    if DATABASE_URL.startswith("sqlite") or os.getenv("MC_DB_AUTO_CREATE", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        SQLModel.metadata.create_all(engine)
+    if DATABASE_URL.startswith("sqlite") or os.getenv("MC_DB_RUNTIME_MIGRATIONS", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        _migrate_schema()
 
 
 def _migrate_schema() -> None:

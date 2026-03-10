@@ -1,10 +1,15 @@
 import unittest
+from types import SimpleNamespace
 
 from sqlmodel import SQLModel
 
 from app.db import engine, get_session
 from app.models import Kluster, Mission, Task
 from app.routers.explorer import get_explorer_node, get_explorer_tree
+
+
+def _request():
+    return SimpleNamespace(state=SimpleNamespace(principal={"email": "owner@example.com", "subject": "owner@example.com"}))
 
 
 class ExplorerRouterTests(unittest.TestCase):
@@ -22,6 +27,7 @@ class ExplorerRouterTests(unittest.TestCase):
                 mission_id=mission.id,
                 name="Kluster One",
                 tags="alpha,platform",
+                owners="owner@example.com",
             )
             task_a = Task(
                 kluster_id=kluster.id,
@@ -45,7 +51,7 @@ class ExplorerRouterTests(unittest.TestCase):
             self.kluster_id = kluster.id
 
     def test_tree_returns_mission_cluster_and_tasks(self):
-        tree = get_explorer_tree(limit_tasks_per_cluster=5)
+        tree = get_explorer_tree(limit_tasks_per_cluster=5, request=_request())
         self.assertEqual(tree.mission_count, 1)
         self.assertEqual(tree.kluster_count, 1)
         self.assertEqual(tree.task_count, 2)
@@ -53,13 +59,13 @@ class ExplorerRouterTests(unittest.TestCase):
         self.assertEqual(tree.missions[0].klusters[0].id, self.kluster_id)
 
     def test_tree_search_filter(self):
-        tree = get_explorer_tree(q="smoke", limit_tasks_per_cluster=5)
+        tree = get_explorer_tree(q="smoke", limit_tasks_per_cluster=5, request=_request())
         self.assertEqual(tree.mission_count, 1)
         self.assertEqual(tree.task_count, 1)
         self.assertEqual(tree.missions[0].klusters[0].recent_tasks[0].title, "Write smoke checks")
 
     def test_node_detail_for_task(self):
-        detail = get_explorer_node("task", str(self.task_id), limit_tasks=50)
+        detail = get_explorer_node("task", str(self.task_id), limit_tasks=50, request=_request())
         self.assertEqual(detail.task.id, self.task_id)
         self.assertEqual(detail.kluster.id, self.kluster_id)
         self.assertEqual(detail.mission.id, self.mission_id)

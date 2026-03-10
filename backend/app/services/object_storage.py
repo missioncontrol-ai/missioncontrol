@@ -112,6 +112,14 @@ def put_bytes(*, key: str, body: bytes, content_type: str) -> tuple[str, int]:
     return f"s3://{cfg.bucket}/{key}", len(body)
 
 
+def head_bucket() -> None:
+    cfg = load_object_storage_config()
+    if cfg is None:
+        return
+    client = _client(cfg)
+    client.head_bucket(Bucket=cfg.bucket)
+
+
 def get_bytes_from_uri(uri: str, *, expected_prefix: str | None = None) -> tuple[bytes, str]:
     cfg = load_object_storage_config()
     if cfg is None:

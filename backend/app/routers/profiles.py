@@ -16,6 +16,7 @@ from app.schemas import (
     UserProfileUpdate,
 )
 from app.services.authz import actor_subject_from_request
+from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(tags=["profiles"])
 
@@ -73,11 +74,13 @@ def _compute_tarball_fields(tarball_b64: str) -> tuple[str, int]:
 
 
 @router.get("/me/profiles", response_model=list[UserProfileRead])
-def list_profiles(request: Request):
+def list_profiles(request: Request, limit: int = limit_query()):
     owner_subject = actor_subject_from_request(request)
     with get_session() as session:
         profiles = session.exec(
             select(UserProfile).where(UserProfile.owner_subject == owner_subject)
+            .order_by(UserProfile.updated_at.desc())
+            .limit(bounded_limit(limit))
         ).all()
         return [_profile_read(p) for p in profiles]
 

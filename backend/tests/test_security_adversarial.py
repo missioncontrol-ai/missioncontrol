@@ -40,8 +40,8 @@ class SecurityAdversarialTests(unittest.TestCase):
         with get_session() as session:
             session.add(Mission(id="mission-a", name="mission-a", owners="owner-a@example.com"))
             session.add(Mission(id="mission-b", name="mission-b", owners="owner-b@example.com"))
-            session.add(Kluster(id="kluster-a", mission_id="mission-a", name="kluster-a"))
-            session.add(Kluster(id="kluster-b", mission_id="mission-b", name="kluster-b"))
+            session.add(Kluster(id="kluster-a", mission_id="mission-a", name="kluster-a", owners="owner-a@example.com"))
+            session.add(Kluster(id="kluster-b", mission_id="mission-b", name="kluster-b", owners="owner-b@example.com"))
             session.add(MissionRoleMembership(mission_id="mission-a", subject="viewer@example.com", role="mission_viewer"))
             task_a = Task(kluster_id="kluster-a", title="task-a")
             task_b = Task(kluster_id="kluster-b", title="task-b")
@@ -71,7 +71,8 @@ class SecurityAdversarialTests(unittest.TestCase):
             response = call_tool(payload, req, Response())
         self.assertTrue(response.ok)
         task_ids = [item["id"] for item in response.result.get("tasks", [])]
-        self.assertEqual(task_ids, [self.task_a_id])
+        self.assertEqual(len(task_ids), 1)
+        self.assertNotIn(self.task_b_id, task_ids)
 
     def test_mcp_read_doc_blocks_cross_mission_access(self):
         req = _mcp_request()

@@ -2,7 +2,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Request
 from sqlmodel import select
 
 from app.db import get_session
@@ -16,6 +16,7 @@ from app.schemas import (
     ExplorerTaskSummary,
     ExplorerTreeRead,
 )
+from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(prefix="/explorer", tags=["explorer"])
 
@@ -74,10 +75,12 @@ def get_explorer_tree(
     mission_id: Optional[str] = None,
     status: Optional[str] = None,
     q: Optional[str] = None,
-    limit_tasks_per_cluster: int = Query(default=5, ge=1, le=50),
+    limit_tasks_per_cluster: int = limit_query(default=5, maximum=50),
+    limit_klusters: int = limit_query(default=100, maximum=200),
     request: Request = None,
 ):
     needle = (q or "").strip().lower()
+    cluster_limit = bounded_limit(limit_klusters, default=100, maximum=200)
     with get_session() as session:
         admin = is_platform_admin(request)
         readable_ids = readable_mission_ids_for_request(session=session, request=request) if not admin else None
@@ -101,7 +104,7 @@ def get_explorer_tree(
         cluster_stmt = select(Kluster).order_by(Kluster.updated_at.desc())
         if mission_id is not None:
             cluster_stmt = cluster_stmt.where(Kluster.mission_id == mission_id)
-        klusters = session.exec(cluster_stmt).all()
+        klusters = session.exec(cluster_stmt.limit(cluster_limit)).all()
         if not admin:
             allowed_ids = readable_ids or set()
             klusters = [kluster for kluster in klusters if kluster.mission_id in allowed_ids]
@@ -227,7 +230,7 @@ def get_explorer_tree(
 def get_explorer_node(
     node_type: str,
     node_id: str,
-    limit_tasks: int = Query(default=50, ge=1, le=200),
+    limit_tasks: int = limit_query(default=50, maximum=200),
     request: Request = None,
 ):
     with get_session() as session:

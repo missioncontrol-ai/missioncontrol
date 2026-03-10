@@ -27,6 +27,7 @@ from app.services.object_storage import (
     put_bytes,
     scoped_prefix,
 )
+from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
@@ -116,12 +117,12 @@ def create_artifact(payload: ArtifactCreate, request: Request):
 
 
 @router.get("", response_model=list[ArtifactRead])
-def list_artifacts(kluster_id: Optional[str] = None, request: Request = None):
+def list_artifacts(kluster_id: Optional[str] = None, request: Request = None, limit: int = limit_query()):
     with get_session() as session:
         stmt = select(Artifact)
         if kluster_id is not None:
             stmt = stmt.where(Artifact.kluster_id == kluster_id)
-        artifacts = session.exec(stmt.order_by(Artifact.updated_at.desc())).all()
+        artifacts = session.exec(stmt.order_by(Artifact.updated_at.desc()).limit(bounded_limit(limit))).all()
         if is_platform_admin(request):
             return artifacts
         readable_ids = readable_mission_ids_for_request(session=session, request=request)
@@ -178,7 +179,11 @@ def get_artifact_content(artifact_id: int, request: Request):
 
 
 @router.get("/{artifact_id}/download-url")
-def get_artifact_download_url(artifact_id: int, request: Request, expires_seconds: int = 60):
+def get_artifact_download_url(
+    artifact_id: int,
+    request: Request,
+    expires_seconds: int = 60,
+):
     with get_session() as session:
         artifact = session.get(Artifact, artifact_id)
         if not artifact:

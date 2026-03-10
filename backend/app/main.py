@@ -1,12 +1,17 @@
+import asyncio
 from pathlib import Path
+import hmac
 import os
 import time
 import uuid
+from collections import deque
+from dataclasses import dataclass
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 from app.auth import OidcValidationError, OidcValidator, load_auth_settings
 from app.db import init_db
 from app.db import get_session
@@ -14,6 +19,7 @@ from app.services.authz import assert_platform_admin
 from app.services.log_export import emit_structured_log, recent_logs
 from app.services.telemetry import telemetry
 from app.services.mqtt import build_mqtt_service
+from app.services.object_storage import head_bucket, object_storage_enabled
 from app.services.schema_pack import load_schema_pack
 from app.services.governance import ensure_governance_policy_seed
 from app.routers import (
@@ -58,7 +64,7 @@ OIDC_VALIDATOR = (
     if AUTH_SETTINGS.oidc_enabled()
     else None
 )
-AUTH_EXEMPT_PATHS = {"/", "/api/openapi.json", "/agent-onboarding.json"}
+AUTH_EXEMPT_PATHS = {"/", "/api/openapi.json", "/agent-onboarding.json", "/healthz", "/readyz"}
 AUTH_EXEMPT_PREFIXES = (
     "/api/docs",
     "/api/redoc",
@@ -72,6 +78,92 @@ AUTH_EXEMPT_WEBHOOK_PATHS = {
     "/integrations/teams/events",
 }
 TOKEN_FALLBACK_PATH_PREFIXES = ("/mcp",)
+TOKEN_SUBJECT = "token-client"
+
+
+def _as_int(value: str | None, default: int, *, minimum: int = 1, maximum: int | None = None) -> int:
+    try:
+        parsed = int((value or "").strip())
+    except ValueError:
+        parsed = default
+    parsed = max(minimum, parsed)
+    if maximum is not None:
+        parsed = min(parsed, maximum)
+    return parsed
+
+
+def _as_float(value: str | None, default: float, *, minimum: float = 0.1) -> float:
+    try:
+        parsed = float((value or "").strip())
+    except ValueError:
+        parsed = default
+    return max(minimum, parsed)
+
+
+@dataclass(frozen=True)
+class RateLimitPolicy:
+    capacity: int
+    window_seconds: float
+
+
+class InMemoryRateLimiter:
+    def __init__(self):
+        self._buckets: dict[str, deque[float]] = {}
+
+    def allow(self, key: str, policy: RateLimitPolicy, now: float) -> bool:
+        bucket = self._buckets.setdefault(key, deque())
+        threshold = now - policy.window_seconds
+        while bucket and bucket[0] <= threshold:
+            bucket.popleft()
+        if len(bucket) >= policy.capacity:
+            return False
+        bucket.append(now)
+        return True
+
+
+RATE_LIMITER = InMemoryRateLimiter()
+DEFAULT_RATE_POLICY = RateLimitPolicy(
+    capacity=_as_int(os.getenv("MC_RATE_LIMIT_DEFAULT_CAPACITY"), 240, maximum=10_000),
+    window_seconds=_as_float(os.getenv("MC_RATE_LIMIT_DEFAULT_WINDOW_SECONDS"), 60.0),
+)
+SEARCH_RATE_POLICY = RateLimitPolicy(
+    capacity=_as_int(os.getenv("MC_RATE_LIMIT_SEARCH_CAPACITY"), 60, maximum=10_000),
+    window_seconds=_as_float(os.getenv("MC_RATE_LIMIT_SEARCH_WINDOW_SECONDS"), 60.0),
+)
+WRITE_RATE_POLICY = RateLimitPolicy(
+    capacity=_as_int(os.getenv("MC_RATE_LIMIT_WRITE_CAPACITY"), 120, maximum=10_000),
+    window_seconds=_as_float(os.getenv("MC_RATE_LIMIT_WRITE_WINDOW_SECONDS"), 60.0),
+)
+APPROVAL_RATE_POLICY = RateLimitPolicy(
+    capacity=_as_int(os.getenv("MC_RATE_LIMIT_APPROVAL_CAPACITY"), 30, maximum=10_000),
+    window_seconds=_as_float(os.getenv("MC_RATE_LIMIT_APPROVAL_WINDOW_SECONDS"), 60.0),
+)
+TIMEOUT_SECONDS = _as_float(os.getenv("MC_REQUEST_TIMEOUT_SECONDS"), 30.0)
+
+
+def _rate_limit_policy(request: Request) -> RateLimitPolicy:
+    path = request.url.path
+    if path.startswith("/approvals") or path.startswith("/governance"):
+        return APPROVAL_RATE_POLICY
+    if path.startswith("/search") or path.startswith("/explorer"):
+        return SEARCH_RATE_POLICY
+    if request.method in {"POST", "PATCH", "PUT", "DELETE"}:
+        return WRITE_RATE_POLICY
+    return DEFAULT_RATE_POLICY
+
+
+def _rate_limit_key(request: Request) -> str:
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if isinstance(principal, dict):
+        subject = str(principal.get("email") or principal.get("subject") or "").strip().lower()
+        if subject:
+            return f"principal:{subject}"
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded.strip():
+        ip = forwarded.split(",", 1)[0].strip()
+    else:
+        ip = getattr(getattr(request, "client", None), "host", None) or "unknown"
+    return f"ip:{ip}"
 
 
 def _is_auth_exempt_path(path: str) -> bool:
@@ -148,14 +240,14 @@ async def require_auth(request, call_next):
         )
 
     if AUTH_SETTINGS.mode == "token":
-        if token != AUTH_SETTINGS.missioncontrol_token:
+        if not AUTH_SETTINGS.missioncontrol_token or not hmac.compare_digest(token, AUTH_SETTINGS.missioncontrol_token):
             return _unauthorized(request, "invalid_token", "Unauthorized: invalid bearer token", start=start)
         request.state.principal = {
-            "subject": "service-token",
+            "subject": TOKEN_SUBJECT,
             "email": None,
             "auth_type": "token",
         }
-        response = await call_next(request)
+        response = await _call_next_with_guards(request, call_next)
         return _finalize_response(request, response, start)
 
     if AUTH_SETTINGS.mode == "oidc":
@@ -165,13 +257,18 @@ async def require_auth(request, call_next):
     token_fallback_allowed = not AUTH_SETTINGS.oidc_required or any(
         path.startswith(prefix) for prefix in TOKEN_FALLBACK_PATH_PREFIXES
     )
-    if token_fallback_allowed and AUTH_SETTINGS.token_enabled() and token == AUTH_SETTINGS.missioncontrol_token:
+    if (
+        token_fallback_allowed
+        and AUTH_SETTINGS.token_enabled()
+        and AUTH_SETTINGS.missioncontrol_token
+        and hmac.compare_digest(token, AUTH_SETTINGS.missioncontrol_token)
+    ):
         request.state.principal = {
-            "subject": "service-token",
+            "subject": TOKEN_SUBJECT,
             "email": None,
             "auth_type": "token",
         }
-        response = await call_next(request)
+        response = await _call_next_with_guards(request, call_next)
         return _finalize_response(request, response, start)
 
     if OIDC_VALIDATOR is not None:
@@ -182,7 +279,7 @@ async def require_auth(request, call_next):
                 "email": principal.email,
                 "auth_type": "oidc",
             }
-            response = await call_next(request)
+            response = await _call_next_with_guards(request, call_next)
             return _finalize_response(request, response, start)
         except OidcValidationError as exc:
             if AUTH_SETTINGS.oidc_required:
@@ -217,8 +314,27 @@ async def _require_oidc_token(request, token: str, call_next, start: float):
         "email": principal.email,
         "auth_type": "oidc",
     }
-    response = await call_next(request)
+    response = await _call_next_with_guards(request, call_next)
     return _finalize_response(request, response, start)
+
+
+async def _call_next_with_guards(request: Request, call_next):
+    now = time.monotonic()
+    policy = _rate_limit_policy(request)
+    key = f"{request.method}:{request.url.path}:{_rate_limit_key(request)}"
+    if not RATE_LIMITER.allow(key, policy, now):
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too Many Requests", "reason": "rate_limited"},
+            headers={"retry-after": str(max(1, int(policy.window_seconds)))},
+        )
+    try:
+        return await asyncio.wait_for(call_next(request), timeout=TIMEOUT_SECONDS)
+    except TimeoutError:
+        return JSONResponse(
+            status_code=504,
+            content={"detail": "Gateway Timeout", "reason": "request_timeout"},
+        )
 
 
 def _unauthorized(request: Request, reason: str, detail: str, *, start: float) -> JSONResponse:
@@ -308,6 +424,24 @@ def _attach_trace_headers(request, response):
 
 @app.get("/")
 def root():
+    return {"status": "ok", "service": "ai-missioncontrol"}
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "service": "ai-missioncontrol"}
+
+
+@app.get("/readyz")
+def readyz():
+    with get_session() as session:
+        session.exec(text("SELECT 1"))
+    if object_storage_enabled():
+        head_bucket()
+    mqtt_service = getattr(app.state, "mqtt", None)
+    mqtt_required = str(os.getenv("MQTT_OPTIONAL", "true")).strip().lower() not in {"1", "true", "yes", "on"}
+    if mqtt_required and mqtt_service is not None and not mqtt_service.connected:
+        return JSONResponse(status_code=503, content={"status": "degraded", "reason": "mqtt_unavailable"})
     return {"status": "ok", "service": "ai-missioncontrol"}
 
 

@@ -3,15 +3,16 @@ from sqlmodel import select
 from app.db import get_session
 from app.models import Doc, Kluster, Task
 from app.services.authz import is_platform_admin, readable_mission_ids_for_request
+from app.services.pagination import bounded_limit, limit_query
 from app.services.vectorstore import query_tasks, query_docs
 
 router = APIRouter(prefix="/search", tags=["search"])
 
 
 @router.get("/tasks")
-def search_tasks(q: str, limit: int = 5, request: Request = None):
+def search_tasks(q: str, limit: int = limit_query(default=5, maximum=50), request: Request = None):
     with get_session() as session:
-        raw_results = query_tasks(q, limit=limit)
+        raw_results = query_tasks(q, limit=bounded_limit(limit, default=5, maximum=50))
         if is_platform_admin(request):
             return {"results": raw_results}
         readable_ids = readable_mission_ids_for_request(session=session, request=request)
@@ -33,9 +34,9 @@ def search_tasks(q: str, limit: int = 5, request: Request = None):
 
 
 @router.get("/docs")
-def search_docs(q: str, limit: int = 5, request: Request = None):
+def search_docs(q: str, limit: int = limit_query(default=5, maximum=50), request: Request = None):
     with get_session() as session:
-        raw_results = query_docs(q, limit=limit)
+        raw_results = query_docs(q, limit=bounded_limit(limit, default=5, maximum=50))
         if is_platform_admin(request):
             return {"results": raw_results}
         readable_ids = readable_mission_ids_for_request(session=session, request=request)
@@ -57,12 +58,15 @@ def search_docs(q: str, limit: int = 5, request: Request = None):
 
 
 @router.get("/klusters")
-def search_klusters(q: str, limit: int = 5, request: Request = None):
+def search_klusters(q: str, limit: int = limit_query(default=5, maximum=50), request: Request = None):
     query = (q or "").lower()
     with get_session() as session:
         readable_ids = readable_mission_ids_for_request(session=session, request=request)
         admin = is_platform_admin(request)
-        klusters = session.exec(select(Kluster)).all()
+        stmt = select(Kluster)
+        if not admin and readable_ids:
+            stmt = stmt.where(Kluster.mission_id.in_(readable_ids))
+        klusters = session.exec(stmt.order_by(Kluster.updated_at.desc()).limit(bounded_limit(limit, default=5, maximum=50) * 4)).all()
         matches = [
             c
             for c in klusters
@@ -70,5 +74,5 @@ def search_klusters(q: str, limit: int = 5, request: Request = None):
         ]
         if not admin:
             matches = [c for c in matches if c.mission_id in readable_ids]
-        matches = matches[:limit]
+        matches = matches[: bounded_limit(limit, default=5, maximum=50)]
         return {"results": [c.dict() for c in matches]}

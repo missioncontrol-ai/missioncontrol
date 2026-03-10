@@ -35,6 +35,8 @@ class IntegrationAuthExemptionsTests(unittest.TestCase):
         self.assertFalse(_is_auth_exempt_path("/integrations/slack/bindings"))
 
     def test_webhook_callbacks_remain_exempt(self):
+        self.assertTrue(_is_auth_exempt_path("/healthz"))
+        self.assertTrue(_is_auth_exempt_path("/readyz"))
         self.assertTrue(_is_auth_exempt_path("/integrations/slack/events"))
         self.assertTrue(_is_auth_exempt_path("/integrations/slack/commands"))
         self.assertTrue(_is_auth_exempt_path("/integrations/slack/interactions"))

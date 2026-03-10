@@ -44,8 +44,6 @@ def is_platform_admin(request: Request | None) -> bool:
         return False
     subject = str(principal.get("subject") or "").strip().lower()
     email = str(principal.get("email") or "").strip().lower()
-    if subject == "service-token":
-        return True
     admin_subjects = {x.lower() for x in _split_csv(os.getenv("MC_ADMIN_SUBJECTS", ""))}
     admin_emails = {x.lower() for x in _split_csv(os.getenv("MC_ADMIN_EMAILS", ""))}
     return (subject and subject in admin_subjects) or (email and email in admin_emails)
@@ -140,11 +138,14 @@ def readable_mission_ids_for_request(*, session: Session, request: Request | Non
     ).all()
     readable_ids |= {row.mission_id for row in role_rows if row.mission_id}
 
-    missions = session.exec(select(Mission)).all()
-    for mission in missions:
-        allowed = {x.lower() for x in _split_csv(mission.owners)} | {x.lower() for x in _split_csv(mission.contributors)}
-        if allowed & identities and mission.id:
-            readable_ids.add(mission.id)
+    for identity in identities:
+        identity_like = f"%{identity}%"
+        missions = session.exec(
+            select(Mission.id).where(
+                (Mission.owners.ilike(identity_like)) | (Mission.contributors.ilike(identity_like))
+            )
+        ).all()
+        readable_ids |= {mission_id for mission_id in missions if mission_id}
     return readable_ids
 
 

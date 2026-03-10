@@ -79,13 +79,13 @@ class RoleFlowIntegrationTests(unittest.TestCase):
     def test_cluster_contributor_can_update_but_cannot_delete(self):
         mission = self._create_mission_with_contributor()
         kluster = create_cluster(
-            KlusterCreate(mission_id=mission.id, name="kluster-a"),
+            KlusterCreate(mission_id=mission.id, name="kluster-a", owners="owner@example.com"),
             self.owner_req,
         )
 
         updated = update_cluster(
             kluster.id,
-            KlusterCreate(mission_id=mission.id, name="kluster-b"),
+            KlusterCreate(mission_id=mission.id, name="kluster-b", owners="owner@example.com"),
             self.contrib_req,
         )
         self.assertEqual(updated.name, "kluster-b")
@@ -97,7 +97,7 @@ class RoleFlowIntegrationTests(unittest.TestCase):
     def test_task_contributor_can_update_but_cannot_delete(self):
         mission = self._create_mission_with_contributor()
         kluster = create_cluster(
-            KlusterCreate(mission_id=mission.id, name="kluster-a"),
+            KlusterCreate(mission_id=mission.id, name="kluster-a", owners="owner@example.com"),
             self.owner_req,
         )
         with get_session() as session:
@@ -117,7 +117,7 @@ class RoleFlowIntegrationTests(unittest.TestCase):
     def test_owner_can_delete_after_contributor_denied(self):
         mission = self._create_mission_with_contributor()
         kluster = create_cluster(
-            KlusterCreate(mission_id=mission.id, name="kluster-a"),
+            KlusterCreate(mission_id=mission.id, name="kluster-a", owners="owner@example.com"),
             self.owner_req,
         )
 
@@ -132,7 +132,7 @@ class RoleFlowIntegrationTests(unittest.TestCase):
     def test_doc_contributor_can_update_but_viewer_cannot(self):
         mission = self._create_mission_with_contributor()
         kluster = create_cluster(
-            KlusterCreate(mission_id=mission.id, name="kluster-a"),
+            KlusterCreate(mission_id=mission.id, name="kluster-a", owners="owner@example.com"),
             self.owner_req,
         )
         doc = create_doc(
@@ -148,7 +148,7 @@ class RoleFlowIntegrationTests(unittest.TestCase):
     def test_artifact_contributor_can_update_but_viewer_cannot(self):
         mission = self._create_mission_with_contributor()
         kluster = create_cluster(
-            KlusterCreate(mission_id=mission.id, name="kluster-a"),
+            KlusterCreate(mission_id=mission.id, name="kluster-a", owners="owner@example.com"),
             self.owner_req,
         )
         artifact = create_artifact(

@@ -23,9 +23,9 @@ class AuthzTests(unittest.TestCase):
         self.engine = create_engine("sqlite://")
         SQLModel.metadata.create_all(self.engine)
 
-    def test_service_token_is_admin(self):
-        req = _request(subject="service-token")
-        self.assertTrue(is_platform_admin(req))
+    def test_token_principal_is_not_admin_without_allowlist(self):
+        req = _request(subject="token-client")
+        self.assertFalse(is_platform_admin(req))
 
     def test_legacy_owner_can_manage_mission(self):
         with Session(self.engine) as session:
@@ -38,7 +38,7 @@ class AuthzTests(unittest.TestCase):
 
     def test_role_owner_can_manage_mission(self):
         with Session(self.engine) as session:
-            mission = Mission(id="abc123def456", name="m1", owners="")
+            mission = Mission(id="abc123def456", name="m1", owners="owner@example.com")
             session.add(mission)
             session.commit()
             upsert_mission_role(

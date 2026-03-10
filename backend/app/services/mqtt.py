@@ -26,6 +26,10 @@ class MqttService:
         self._client.on_disconnect = self._on_disconnect
         self._connected = False
 
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
     def _on_connect(self, client, userdata, flags, rc):
         self._connected = rc == 0
 

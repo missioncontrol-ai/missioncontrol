@@ -12,6 +12,7 @@ from app.services.authz import (
     assert_mission_reader_or_admin,
     assert_mission_writer_or_admin,
 )
+from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
@@ -94,7 +95,7 @@ def list_feedback(
     triage_status: str = "",
     source_type: str = "",
     priority: str = "",
-    limit: int = 200,
+    limit: int = limit_query(default=50, maximum=200),
 ):
     with get_session() as session:
         assert_mission_reader_or_admin(session=session, request=request, mission_id=mission_id)
@@ -105,8 +106,7 @@ def list_feedback(
             query = query.where(FeedbackEntry.source_type == source_type.strip().lower())
         if priority:
             query = query.where(FeedbackEntry.priority == priority.strip().lower())
-        bounded_limit = max(1, min(limit, 1000))
-        query = query.order_by(FeedbackEntry.updated_at.desc()).limit(bounded_limit)
+        query = query.order_by(FeedbackEntry.updated_at.desc()).limit(bounded_limit(limit, default=50, maximum=200))
         rows = session.exec(query).all()
         return [_serialize_feedback(row) for row in rows]
 

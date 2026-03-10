@@ -26,7 +26,7 @@ class OwnerRequirementsTests(unittest.TestCase):
 
     def test_create_mission_requires_at_least_one_owner(self):
         with self.assertRaises(HTTPException) as ctx:
-            create_mission(MissionCreate(name="m-no-owner"), _request(email=None, subject="service-token"))
+            create_mission(MissionCreate(name="m-no-owner"), _request(email=None, subject="token-client"))
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertIn("owners must include at least one owner", str(ctx.exception.detail))
 

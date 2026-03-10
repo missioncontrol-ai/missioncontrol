@@ -1503,7 +1503,7 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 )
             except HTTPException as exc:
                 return MCPResponse(ok=False, error=str(exc.detail))
-            if not mission_payload.get("owners") and actor_subject not in {"unknown", "service-token"}:
+            if not mission_payload.get("owners") and actor_subject not in {"unknown", "token-client"}:
                 mission_payload["owners"] = actor_subject
             if not _owner_list(mission_payload.get("owners")):
                 return MCPResponse(ok=False, error="owners must include at least one owner")

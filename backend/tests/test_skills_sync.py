@@ -45,7 +45,7 @@ class SkillsSyncTests(unittest.TestCase):
         SQLModel.metadata.create_all(engine)
         with get_session() as session:
             session.add(Mission(id="mission-a", name="mission-a", owners="owner@example.com"))
-            session.add(Kluster(id="kluster-a", mission_id="mission-a", name="kluster-a"))
+            session.add(Kluster(id="kluster-a", mission_id="mission-a", name="kluster-a", owners="owner@example.com"))
             session.commit()
 
     def test_resolve_snapshot_merges_mission_and_kluster(self):

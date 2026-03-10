@@ -25,8 +25,18 @@ class ReadIsolationTests(unittest.TestCase):
             session.add(mission_a)
             session.add(mission_b)
 
-            kluster_a = Kluster(id="kluster-a", mission_id="mission-a", name="kluster-a")
-            kluster_b = Kluster(id="kluster-b", mission_id="mission-b", name="kluster-b")
+            kluster_a = Kluster(
+                id="kluster-a",
+                mission_id="mission-a",
+                name="kluster-a",
+                owners="owner-a@example.com",
+            )
+            kluster_b = Kluster(
+                id="kluster-b",
+                mission_id="mission-b",
+                name="kluster-b",
+                owners="owner-b@example.com",
+            )
             session.add(kluster_a)
             session.add(kluster_b)
 

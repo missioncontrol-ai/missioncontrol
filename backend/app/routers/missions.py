@@ -33,6 +33,7 @@ from app.services.ids import new_hash_id
 from app.services.schema_pack import enforce_schema_pack
 from app.services.governance import extract_approval_context, require_policy_action
 from app.services.keystone import ensure_mission_northstar
+from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(prefix="/missions", tags=["missions"])
 
@@ -62,7 +63,7 @@ def create_mission(payload: MissionCreate, request: Request):
             operation="create",
         )
         actor = authz_actor_subject(request)
-        if not mission_data.get("owners") and actor not in {"unknown", "service-token"}:
+        if not mission_data.get("owners") and actor not in {"unknown", "token-client"}:
             mission_data["owners"] = actor
         if not _owner_list(mission_data.get("owners")):
             raise HTTPException(status_code=422, detail="owners must include at least one owner")
@@ -96,10 +97,10 @@ def create_mission(payload: MissionCreate, request: Request):
 
 
 @router.get("", response_model=list[MissionRead])
-def list_missions(request: Request):
+def list_missions(request: Request, limit: int = limit_query()):
     with get_session() as session:
         readable_ids = readable_mission_ids_for_request(session=session, request=request)
-        missions = session.exec(select(Mission).order_by(Mission.updated_at.desc())).all()
+        missions = session.exec(select(Mission).order_by(Mission.updated_at.desc()).limit(bounded_limit(limit))).all()
         if not readable_ids and not missions:
             return []
         if not readable_ids:

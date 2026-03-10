@@ -16,6 +16,7 @@ from app.schemas import (
     AgentMessageSend,
     AgentMessageRead,
 )
+from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -54,12 +55,12 @@ def create_agent(payload: AgentCreate):
 
 
 @router.get("", response_model=list[AgentRead])
-def list_agents(status: Optional[str] = None):
+def list_agents(status: Optional[str] = None, limit: int = limit_query()):
     with get_session() as session:
         stmt = select(Agent)
         if status is not None:
             stmt = stmt.where(Agent.status == status)
-        agents = session.exec(stmt.order_by(Agent.updated_at.desc())).all()
+        agents = session.exec(stmt.order_by(Agent.updated_at.desc()).limit(bounded_limit(limit))).all()
         return [_agent_payload(agent) for agent in agents]
 
 
@@ -106,12 +107,13 @@ def start_session(agent_id: int, payload: AgentSessionCreate):
 
 
 @router.get("/{agent_id}/sessions", response_model=list[AgentSessionRead])
-def list_sessions(agent_id: int):
+def list_sessions(agent_id: int, limit: int = limit_query()):
     with get_session() as session:
         sessions = session.exec(
             select(AgentSession)
             .where(AgentSession.agent_id == agent_id)
             .order_by(AgentSession.started_at.desc())
+            .limit(bounded_limit(limit))
         ).all()
         return sessions
 
@@ -145,7 +147,12 @@ def create_assignment(payload: TaskAssignmentCreate):
 
 
 @router.get("/assignments", response_model=list[TaskAssignmentRead])
-def list_assignments(agent_id: Optional[int] = None, task_id: Optional[int] = None, status: Optional[str] = None):
+def list_assignments(
+    agent_id: Optional[int] = None,
+    task_id: Optional[int] = None,
+    status: Optional[str] = None,
+    limit: int = limit_query(),
+):
     with get_session() as session:
         stmt = select(TaskAssignment)
         if agent_id is not None:
@@ -154,7 +161,7 @@ def list_assignments(agent_id: Optional[int] = None, task_id: Optional[int] = No
             stmt = stmt.where(TaskAssignment.task_id == task_id)
         if status is not None:
             stmt = stmt.where(TaskAssignment.status == status)
-        assignments = session.exec(stmt.order_by(TaskAssignment.updated_at.desc())).all()
+        assignments = session.exec(stmt.order_by(TaskAssignment.updated_at.desc()).limit(bounded_limit(limit))).all()
         return assignments
 
 
@@ -212,19 +219,19 @@ def send_message(agent_id: int, payload: AgentMessageSend, request: Request):
 
 
 @router.get("/{agent_id}/messages", response_model=list[AgentMessageRead])
-def list_messages(agent_id: int):
+def list_messages(agent_id: int, limit: int = limit_query()):
     with get_session() as session:
         stmt = (
             select(AgentMessage)
             .where((AgentMessage.from_agent_id == agent_id) | (AgentMessage.to_agent_id == agent_id))
             .order_by(AgentMessage.created_at.desc())
         )
-        messages = session.exec(stmt).all()
+        messages = session.exec(stmt.limit(bounded_limit(limit))).all()
         return [_message_payload(message) for message in messages]
 
 
 @router.get("/{agent_id}/inbox", response_model=list[AgentMessageRead])
-def get_inbox(agent_id: int):
+def get_inbox(agent_id: int, limit: int = limit_query()):
     with get_session() as session:
         stmt = (
             select(AgentMessage)
@@ -232,7 +239,7 @@ def get_inbox(agent_id: int):
             .where(AgentMessage.read == False)  # noqa: E712
             .order_by(AgentMessage.created_at.asc())
         )
-        messages = session.exec(stmt).all()
+        messages = session.exec(stmt.limit(bounded_limit(limit))).all()
         for message in messages:
             message.read = True
             session.add(message)

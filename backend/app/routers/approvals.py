@@ -21,6 +21,7 @@ from app.services.authz import (
 )
 from app.services.governance import generate_approval_token
 from app.services.notifications import emit_controlplane_event
+from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
 
@@ -94,15 +95,18 @@ def create_approval_request(payload: ApprovalRequestCreate, request: Request):
 
 
 @router.get("", response_model=list[ApprovalRequestRead])
-def list_approval_requests(request: Request, mission_id: str, status: str | None = None, limit: int = 100):
+def list_approval_requests(
+    request: Request,
+    mission_id: str,
+    status: str | None = None,
+    limit: int = limit_query(default=50, maximum=100),
+):
     with get_session() as session:
         assert_mission_reader_or_admin(session=session, request=request, mission_id=mission_id)
         stmt = select(ApprovalRequest).where(ApprovalRequest.mission_id == mission_id)
         if status:
             stmt = stmt.where(ApprovalRequest.status == status)
-        rows = session.exec(
-            stmt.order_by(ApprovalRequest.created_at.desc()).limit(max(1, min(int(limit), 500)))
-        ).all()
+        rows = session.exec(stmt.order_by(ApprovalRequest.created_at.desc()).limit(bounded_limit(limit, default=50, maximum=100))).all()
         return [_serialize_approval(row) for row in rows]
 
 

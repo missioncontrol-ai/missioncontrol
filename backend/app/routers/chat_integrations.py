@@ -13,6 +13,7 @@ from app.services.authz import (
     assert_mission_reader_or_admin,
 )
 from app.services.chat_providers import get_chat_provider
+from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(prefix="/integrations/chat", tags=["chat"])
 
@@ -78,7 +79,7 @@ def create_chat_binding(payload: SlackChannelBindingCreate, request: Request):
 
 
 @router.get("/bindings", response_model=list[SlackChannelBindingRead])
-def list_chat_bindings(mission_id: str, request: Request, provider: str = "slack"):
+def list_chat_bindings(mission_id: str, request: Request, provider: str = "slack", limit: int = limit_query()):
     provider_name = _normalize_provider(provider)
     with get_session() as session:
         assert_mission_reader_or_admin(session=session, request=request, mission_id=mission_id)
@@ -87,6 +88,7 @@ def list_chat_bindings(mission_id: str, request: Request, provider: str = "slack
             .where(SlackChannelBinding.provider == provider_name)
             .where(SlackChannelBinding.mission_id == mission_id)
             .order_by(SlackChannelBinding.updated_at.desc())
+            .limit(bounded_limit(limit))
         ).all()
         return [_serialize_binding(row) for row in rows]
 

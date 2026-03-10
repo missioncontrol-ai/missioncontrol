@@ -2,12 +2,22 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: missioncontrol-mosquitto
+    restart: unless-stopped
     volumes:
-      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./docker/mosquitto/mosquitto.dev.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -C 1 -t '$SYS/broker/version' -i healthcheck >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    mem_limit: 256m
+    cpus: 1.0
 
   rustfs:
     image: rustfs/rustfs:latest
     container_name: missioncontrol-rustfs
+    restart: unless-stopped
     environment:
       RUSTFS_ACCESS_KEY: missioncontrol
       RUSTFS_ACCESS_SECRET: missioncontrol-secret
@@ -22,6 +32,8 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+    mem_limit: 512m
+    cpus: 1.0
 
   rustfs-init:
     image: minio/mc:latest
@@ -43,13 +55,17 @@ services:
       dockerfile: backend/Dockerfile
     container_name: missioncontrol-api
     depends_on:
-      - mosquitto
-      - rustfs-init
+      mosquitto:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
     env_file:
       - .env
     environment:
       DATABASE_URL: sqlite:////data/taskman.db
       VECTOR_STORE_BACKEND: chroma
+      MC_DB_RUNTIME_MIGRATIONS: "true"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
       MQTT_USERNAME: ""
@@ -65,6 +81,14 @@ services:
     volumes:
       - ./backend/chroma:/app/chroma
       - ./backend/dev-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8008/readyz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 25s
+    mem_limit: 1g
+    cpus: 1.5
 
   mcpd:
     build:
@@ -72,7 +96,9 @@ services:
       dockerfile: integrations/missioncontrol-mcp/Dockerfile
     container_name: missioncontrol-mcpd
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    restart: unless-stopped
     environment:
       MC_MCP_MODE: daemon
       MC_BASE_URL: http://api:8008
@@ -81,6 +107,14 @@ services:
       MC_TOKEN: ${MC_TOKEN:-}
     ports:
       - "8765:8765"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8765/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    mem_limit: 256m
+    cpus: 1.0
 
 volumes:
   missioncontrol-rustfs-data:

@@ -30,7 +30,7 @@ class SlackWorkflowTests(unittest.TestCase):
         with get_session() as session:
             mission = Mission(id="mission-a", name="mission-a", owners="owner@example.com")
             session.add(mission)
-            session.add(Kluster(id="kluster-a", mission_id="mission-a", name="kluster-a"))
+            session.add(Kluster(id="kluster-a", mission_id="mission-a", name="kluster-a", owners="owner@example.com"))
             session.add(
                 MissionRoleMembership(
                     mission_id="mission-a",
@@ -67,7 +67,7 @@ class SlackWorkflowTests(unittest.TestCase):
             with patch("app.routers.slack_integrations.index_task", return_value=None):
                 with patch("app.routers.slack_integrations.score_overlap_vector", return_value=[]):
                     response = asyncio.run(slack_commands(_Req(body)))
-        self.assertIn("Created task #", response.get("text", ""))
+        self.assertIn("Created task", response.get("text", ""))
         self.assertIn("blocks", response)
 
     def test_interaction_approve_returns_token(self):

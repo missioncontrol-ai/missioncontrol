@@ -25,6 +25,7 @@ from app.services.governance import (
     update_policy_draft,
     validate_policy,
 )
+from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(prefix="/governance", tags=["governance"])
 
@@ -38,11 +39,11 @@ def get_active_policy(request: Request):
 
 
 @router.get("/policy/versions", response_model=list[GovernancePolicyRead])
-def get_policy_versions(request: Request):
+def get_policy_versions(request: Request, limit: int = limit_query()):
     with get_session() as session:
         ensure_platform_admin(request)
         ensure_governance_policy_seed(session)
-        rows = list_policy_versions(session)
+        rows = list_policy_versions(session)[: bounded_limit(limit)]
         return [serialize_policy_row(row, effective=False) for row in rows]
 
 
@@ -119,8 +120,8 @@ def reload_policy(request: Request):
 
 
 @router.get("/policy/events", response_model=list[GovernancePolicyEventRead])
-def get_events(request: Request, limit: int = 100):
+def get_events(request: Request, limit: int = limit_query(default=50, maximum=100)):
     with get_session() as session:
         ensure_platform_admin(request)
-        rows = list_policy_events(session, limit=max(1, min(limit, 500)))
+        rows = list_policy_events(session, limit=bounded_limit(limit, default=50, maximum=100))
         return [serialize_event_row(row) for row in rows]
