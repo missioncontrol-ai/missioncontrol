@@ -5,14 +5,14 @@ Goal: make local coding agents talk to MissionControl via MCP.
 ## 0) One-Command Bootstrap (recommended)
 
 ```bash
-MC_TOKEN="denali-everest-orion-sequoia-atlas" \
+MC_TOKEN="Change-Now-Socrates-Plato-Aristotle-Aurelius" \
 bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/bootstrap-missioncontrol-agent.sh)
 ```
 
 Or from local clone:
 
 ```bash
-MC_TOKEN="denali-everest-orion-sequoia-atlas" \
+MC_TOKEN="Change-Now-Socrates-Plato-Aristotle-Aurelius" \
 bash scripts/bootstrap-missioncontrol-agent.sh
 ```
 
@@ -38,7 +38,7 @@ This writes:
 ## 1) Install Bridge
 
 ```bash
-pipx install "git+ssh://git@github.com/missioncontrol-ai/missioncontrol.git#subdirectory=integrations/missioncontrol-mcp"
+pipx install "git+ssh://git@github.com/missioncontrol-ai/missioncontrol.git#subdirectory=distribution/missioncontrol-mcp"
 ```
 
 ## 2) Set MissionControl Endpoint
@@ -48,7 +48,7 @@ Use the Tailscale MagicDNS route (recommended):
 ```bash
 export MC_BASE_URL="https://mc.example.com"
 export MC_BASE_URLS="https://mc.example.com,http://localhost:8008"
-export MC_TOKEN="denali-everest-orion-sequoia-atlas"
+export MC_TOKEN="Change-Now-Socrates-Plato-Aristotle-Aurelius"
 ```
 
 Fallback (if you intentionally want public ingress):
@@ -79,7 +79,7 @@ Use this MCP server definition:
       "MC_HTTP_TIMEOUT_SEC": "20",
       "MC_HTTP_RETRIES": "2",
       "MC_HTTP_RETRY_BACKOFF_MS": "250",
-      "MC_TOKEN": "denali-everest-orion-sequoia-atlas"
+      "MC_TOKEN": "Change-Now-Socrates-Plato-Aristotle-Aurelius"
     }
   }
 }

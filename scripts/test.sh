@@ -18,7 +18,7 @@ echo "[test] backend unittest suite"
 
 echo "[test] missioncontrol-mcp unittest suite"
 (
-  cd "${ROOT_DIR}/integrations/missioncontrol-mcp"
+  cd "${ROOT_DIR}/distribution/missioncontrol-mcp"
   PYTHONPATH=src "${VENV_PYTHON}" -m unittest discover -s tests -p "test_*.py"
 )
 

@@ -13,13 +13,13 @@ MCP stdio bridge so Codex/Claude can use MissionControl tools as first-class MCP
 ## Install (pipx recommended)
 
 ```bash
-pipx install /path/to/missioncontrol/integrations/missioncontrol-mcp
+pipx install /path/to/missioncontrol/distribution/missioncontrol-mcp
 ```
 
 Or from git:
 
 ```bash
-pipx install "git+ssh://git@github.com/missioncontrol-ai/missioncontrol.git#subdirectory=integrations/missioncontrol-mcp"
+pipx install "git+ssh://git@github.com/missioncontrol-ai/missioncontrol.git#subdirectory=distribution/missioncontrol-mcp"
 ```
 
 ## Env Vars
@@ -183,7 +183,7 @@ Use this server command in your MCP client config:
     "command": "missioncontrol-mcp",
     "env": {
       "MC_BASE_URL": "https://mc.example.com",
-      "MC_TOKEN": "denali-everest-orion-sequoia-atlas",
+      "MC_TOKEN": "Change-Now-Socrates-Plato-Aristotle-Aurelius",
       "MC_AGENT_ID": "1",
       "MQTT_HOST": "mosquitto.missioncontrol.svc.cluster.local",
       "MQTT_PORT": "1883",

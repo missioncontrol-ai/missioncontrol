@@ -163,15 +163,12 @@ Set `MC_LOG_EXPORT_PATH=/abs/path/missioncontrol.jsonl` to export structured eve
 
 ## Agent Integration (Codex + Claude)
 
-- MCP bridge package: `integrations/missioncontrol-mcp`
+- MCP bridge package: `distribution/missioncontrol-mcp`
 - MCP doctor: `missioncontrol-mcp doctor`
 - MCP lifecycle validation playbook: `scripts/mcp-validation-playbook.sh` (docs: `docs/MCP-VALIDATION-PLAYBOOK.md`)
 - Explorer CLI add-on: `missioncontrol-explorer tree --format ansi`
 - Config generator: `bash scripts/generate-agent-config.sh --base-url http://localhost:8008 --agent all --out ./generated-agent-config`
 - Team install/run guide: `docs/AGENT-INSTALL.md`
-- Public integration subtree source: `distribution/mc-integration`
-- Public integration release runbook: `docs/MC-INTEGRATION-SUBTREE.md`
-- Subtree release helper: `bash scripts/release-mc-integration-subtree.sh`
 - API supports `AUTH_MODE=token|oidc|dual`.
 - Runtime default preference is OIDC. If `AUTH_MODE` is unset and only `MC_TOKEN` is configured, startup falls back to token mode.
 
