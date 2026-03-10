@@ -31,9 +31,9 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 └──────────────────────────────┬───────────────────────────────┘
                                │
                ┌───────────────▼─────────────────┐
-               │        missioncontrol-mcp       │
-               │    MCP stdio bridge  ·  PyPI    │
-               │  pipx install missioncontrol-mcp│
+               │               mc               │
+               │     MCP stdio bridge · Rust     │
+               │        cargo install mc          │
                │  tools/list · tools/call · CLI  │
                └───────────────┬─────────────────┘
                                │  HTTP
@@ -68,7 +68,7 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 | | |
 |---|---|
 | Docker quickstart | `bash scripts/dev-up.sh` |
-| Install MCP bridge | `distribution/missioncontrol-mcp/` — [Agent Install Guide](docs/AGENT-INSTALL.md) |
+| Install MCP bridge | `integrations/mc/` — `cargo install --path integrations/mc` (Rust native `mc`, see README) |
 | Philosophy & vision | [MISSIONCONTROL_PHILOSOPHY.md](MISSIONCONTROL_PHILOSOPHY.md) |
 | API reference | `/docs` (Swagger UI, when running locally) |
 
@@ -317,6 +317,7 @@ alembic upgrade head
 Migration CI workflow: `.github/workflows/ci-migrations.yml`
 
 Release procedure checklist: `docs/RELEASE-UPGRADE-CHECKLIST.md`
+Rust CLI release checklist: `.dev/RELEASE-CHECKLIST.md` (covers `mc` tooling, SSE matrix, TLS/rate limits, and CI hooks).
 
 ## Tests
 
