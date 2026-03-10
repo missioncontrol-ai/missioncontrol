@@ -19,7 +19,7 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 - **Artifact Ledger** — every significant mutation is recorded in Postgres, indexed for search, and optionally committed to Git with full provenance metadata.
 - **MCP-Native Agent Interface** — agents interact via standard MCP stdio tools (`search_tasks`, `detect_overlaps`, `load_kluster_workspace`, `publish_pending_ledger_events`). No custom SDK required.
 - **Governance & Approvals** — versioned policy lifecycle (draft → active → rollback), role-based access (Admin / Contributor / Viewer), HMAC-signed approval tokens on sensitive mutations.
-- **Slack Integration** — mission-aware notifications, task creation from threads, approval workflows, and search queries — where your team already works.
+- **Integrations for Slack and other channels** — mission-aware notifications, task creation from threads, approval workflows, and search queries — where your team already works.
 - **Semantic Search** — tasks, docs, and klusters are vector-indexed (pgvector or Chroma) for similarity and hybrid search.
 - **S3-Backed File Persistence** — artifact content (docs, binaries, skill bundles) stored in S3-compatible object storage. RustFS is included in the Docker Compose stack for zero-config local persistence. Swap in any S3-compatible backend (AWS S3, MinIO, RustFS) for production.
 
@@ -30,12 +30,12 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 │              AI Agents  (Claude, Codex, custom)              │
 └──────────────────────────────┬───────────────────────────────┘
                                │
-               ┌───────────────▼────────────────┐
+               ┌───────────────▼─────────────────┐
                │        missioncontrol-mcp       │
                │    MCP stdio bridge  ·  PyPI    │
                │  pipx install missioncontrol-mcp│
                │  tools/list · tools/call · CLI  │
-               └───────────────┬────────────────┘
+               └───────────────┬─────────────────┘
                                │  HTTP
 ┌──────────────────────────────▼───────────────────────────────┐
 │                     MissionControl API                       │
@@ -59,7 +59,7 @@ MissionControl solves the coordination problem. It is a control plane for AI age
                                │
                  ┌─────────────▼──────────────┐
                  │        Human Team          │
-                 │    Slack  ·  Web UI        │
+                 │    Slack · Teams · Web UI  │
                  └────────────────────────────┘
 ```
 
