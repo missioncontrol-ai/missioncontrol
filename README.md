@@ -26,26 +26,41 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│           AI Agents  (Claude, Codex, custom)            │
-└──────────────────────────┬──────────────────────────────┘
-                           │  MCP stdio
-                           │  missioncontrol-mcp bridge
-┌──────────────────────────▼──────────────────────────────┐
-│                   MissionControl API                     │
-│              FastAPI · PostgreSQL/pgvector · MQTT        │
-├──────────────────┬──────────────────┬────────────────────┤
-│  Missions &      │  Tasks &         │  Artifact Ledger   │
-│  Klusters        │  Overlap Det.    │  + Git Publisher   │
-├──────────────────┼──────────────────┼────────────────────┤
-│  Governance      │  Semantic        │  Slack / ChatOps   │
-│  & Approvals     │  Search          │  Integration       │
-└──────────────────┴──────────────────┴────────────────────┘
-                           │
-               ┌───────────┴───────────┐
-               │     Human Team        │
-               │   (Slack / Web UI)    │
-               └───────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│              AI Agents  (Claude, Codex, custom)              │
+└──────────────────────────────┬───────────────────────────────┘
+                               │
+               ┌───────────────▼────────────────┐
+               │        missioncontrol-mcp       │
+               │    MCP stdio bridge  ·  PyPI    │
+               │  pipx install missioncontrol-mcp│
+               │  tools/list · tools/call · CLI  │
+               └───────────────┬────────────────┘
+                               │  HTTP
+┌──────────────────────────────▼───────────────────────────────┐
+│                     MissionControl API                        │
+│                      FastAPI  ·  MQTT                        │
+├─────────────────┬──────────────────────┬─────────────────────┤
+│  Missions &     │  Tasks · Overlap      │  Governance &       │
+│  Klusters       │  Detection · Semantic │  Approvals          │
+│                 │  Search               │  Slack / ChatOps    │
+└─────────────────┴──────────────────────┴─────────────────────┘
+         │                    │                      │
+         ▼                    ▼                      ▼
+┌─────────────────┐  ┌─────────────────┐  ┌──────────────────┐
+│   PostgreSQL    │  │   S3 / RustFS   │  │     GitHub       │
+│   + pgvector   │  │  Object Store   │  │                  │
+│                 │  │                 │  │  Artifact ledger │
+│  Structured     │  │  Artifact       │  │  long-term       │
+│  state · roles  │  │  content ·      │  │  memory of       │
+│  vector index   │  │  skill bundles  │  │  record          │
+│  status · collab│  │  file persist.  │  │                  │
+└─────────────────┘  └─────────────────┘  └──────────────────┘
+                               │
+                 ┌─────────────▼─────────────┐
+                 │        Human Team          │
+                 │    Slack  ·  Web UI        │
+                 └────────────────────────────┘
 ```
 
 ## Quick Links
