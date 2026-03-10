@@ -211,6 +211,35 @@ AI activity becomes accountable.
 
 ------------------------------------------------------------------------
 
+# S3-Backed File Persistence
+
+Artifact content — documents, binaries, skill bundles, agent outputs —
+is stored in S3-compatible object storage, not inline in the database.
+
+MissionControl ships with RustFS (a high-performance, S3-compatible
+object store) bundled directly in the Docker Compose stack. No external
+storage infrastructure is required to run a fully persistent local
+instance.
+
+Object keys are mission/kluster-scoped:
+
+    missions/{mission_id}/klusters/{kluster_id}/{entity}/{filename}
+
+This means:
+
+-   Artifact storage is isolated per mission boundary
+-   Any S3-compatible backend can be substituted (AWS S3, MinIO,
+    RustFS, etc.) with no code changes
+-   Storage scales independently of the control plane database
+-   Content remains retrievable and auditable even if the API is
+    restarted or migrated
+
+File persistence is not an afterthought. It is a first-class primitive
+for AI-native workflows where agents produce, consume, and publish
+artifacts continuously.
+
+------------------------------------------------------------------------
+
 # Agent-Native Interface (MCP)
 
 MissionControl is AI-first infrastructure.

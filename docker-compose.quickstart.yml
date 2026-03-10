@@ -5,6 +5,38 @@ services:
     volumes:
       - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
 
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: missioncontrol-rustfs
+    environment:
+      RUSTFS_ACCESS_KEY: missioncontrol
+      RUSTFS_ACCESS_SECRET: missioncontrol-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - missioncontrol-rustfs-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health/live || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  rustfs-init:
+    image: minio/mc:latest
+    container_name: missioncontrol-rustfs-init
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://rustfs:9000 missioncontrol missioncontrol-secret &&
+        mc mb --ignore-existing local/missioncontrol &&
+        echo 'bucket ready'
+      "
+    restart: "no"
+
   api:
     build:
       context: .
@@ -12,6 +44,7 @@ services:
     container_name: missioncontrol-api
     depends_on:
       - mosquitto
+      - rustfs-init
     env_file:
       - .env
     environment:
@@ -21,12 +54,12 @@ services:
       MQTT_PORT: "1883"
       MQTT_USERNAME: ""
       MQTT_PASSWORD: ""
-      MC_OBJECT_STORAGE_ENDPOINT: ${MC_OBJECT_STORAGE_ENDPOINT:-}
-      MC_OBJECT_STORAGE_REGION: ${MC_OBJECT_STORAGE_REGION:-us-east-1}
-      MC_OBJECT_STORAGE_BUCKET: ${MC_OBJECT_STORAGE_BUCKET:-missioncontrol}
-      MC_OBJECT_STORAGE_SECURE: ${MC_OBJECT_STORAGE_SECURE:-true}
-      MC_OBJECT_STORAGE_ACCESS_KEY: ${MC_OBJECT_STORAGE_ACCESS_KEY:-}
-      MC_OBJECT_STORAGE_ACCESS_SECRET: ${MC_OBJECT_STORAGE_ACCESS_SECRET:-}
+      MC_OBJECT_STORAGE_ENDPOINT: http://rustfs:9000
+      MC_OBJECT_STORAGE_REGION: us-east-1
+      MC_OBJECT_STORAGE_BUCKET: missioncontrol
+      MC_OBJECT_STORAGE_SECURE: "false"
+      MC_OBJECT_STORAGE_ACCESS_KEY: missioncontrol
+      MC_OBJECT_STORAGE_ACCESS_SECRET: missioncontrol-secret
     ports:
       - "8008:8008"
     volumes:
@@ -48,3 +81,6 @@ services:
       MC_TOKEN: ${MC_TOKEN:-}
     ports:
       - "8765:8765"
+
+volumes:
+  missioncontrol-rustfs-data:

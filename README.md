@@ -21,6 +21,7 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 - **Governance & Approvals** — versioned policy lifecycle (draft → active → rollback), role-based access (Admin / Contributor / Viewer), HMAC-signed approval tokens on sensitive mutations.
 - **Slack Integration** — mission-aware notifications, task creation from threads, approval workflows, and search queries — where your team already works.
 - **Semantic Search** — tasks, docs, and klusters are vector-indexed (pgvector or Chroma) for similarity and hybrid search.
+- **S3-Backed File Persistence** — artifact content (docs, binaries, skill bundles) stored in S3-compatible object storage. RustFS is included in the Docker Compose stack for zero-config local persistence. Swap in any S3-compatible backend (AWS S3, MinIO, RustFS) for production.
 
 ## Architecture
 
@@ -86,26 +87,26 @@ bash scripts/smoke.sh --profile both
 bash scripts/dev-down.sh
 ```
 
-### RustFS Object Storage (Optional, Recommended)
+### Object Storage (RustFS — included)
 
-MissionControl supports RustFS/S3-backed docs and artifact content persistence.
+RustFS (S3-compatible) is bundled in both Docker Compose profiles and starts automatically. The `missioncontrol` bucket is created on first run. Object keys are scoped to `missions/{id}/klusters/{id}/...`.
 
-Set these in `.env` before `dev-up`/`docker compose up` (preferred `MC_*` aliases shown):
+Local endpoints (Docker Compose):
+- S3 API: `http://localhost:9000`
+- Console UI: `http://localhost:9001`
+
+To point at an external S3-compatible backend (AWS S3, MinIO, etc.) instead, set these in `.env`:
 
 ```bash
-MC_OBJECT_STORAGE_ENDPOINT=http://<rustfs-host>:<port>
+MC_OBJECT_STORAGE_ENDPOINT=http://<host>:<port>
 MC_OBJECT_STORAGE_REGION=us-east-1
-MC_OBJECT_STORAGE_BUCKET=missioncontrol-dev
+MC_OBJECT_STORAGE_BUCKET=missioncontrol
 MC_OBJECT_STORAGE_SECURE=false
 MC_OBJECT_STORAGE_ACCESS_KEY=<key>
 MC_OBJECT_STORAGE_ACCESS_SECRET=<secret>
 ```
 
-Notes:
-- MissionControl uses a single service account key/secret.
-- Access control remains mission/kluster scoped in the API layer.
-- S3 object keys are scoped to `missions/{mission_id}/klusters/{kluster_id}/...`.
-- Legacy env names remain supported: `MC_OBJECT_STORAGE_*`, `MC_OBJECT_STORAGE_ACCESS_KEY`, `MC_OBJECT_STORAGE_ACCESS_SECRET`.
+Note: the compose file's built-in RustFS config takes precedence for local runs. `.env` overrides apply when pointing at an external store (remove or override the compose environment block).
 
 Full stack profile (Postgres + pgvector + MQTT):
 
