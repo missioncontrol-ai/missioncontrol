@@ -2,9 +2,61 @@
   <img src="assets/MissionControl-Repo.clean.png" alt="MissionControl" width="100%">
 </p>
 
-# AI Mission Control (Pilot)
+# AI Mission Control
 
-A local-first pilot implementation of the AI Mission Control platform: knowledge clusters, task coordination with overlap detection, MCP-style agent tools, and ingestion stubs. Now includes a local vector store for search + similarity.
+> **The coordination layer for AI-native organizations.**
+
+AI agents can generate production code, reason over architecture, and execute complex workflows. What they can't do is coordinate. Without a shared system of record, parallel agents duplicate effort, diverge state, and collide on artifacts.
+
+MissionControl solves the coordination problem. It is a control plane for AI agents and human collaborators — providing structured missions, durable memory, task ownership, overlap detection, governance, and a Slack-native organizational interface.
+
+> Kubernetes orchestrates containers. MissionControl orchestrates agents, missions, and knowledge.
+
+## Core Capabilities
+
+- **Missions & Klusters** — organizational units that scope knowledge, tools, permissions, and governance. Agents and humans switch profiles without losing context or integrity.
+- **Overlap Detection** — fuzzy + vector similarity analysis runs before every task or artifact is created. Collisions are caught proactively, enabling safe parallelism at scale.
+- **Artifact Ledger** — every significant mutation is recorded in Postgres, indexed for search, and optionally committed to Git with full provenance metadata.
+- **MCP-Native Agent Interface** — agents interact via standard MCP stdio tools (`search_tasks`, `detect_overlaps`, `load_kluster_workspace`, `publish_pending_ledger_events`). No custom SDK required.
+- **Governance & Approvals** — versioned policy lifecycle (draft → active → rollback), role-based access (Admin / Contributor / Viewer), HMAC-signed approval tokens on sensitive mutations.
+- **Slack Integration** — mission-aware notifications, task creation from threads, approval workflows, and search queries — where your team already works.
+- **Semantic Search** — tasks, docs, and klusters are vector-indexed (pgvector or Chroma) for similarity and hybrid search.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│           AI Agents  (Claude, Codex, custom)            │
+└──────────────────────────┬──────────────────────────────┘
+                           │  MCP stdio
+                           │  missioncontrol-mcp bridge
+┌──────────────────────────▼──────────────────────────────┐
+│                   MissionControl API                     │
+│              FastAPI · PostgreSQL/pgvector · MQTT        │
+├──────────────────┬──────────────────┬────────────────────┤
+│  Missions &      │  Tasks &         │  Artifact Ledger   │
+│  Klusters        │  Overlap Det.    │  + Git Publisher   │
+├──────────────────┼──────────────────┼────────────────────┤
+│  Governance      │  Semantic        │  Slack / ChatOps   │
+│  & Approvals     │  Search          │  Integration       │
+└──────────────────┴──────────────────┴────────────────────┘
+                           │
+               ┌───────────┴───────────┐
+               │     Human Team        │
+               │   (Slack / Web UI)    │
+               └───────────────────────┘
+```
+
+## Quick Links
+
+| | |
+|---|---|
+| Docker quickstart | `bash scripts/dev-up.sh` |
+| Install MCP bridge | `distribution/missioncontrol-mcp/` — [Agent Install Guide](docs/AGENT-INSTALL.md) |
+| Philosophy & vision | [MISSIONCONTROL_PHILOSOPHY.md](MISSIONCONTROL_PHILOSOPHY.md) |
+| API reference | `/docs` (Swagger UI, when running locally) |
+
+---
 
 ## Docker Dev (Recommended)
 
