@@ -37,6 +37,9 @@ They lack:
 -   Permission hierarchies
 -   Organizational context
 -   Mission-scoped tooling
+-   Personal operational profiles that travel with the operator
+-   A working file store decoupled from prompt context
+-   A long-term memory of record beyond the current session
 
 MissionControl provides these primitives.
 
@@ -59,9 +62,9 @@ AI-native stack:
 -   Agents
 -   Tooling Interfaces (Skills/MCP)
 -   **Coordination Layer (MissionControl)**
--   Artifact Ledger
+-   Working File Store (S3)
 -   Governance + Policy
--   Organizational Memory
+-   Organizational Memory of Record (Git)
 
 MissionControl fills the missing coordination layer between autonomous
 agents and durable system state.
@@ -95,24 +98,59 @@ Context switching becomes structured, intentional, and safe.
 
 ------------------------------------------------------------------------
 
-# Slack as the Organizational Interface Layer
+# Personal Agent Profiles
+
+Every operator — human or agent — carries a personal profile.
+
+A profile is a curated bundle of environment configuration, tool
+settings, instruction files, and context that defines how that operator
+engages with MissionControl and their local AI toolchain.
+
+Profiles are:
+
+-   Stored on the MissionControl backend, scoped strictly to the owner
+-   Synced to the local machine automatically on agent startup
+-   Applied via atomic symlink swap for clean, instant transitions
+-   Versioned, pushable, and pullable from any client or machine
+
+This means an agent operator can move between machines, reinstall their
+toolchain, onboard to a new mission, or hand off context to a teammate
+without losing their working configuration.
+
+The agent's operational identity — its environment, its instruction
+files, its tool profile — travels with the operator, not with the
+machine.
+
+Profile switching is structured and intentional. Context drift across
+machines or sessions is eliminated.
+
+------------------------------------------------------------------------
+
+# The Organizational Communication Layer
 
 For AI-native coordination to scale inside real organizations, it must
 meet users where they already operate.
 
-That surface is Slack.
+That surface is wherever your team communicates — Slack, Microsoft
+Teams, Google Chat, or any webhook-capable platform.
 
-MissionControl integrates directly with Slack to provide:
+MissionControl is channel-agnostic by design. Each communication
+provider is a pluggable integration, not a hard dependency. The core
+coordination primitives — missions, tasks, approvals, artifacts — are
+the same regardless of which channel surfaces them.
+
+The communication layer provides:
 
 -   Mission-aware notifications
--   Task creation from Slack threads
--   Overlap warnings in-channel
+-   Task creation from conversation threads
+-   Overlap warnings delivered in-channel
 -   Artifact publish alerts
--   Governance approval requests
--   Search queries directly from Slack
+-   Governance approval requests and responses
+-   Search queries from within the communication tool
 -   Role-aware mutation controls
 
-Slack becomes the human-accessible edge of the coordination layer.
+The human-accessible edge of the coordination layer becomes the
+platform your organization already uses.
 
 Non-technical stakeholders can:
 
@@ -124,9 +162,10 @@ Non-technical stakeholders can:
 
 Without leaving their existing communication workflow.
 
-This lowers friction dramatically and accelerates adoption.
+This lowers friction dramatically and accelerates adoption across
+technical and non-technical teams alike.
 
-MissionControl is not only agent-native --- it is organization-native.
+MissionControl is not only agent-native — it is organization-native.
 
 ------------------------------------------------------------------------
 
@@ -191,52 +230,74 @@ Governance is integrated directly into the execution path.
 
 ------------------------------------------------------------------------
 
-# Artifact Ledger and Durable History
+# Persistence Architecture: Three-Tier Memory Model
 
-Every significant mutation can be:
+MissionControl uses three distinct, complementary persistence layers.
+Each serves a specific role in the information lifecycle.
 
--   Recorded in Postgres
--   Indexed for semantic search
--   Persisted to Git
--   Versioned with provenance metadata
+## PostgreSQL — Structured State and Collaboration
 
-This creates:
+The operational database. All structured entities — missions, klusters,
+tasks, roles, governance policies, approval records — live in Postgres
+with pgvector for semantic indexing.
 
--   Traceable AI actions
--   Audit-ready change history
--   Deterministic artifact lineage
--   Reproducible mission state
+This is the source of truth for:
 
-AI activity becomes accountable.
+-   Who owns what, and with what permissions
+-   Current task and artifact status
+-   Overlap detection state
+-   Approval lifecycle records
+-   Vector-indexed search across all entities
 
-------------------------------------------------------------------------
+Postgres is the coordination substrate. Fast, queryable, role-scoped.
 
-# S3-Backed File Persistence
+## S3 — Working File Persistence
 
 Artifact content — documents, binaries, skill bundles, agent outputs —
 is stored in S3-compatible object storage, not inline in the database.
 
-MissionControl ships with RustFS (a high-performance, S3-compatible
-object store) bundled directly in the Docker Compose stack. No external
-storage infrastructure is required to run a fully persistent local
-instance.
-
-Object keys are mission/kluster-scoped:
+S3 is the working store: immediately available, mutable during active
+work, and scoped per mission and kluster:
 
     missions/{mission_id}/klusters/{kluster_id}/{entity}/{filename}
 
-This means:
+This means agents can read, write, and iterate on file content without
+polluting the structured state database. Storage scales independently.
+Any S3-compatible backend works — AWS S3, MinIO, RustFS — with no code
+changes.
 
--   Artifact storage is isolated per mission boundary
--   Any S3-compatible backend can be substituted (AWS S3, MinIO,
-    RustFS, etc.) with no code changes
--   Storage scales independently of the control plane database
--   Content remains retrievable and auditable even if the API is
-    restarted or migrated
+MissionControl ships with RustFS bundled in the Docker Compose stack.
+No external infrastructure required to run with full file persistence
+locally.
 
-File persistence is not an afterthought. It is a first-class primitive
-for AI-native workflows where agents produce, consume, and publish
-artifacts continuously.
+S3 is not optional infrastructure. It is where active work lives.
+
+## Git — Long-Term Memory of Record
+
+When a mutation is approved and published, it is committed to Git.
+
+Git is the memory of record: immutable, auditable, and version-controlled.
+Artifact provenance metadata (repo, branch, path, commit hash) is written
+back to Postgres, creating a permanent link between the operational record
+and the historical record.
+
+The flow is:
+
+1.  Agent produces artifact → stored in S3 (working)
+2.  Mutation recorded in Postgres (structured state)
+3.  Approval granted → committed to Git (memory of record)
+4.  Provenance written back → full chain of custody established
+
+This creates:
+
+-   Traceable AI actions with deterministic lineage
+-   Audit-ready change history outside the control plane
+-   Reproducible mission state from Git alone if needed
+-   A permanent organizational knowledge base that survives
+    infrastructure changes
+
+AI activity becomes accountable. The full trail — who did what, when,
+approved by whom, committed where — is preserved at every layer.
 
 ------------------------------------------------------------------------
 
@@ -263,40 +324,51 @@ interaction.
 
 MissionControl becomes a central nervous system for:
 
--   Rapid onboarding of new contributors
--   Encoding institutional knowledge
--   Standardizing toolchains
--   Defining mission-scoped skills
--   Switching operational profiles safely
--   Integrating AI workflows into everyday Slack usage
+-   Rapid onboarding of new contributors and agents
+-   Encoding institutional knowledge into durable, searchable state
+-   Standardizing toolchains across teams and missions
+-   Defining mission-scoped skills and capability profiles
+-   Switching operational contexts safely and intentionally
+-   Surfacing AI workflows through the communication tools teams
+    already use
 
-A new contributor attaches to a Mission Profile.
+A new contributor — human or agent — attaches to a Mission Profile and
+loads their personal agent profile.
 
 The Mission defines:
 
--   Tools
--   Skills
--   Governance
--   State
--   Permissions
--   Communication surface (Slack channels)
+-   Tools and approved integrations
+-   Skills and knowledge domains
+-   Governance strictness and approval requirements
+-   State, ownership, and permission tiers
+-   Communication surface (whichever channel the team uses)
 
-This compresses onboarding time and reduces cognitive overhead.
+This compresses onboarding time and reduces cognitive overhead for both
+humans and AI agents joining a mission mid-flight.
 
 ------------------------------------------------------------------------
 
 # Scalable Parallel AI Execution
 
-Without coordination: - Agents duplicate effort - State diverges -
-Artifacts conflict - No clear ownership
+Without coordination:
 
-With MissionControl: - Parallel task execution is structured - Overlap
-is detected before damage - Ownership is explicit - State is
-synchronized - Policy is enforced - Organizational stakeholders remain
-informed via Slack
+-   Agents duplicate effort
+-   State diverges across sessions
+-   Artifacts conflict with no resolution path
+-   No clear ownership or audit trail
+
+With MissionControl:
+
+-   Parallel task execution is structured by mission and kluster scope
+-   Overlap is detected before damage occurs
+-   Ownership is explicit and role-enforced
+-   State is synchronized across agents, sessions, and machines
+-   Policy is enforced at every mutation point
+-   Organizational stakeholders remain informed through whatever
+    communication channel the team uses
 
 This enables 5, 10, 50 agents to operate simultaneously inside a
-coherent system.
+coherent, governed, auditable system.
 
 ------------------------------------------------------------------------
 
