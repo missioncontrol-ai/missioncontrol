@@ -2,6 +2,7 @@
 # Local DB
 backend/taskman.db
 backend/ci_migrations*.db
+backend/dev-data/
 .dev/
 
 # Vector store
