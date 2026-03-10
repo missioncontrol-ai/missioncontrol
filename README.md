@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/MissionControl-Repo.clean.png" alt="MissionControl" width="100%">
+</p>
+
 # AI Mission Control (Pilot)
 
 A local-first pilot implementation of the AI Mission Control platform: knowledge clusters, task coordination with overlap detection, MCP-style agent tools, and ingestion stubs. Now includes a local vector store for search + similarity.
