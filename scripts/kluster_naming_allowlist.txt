@@ -2,7 +2,7 @@
 # Keep this file shrinking. New entries should be avoided.
 MISSIONCONTROL_PHILOSOPHY.md:138:-   Klusters - knoweldge cluster inside mission for a targeted outcome
 README.md:200:- Create actions (mission/cluster/task) attempt immediate bootstrap Git commit to initialize location with pending metadata.
-README.md:3:A local-first pilot implementation of the AI Mission Control platform: knowledge clusters, task coordination with overlap detection, MCP-style agent tools, and ingestion stubs. Now includes a local vector store for search + similarity.
+README.md:3:A local-first enterprise implementation of the AI Mission Control platform: knowledge clusters, task coordination with overlap detection, MCP-style agent tools, and ingestion stubs. Now includes a local vector store for search + similarity.
 README.md:55:1. Start local API container against cluster services:
 README.md:58:bash scripts/dev-up-cluster.sh
 README.md:64:bash scripts/dev-down-cluster.sh

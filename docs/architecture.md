@@ -1,4 +1,4 @@
-# Architecture (Pilot)
+# Architecture 
 
 ## Core Services
 - **Knowledge Service**: clusters, docs, artifacts with publish/draft status.

@@ -4,7 +4,7 @@ The `mc` binary (previously known as the `missioncontrol-mcp` Python bridge) is 
 It carries the agent context, governance headers, and SSE matrix telemetry in a single binary that can ship to laptops, Ruflo-style
 queen hosts, or local planners that need an exceptional offline/online experience. `mc` speaks the same FastAPI surface as the
 Python bridge (tools, explorer, governance, sync) while adding the matrix/doctor/booster hardening documented in
-[`docs/REAL-TIME.md`](REAL-TIME.md) and our architecture comparison in [`docs/ARCHITECTURE-COMPARISON-RUFLO.md`](ARCHITECTURE-COMPARISON-RUFLO.md).
+[`docs/REAL-TIME.md`](REAL-TIME.md) and our architecture comparison in [`.dev/ARCHITECTURE-COMPARISON-RUFLO.md`](.dev/ARCHITECTURE-COMPARISON-RUFLO.md).
 
 ## Why Rust-first
 
@@ -38,6 +38,11 @@ Python bridge (tools, explorer, governance, sync) while adding the matrix/doctor
 | `MC_ALLOW_INSECURE` | Accept self-signed certs (daemon and doctor matrix checks) | `false` |
 | `MC_BOOSTER_WASM` | Path to a custom WASM booster module | embedded default |
 | `MC_DISABLE_BOOSTER` | Skip the booster hook even if configured | `false` |
+| `MC_SCHEMA_PACK_FILE` | Schema pack JSON used to gate `mc tools call` payloads | `docs/schema-packs/main.json` |
+
+Point `MC_SCHEMA_PACK_FILE` at the same `docs/schema-packs/main.json` that the backend uses so the CLI-level booster, matrix doctor,
+and fan-out diagnostics share the same entity expectations. Custom schema packs can live beside your deployment manifests, and the
+daemon will warn and fall back to defaults if the JSON is invalid.
 
 When no `MC_AGENT_ID` is provided, `mc` looks for `~/.missioncontrol/agent_id` and `mc doctor --repair` will seed it and ensure
 `MC_HOME`/`MC_SKILLS_HOME` exist so local swarms keep a stable identity.
@@ -87,10 +92,18 @@ headers, TLS failures, and timeouts so dashboards know whether the daemon is hea
 - Capture additional local hooks (matrix schema consumers, booster wires, MQTT sync intents) here so auditors or Ruflo queens understand how
   they integrate with Mission Control’s policy controls.
 
+## Operational hardening
+
+Follow the checklist in [`.dev/RELEASE-CHECKLIST.md`](.dev/RELEASE-CHECKLIST.md) whenever you turn up `mc` for production-grade
+workloads. At minimum, terminate TLS through a reverse proxy, enforce rate limits when you forward `/events/stream`, keep `MC_TOKEN`/
+OIDC credentials rotated, and expose `/mcp/health` together with the matrix stream so orchestrators can probe the daemon. We also prefer
+running the daemon inside a container (see [`.dev/MC-CONTAINER.md`](.dev/MC-CONTAINER.md)) so secrets, fan-out ports, and local storage are
+explicitly scoped per host.
+
 ## Next steps
 
 - Document the SSE schema in [`docs/REAL-TIME.md`](REAL-TIME.md) so `mc daemon` can be wired into dashboards, and link the story from
-  `ARCHITECTURE-COMPARISON-RUFLO.md`.
+  [`.dev/ARCHITECTURE-COMPARISON-RUFLO.md`](.dev/ARCHITECTURE-COMPARISON-RUFLO.md).
 - Add formal WASM booster plumbing in `integrations/mc` that mirrors the schema pack validations in `backend/app/services/schema_pack.py`
   so quick checks run before every MCP call.
 - Keep expanding the `mc` CLI until every critical Python command has parity and the Rust daemon hosts the matrix + MQTT pipeline for

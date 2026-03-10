@@ -19,6 +19,7 @@ from . import (
     google_chat_integrations,
     teams_integrations,
     chat_integrations,
+    ops,
 )
 
 __all__ = [
@@ -42,4 +43,5 @@ __all__ = [
     "google_chat_integrations",
     "teams_integrations",
     "chat_integrations",
+    "ops",
 ]

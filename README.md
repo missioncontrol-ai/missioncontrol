@@ -2,7 +2,7 @@
   <img src="assets/MissionControl-Repo.clean.png" alt="MissionControl" width="100%">
 </p>
 
-# AI Mission Control
+# AI Mission Control - Strategic Enterprise AI Orchestration
 
 > **The coordination layer for AI-native organizations.**
 
@@ -389,7 +389,7 @@ Approval token header:
 - Default vector store is pgvector when using Postgres.
 - Quickstart fallback database remains SQLite (`backend/taskman.db`) with Chroma (`backend/chroma`) vector fallback.
 - You can force vector backend with `VECTOR_STORE_BACKEND=pgvector|chroma`.
-- Embeddings are deterministic hash-based for the pilot; replace with OpenAI/Claude/Ollama adapters.
+- Embeddings are deterministic hash-based; replace with OpenAI/Claude/Ollama adapters.
 - Overlap detection uses both fuzzy similarity and vector search.
 - Ingestion endpoints enqueue stub jobs and create a placeholder doc.
 

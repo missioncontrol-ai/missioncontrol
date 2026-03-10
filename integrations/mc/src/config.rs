@@ -1,4 +1,4 @@
-use crate::agent_context::AgentContext;
+use crate::{agent_context::AgentContext, schema_pack::SchemaPack};
 use dirs::home_dir;
 use std::{env, fs, path::PathBuf, time::Duration};
 use thiserror::Error;
@@ -14,6 +14,7 @@ pub struct McConfig {
     pub agent_context: AgentContext,
     pub booster_wasm: Option<PathBuf>,
     pub booster_enabled: bool,
+    pub schema_pack: SchemaPack,
 }
 
 #[derive(Error, Debug)]
@@ -47,6 +48,7 @@ impl McConfig {
             agent_context: AgentContext::new(resolve_agent_id(agent_id)),
             booster_wasm,
             booster_enabled,
+            schema_pack: SchemaPack::load(),
         })
     }
 

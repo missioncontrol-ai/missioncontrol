@@ -43,6 +43,7 @@ from app.routers import (
     google_chat_integrations,
     teams_integrations,
     chat_integrations,
+    ops,
     profiles,
 )
 
@@ -471,6 +472,7 @@ app.include_router(explorer.router)
 app.include_router(onboarding.router)
 app.include_router(governance.router)
 app.include_router(approvals.router)
+app.include_router(ops.router)
 app.include_router(slack_integrations.router)
 app.include_router(chat_integrations.router)
 app.include_router(feedback.router)

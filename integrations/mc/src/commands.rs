@@ -1,17 +1,17 @@
-use crate::agent_context::AgentContext;
-use crate::booster::AgentBooster;
-use crate::client::MissionControlClient;
-use crate::config::{ensure_mc_dirs, mc_home_dir, persist_agent_id, skills_home_dir, McConfig};
-use crate::daemon::{self, DaemonArgs};
+use crate::{
+    agent_context::AgentContext,
+    booster::AgentBooster,
+    client::MissionControlClient,
+    config::McConfig,
+    daemon::{self, DaemonArgs},
+    governance, maintenance, mcp_tools, ops, remote,
+    schema_pack::SchemaPack,
+    update,
+};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use reqwest::{header, Method};
-use serde::Serialize;
 use serde_json::{json, Value};
-use std::time::{Duration, Instant};
-use tokio::time::timeout;
 use url::form_urlencoded;
-use uuid::Uuid;
 
 /// Top-level CLI entrypoints for the mc binary.
 #[derive(Subcommand, Debug)]
@@ -34,25 +34,23 @@ pub enum McCommand {
     /// Workspace lifecycle helpers (load/heartbeat/artifact/commit/release).
     #[command(subcommand)]
     Workspace(WorkspaceCommand),
-    /// Simple health & dependency checks inside Mission Control.
-    Doctor(DoctorArgs),
-    /// Run the async background daemon (matrix + MQTT) described in ARCHITECTURE-COMPARISON-RUFLO.md.
+    /// AI-native mission operations such as mission lifecycle orchestration.
+    #[command(subcommand)]
+    Ops(ops::OpsCommand),
+    /// Governance automation helpers (roles, policies, events).
+    #[command(subcommand)]
+    Governance(governance::GovernanceCommand),
+    /// Maintenance utilities (doctor, backups).
+    #[command(subcommand)]
+    Maintenance(maintenance::MaintenanceCommand),
+    /// Remote agent control verbs.
+    #[command(subcommand)]
+    Remote(remote::RemoteCommand),
+    /// Self-update helper for the mc binary.
+    #[command(subcommand)]
+    Update(update::UpdateCommand),
+    /// Run the async background daemon (matrix + MQTT).
     Daemon(DaemonArgs),
-}
-
-#[derive(Args, Debug)]
-pub struct DoctorArgs {
-    /// Matrix-style SSE endpoint to exercise during diagnostics.
-    #[arg(long, default_value = "/events/stream")]
-    pub matrix_endpoint: String,
-
-    /// Seconds to wait for the matrix endpoint to respond before timing out.
-    #[arg(long, default_value_t = 5)]
-    pub matrix_sample_seconds: u64,
-
-    /// Attempt local repairs (directories, agent_id file) where possible.
-    #[arg(long)]
-    pub repair: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -279,13 +277,19 @@ pub async fn run(
     config: McConfig,
 ) -> Result<()> {
     match command {
-        McCommand::Tools(cmd) => handle_tools(cmd, client, &booster).await,
+        McCommand::Tools(cmd) => handle_tools(cmd, client, &booster, &config.schema_pack).await,
         McCommand::Sync(cmd) => handle_sync(cmd, client).await,
         McCommand::Explorer(cmd) => handle_explorer(cmd, client).await,
         McCommand::Admin(cmd) => handle_admin(cmd, client).await,
-        McCommand::Workspace(cmd) => handle_workspace(cmd, client, &booster).await,
+        McCommand::Workspace(cmd) => {
+            handle_workspace(cmd, client, &booster, &config.schema_pack).await
+        }
         McCommand::Approvals(cmd) => handle_approvals(cmd, client).await,
-        McCommand::Doctor(args) => handle_doctor(client, &config, &args).await,
+        McCommand::Ops(cmd) => ops::run(cmd, &client, &booster, &config.schema_pack).await,
+        McCommand::Governance(cmd) => governance::run(cmd, &client).await,
+        McCommand::Maintenance(cmd) => maintenance::run(cmd, &client, &config).await,
+        McCommand::Remote(cmd) => remote::run(cmd, &client).await,
+        McCommand::Update(cmd) => update::run(cmd, &config).await,
         McCommand::Daemon(args) => daemon::run(&args, &client, ctx).await,
     }
 }
@@ -294,6 +298,7 @@ async fn handle_tools(
     command: ToolsCommand,
     client: MissionControlClient,
     booster: &AgentBooster,
+    schema_pack: &SchemaPack,
 ) -> Result<()> {
     match command {
         ToolsCommand::List => {
@@ -303,33 +308,33 @@ async fn handle_tools(
         ToolsCommand::Call(args) => {
             let payload = serde_json::from_str::<Value>(&args.payload)
                 .context("failed to parse payload JSON")?;
-            let response = call_mcp_tool(&client, booster, &args.tool, payload).await?;
+            let response = mcp_tools::call_tool(
+                &client,
+                Some(booster),
+                Some(schema_pack),
+                &args.tool,
+                payload,
+            )
+            .await?;
             print_json(&response);
         }
     }
     Ok(())
 }
 
-async fn call_mcp_tool(
-    client: &MissionControlClient,
-    booster: &AgentBooster,
-    tool: &str,
-    args_value: Value,
-) -> Result<Value> {
-    if booster.is_enabled() {
-        let short_circuit = booster
-            .run(&args_value)
-            .context("booster validation failed")?;
-        if short_circuit {
-            println!("[booster] short-circuited {tool}");
-            return Ok(json!({ "booster_short_circuit": true, "tool": tool }));
-        }
+fn print_json(value: &Value) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+    );
+}
+
+fn build_path_with_query(base: &str, query: String) -> String {
+    if query.is_empty() {
+        base.to_string()
+    } else {
+        format!("{}?{}", base, query)
     }
-    let request = json!({
-        "tool": tool,
-        "args": args_value,
-    });
-    client.post_json("/mcp/call", &request).await
 }
 
 async fn handle_sync(command: SyncCommand, client: MissionControlClient) -> Result<()> {
@@ -378,6 +383,7 @@ async fn handle_workspace(
     command: WorkspaceCommand,
     client: MissionControlClient,
     booster: &AgentBooster,
+    schema_pack: &SchemaPack,
 ) -> Result<()> {
     match command {
         WorkspaceCommand::Load {
@@ -396,13 +402,26 @@ async fn handle_workspace(
             if let Some(agent) = agent_id {
                 args["agent_id"] = json!(agent);
             }
-            let response = call_mcp_tool(&client, booster, "load_kluster_workspace", args).await?;
+            let response = call_mcp_tool(
+                &client,
+                booster,
+                schema_pack,
+                "load_kluster_workspace",
+                args,
+            )
+            .await?;
             print_json(&response);
         }
         WorkspaceCommand::Heartbeat { lease_id } => {
             let args = json!({"lease_id": lease_id});
-            let response =
-                call_mcp_tool(&client, booster, "heartbeat_workspace_lease", args).await?;
+            let response = call_mcp_tool(
+                &client,
+                booster,
+                schema_pack,
+                "heartbeat_workspace_lease",
+                args,
+            )
+            .await?;
             print_json(&response);
         }
         WorkspaceCommand::FetchArtifact {
@@ -417,8 +436,14 @@ async fn handle_workspace(
                 "mode": mode,
                 "expires_seconds": expires_seconds,
             });
-            let response =
-                call_mcp_tool(&client, booster, "fetch_workspace_artifact", args).await?;
+            let response = call_mcp_tool(
+                &client,
+                booster,
+                schema_pack,
+                "fetch_workspace_artifact",
+                args,
+            )
+            .await?;
             print_json(&response);
         }
         WorkspaceCommand::Commit {
@@ -435,8 +460,14 @@ async fn handle_workspace(
             if let Some(mode) = validation_mode {
                 args["validation_mode"] = json!(mode);
             }
-            let response =
-                call_mcp_tool(&client, booster, "commit_kluster_workspace", args).await?;
+            let response = call_mcp_tool(
+                &client,
+                booster,
+                schema_pack,
+                "commit_kluster_workspace",
+                args,
+            )
+            .await?;
             print_json(&response);
         }
         WorkspaceCommand::Release { lease_id, reason } => {
@@ -444,8 +475,14 @@ async fn handle_workspace(
             if let Some(reason_value) = reason {
                 args["reason"] = json!(reason_value);
             }
-            let response =
-                call_mcp_tool(&client, booster, "release_kluster_workspace", args).await?;
+            let response = call_mcp_tool(
+                &client,
+                booster,
+                schema_pack,
+                "release_kluster_workspace",
+                args,
+            )
+            .await?;
             print_json(&response);
         }
     }
@@ -600,271 +637,12 @@ async fn handle_approvals(command: ApprovalCommand, client: MissionControlClient
     Ok(())
 }
 
-async fn handle_doctor(
-    client: MissionControlClient,
-    config: &McConfig,
-    args: &DoctorArgs,
-) -> Result<()> {
-    let checks = vec![
-        run_health_check(&client).await,
-        run_tools_check(&client).await,
-        run_matrix_check(
-            &client,
-            &args.matrix_endpoint,
-            Duration::from_secs(args.matrix_sample_seconds),
-        )
-        .await,
-    ];
-    let repairs = if args.repair {
-        perform_repairs(config)
-    } else {
-        Vec::new()
-    };
-    let report = DoctorReport {
-        base_url: config.base_url.to_string(),
-        agent_id: config.agent_context.agent_id.clone(),
-        matrix_endpoint: args.matrix_endpoint.clone(),
-        checks,
-        repairs,
-    };
-    println!(
-        "Doctor report ({} checks, {} repairs)",
-        report.checks.len(),
-        report.repairs.len()
-    );
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&report).context("failed to serialize doctor report")?
-    );
-    Ok(())
-}
-
-async fn run_health_check(client: &MissionControlClient) -> DoctorCheck {
-    let start = Instant::now();
-    let name = "mcp_health".to_string();
-    match client.get_json("/mcp/health").await {
-        Ok(payload) => DoctorCheck {
-            name,
-            ok: true,
-            detail: "mcp health OK".into(),
-            duration_ms: start.elapsed().as_millis(),
-            payload: Some(payload),
-            repair_hint: None,
-        },
-        Err(err) => DoctorCheck {
-            name,
-            ok: false,
-            detail: err.to_string(),
-            duration_ms: start.elapsed().as_millis(),
-            payload: None,
-            repair_hint: Some("Check MC_BASE_URL/MCP_TOKEN or OIDC configuration".into()),
-        },
-    }
-}
-
-async fn run_tools_check(client: &MissionControlClient) -> DoctorCheck {
-    let start = Instant::now();
-    let name = "mcp_tools".to_string();
-    match client.get_json("/mcp/tools").await {
-        Ok(payload) => DoctorCheck {
-            name,
-            ok: true,
-            detail: "tools list succeeded".into(),
-            duration_ms: start.elapsed().as_millis(),
-            payload: Some(payload),
-            repair_hint: None,
-        },
-        Err(err) => DoctorCheck {
-            name,
-            ok: false,
-            detail: err.to_string(),
-            duration_ms: start.elapsed().as_millis(),
-            payload: None,
-            repair_hint: Some("Ensure approvals/tools access and tokens are valid".into()),
-        },
-    }
-}
-
-async fn run_matrix_check(
+async fn call_mcp_tool(
     client: &MissionControlClient,
-    endpoint: &str,
-    sample_duration: Duration,
-) -> DoctorCheck {
-    let start = Instant::now();
-    let name = "matrix_stream".to_string();
-    let builder = match client.request_builder(Method::GET, endpoint) {
-        Ok(builder) => builder,
-        Err(err) => {
-            return DoctorCheck {
-                name,
-                ok: false,
-                detail: err.to_string(),
-                duration_ms: start.elapsed().as_millis(),
-                payload: None,
-                repair_hint: Some("Invalid matrix endpoint; update --matrix-endpoint".into()),
-            }
-        }
-    };
-    let response = match timeout(
-        sample_duration,
-        builder.header(header::ACCEPT, "text/event-stream").send(),
-    )
-    .await
-    {
-        Ok(Ok(response)) => response,
-        Ok(Err(err)) => {
-            let hint = if err.to_string().to_lowercase().contains("tls") {
-                Some(
-                    "Run with --allow-insecure/MC_ALLOW_INSECURE=true for self-signed certs".into(),
-                )
-            } else {
-                Some("Ensure /events/stream is reachable and not throttled".into())
-            };
-            return DoctorCheck {
-                name,
-                ok: false,
-                detail: err.to_string(),
-                duration_ms: start.elapsed().as_millis(),
-                payload: None,
-                repair_hint: hint,
-            };
-        }
-        Err(_) => {
-            return DoctorCheck {
-                name,
-                ok: false,
-                detail: "matrix endpoint timed out".into(),
-                duration_ms: start.elapsed().as_millis(),
-                payload: None,
-                repair_hint: Some("Verify the server is reachable and emitting events".into()),
-            }
-        }
-    };
-    let status = response.status();
-    let content_type = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_string();
-    let ok = status.is_success() && content_type.contains("event-stream");
-    let detail = if ok {
-        "matrix endpoint streaming".into()
-    } else {
-        format!(
-            "matrix endpoint returned {} with content-type {}",
-            status, content_type
-        )
-    };
-    let payload = Some(json!({
-        "status": status.as_u16(),
-        "content_type": content_type,
-    }));
-    drop(response);
-    DoctorCheck {
-        name,
-        ok,
-        detail,
-        duration_ms: start.elapsed().as_millis(),
-        payload,
-        repair_hint: if ok {
-            None
-        } else {
-            Some("Confirm the matrix listener is enabled and not blocked by firewalls".into())
-        },
-    }
-}
-
-fn perform_repairs(config: &McConfig) -> Vec<DoctorRepair> {
-    let mut repairs = Vec::new();
-    match ensure_mc_dirs() {
-        Ok(()) => repairs.push(DoctorRepair::ok(
-            "directories",
-            format!(
-                "Ensured MC_HOME={} and skills dir {}",
-                mc_home_dir().display(),
-                skills_home_dir().display()
-            ),
-        )),
-        Err(err) => repairs.push(DoctorRepair::failed("directories", err.to_string())),
-    }
-    if config.agent_context.agent_id.is_none() {
-        let agent_id = format!("mc-agent-{}", Uuid::new_v4());
-        match persist_agent_id(&agent_id) {
-            Ok(()) => repairs.push(DoctorRepair::ok(
-                "agent_id",
-                format!(
-                    "Persisted agent_id {} at {}/agent_id",
-                    agent_id,
-                    mc_home_dir().display()
-                ),
-            )),
-            Err(err) => repairs.push(DoctorRepair::failed("agent_id", err.to_string())),
-        }
-    } else {
-        repairs.push(DoctorRepair::ok(
-            "agent_id",
-            "Agent ID already configured".into(),
-        ));
-    }
-    repairs
-}
-
-#[derive(Serialize)]
-struct DoctorReport {
-    base_url: String,
-    agent_id: Option<String>,
-    matrix_endpoint: String,
-    checks: Vec<DoctorCheck>,
-    repairs: Vec<DoctorRepair>,
-}
-
-#[derive(Serialize)]
-struct DoctorCheck {
-    name: String,
-    ok: bool,
-    detail: String,
-    duration_ms: u128,
-    payload: Option<Value>,
-    repair_hint: Option<String>,
-}
-
-#[derive(Serialize)]
-struct DoctorRepair {
-    name: String,
-    success: bool,
-    detail: String,
-}
-
-impl DoctorRepair {
-    fn ok(name: &str, detail: String) -> Self {
-        Self {
-            name: name.to_string(),
-            success: true,
-            detail,
-        }
-    }
-
-    fn failed(name: &str, detail: String) -> Self {
-        Self {
-            name: name.to_string(),
-            success: false,
-            detail,
-        }
-    }
-}
-
-fn build_path_with_query(base: &str, query: String) -> String {
-    if query.is_empty() {
-        base.to_string()
-    } else {
-        format!("{}?{}", base, query)
-    }
-}
-
-fn print_json(value: &Value) {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
-    );
+    booster: &AgentBooster,
+    schema_pack: &SchemaPack,
+    tool: &str,
+    args: Value,
+) -> Result<Value> {
+    mcp_tools::call_tool(client, Some(booster), Some(schema_pack), tool, args).await
 }
