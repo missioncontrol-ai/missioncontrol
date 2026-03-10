@@ -65,7 +65,7 @@ class TestProfileValidation(unittest.TestCase):
 
 class TestProfileCRUD(unittest.TestCase):
     def setUp(self):
-        SQLModel.metadata.drop_all(engine)
+        SQLModel.metadata.drop_all(engine, checkfirst=True)
         SQLModel.metadata.create_all(engine)
 
     def _create(self, subject: str = "user@example.com", name: str = "work", **kwargs):
@@ -184,7 +184,7 @@ class TestProfileCRUD(unittest.TestCase):
 
 class TestProfileAuthIsolation(unittest.TestCase):
     def setUp(self):
-        SQLModel.metadata.drop_all(engine)
+        SQLModel.metadata.drop_all(engine, checkfirst=True)
         SQLModel.metadata.create_all(engine)
 
     def _create_for(self, subject: str, name: str):

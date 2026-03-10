@@ -382,7 +382,11 @@ def handle_tools_list(msg_id: Any, http: MissionControlHttpClient, fail_open_on_
                 "category": exc.category,
                 "base_url": http.preferred_base_url,
             }
-            return rpc_result(msg_id, {"tools": [], "_missioncontrol_warning": warning})
+            profile_tools = [
+                {"name": t["name"], "description": t["description"], "inputSchema": t["input_schema"]}
+                for t in _PROFILE_LOCAL_TOOLS
+            ]
+            return rpc_result(msg_id, {"tools": profile_tools, "_missioncontrol_warning": warning})
         raise
     mapped = []
     for tool in tools:
@@ -393,6 +397,9 @@ def handle_tools_list(msg_id: Any, http: MissionControlHttpClient, fail_open_on_
                 "inputSchema": tool.get("input_schema", {"type": "object", "properties": {}}),
             }
         )
+    # Inject local profile tools
+    for t in _PROFILE_LOCAL_TOOLS:
+        mapped.append({"name": t["name"], "description": t["description"], "inputSchema": t["input_schema"]})
     return rpc_result(msg_id, {"tools": mapped})
 
 
@@ -800,6 +807,8 @@ def handle_request(
     daemon: DaemonClient | None,
     preflight_state: dict[str, bool],
     fail_open_on_list: bool,
+    profile_store: "ProfileStore | None" = None,
+    profile_sync_manager: "ProfileSyncManager | None" = None,
 ) -> dict[str, Any] | None:
     method = message.get("method")
     msg_id = message.get("id")
@@ -823,6 +832,31 @@ def handle_request(
                     log(f"preflight_failed mode={preflight_mode} base_url={http.preferred_base_url} error={exc}")
                 finally:
                     preflight_state["done"] = True
+
+        # Auto-sync active profile on initialize (fail-graceful)
+        if profile_store is not None and profile_sync_manager is not None:
+            if parse_bool_env("MC_PROFILE_SYNC_ON_INIT", True):
+                profile_name = _resolve_profile_name(profile_store)
+                if profile_name:
+                    timeout_sec = max(1, parse_int_env("MC_PROFILE_SYNC_TIMEOUT_SEC", 10))
+                    result_holder: list[Any] = []
+                    exc_holder: list[Exception] = []
+
+                    def _do_sync():
+                        try:
+                            r = profile_sync_manager.sync(profile_name)
+                            result_holder.append(r)
+                        except Exception as e:
+                            exc_holder.append(e)
+
+                    t = threading.Thread(target=_do_sync, daemon=True)
+                    t.start()
+                    t.join(timeout=float(timeout_sec))
+                    if exc_holder:
+                        log(f"Profile sync skipped: {exc_holder[0]}")
+                    elif result_holder and result_holder[0].get("changed"):
+                        log(f"Profile '{profile_name}' synced")
+
         return rpc_result(
             msg_id,
             {
@@ -869,13 +903,30 @@ def handle_request(
             cache_meta = out.get("cache") if isinstance(out, dict) else None
             if isinstance(cache_meta, dict) and cache_meta.get("state") == "stale":
                 result_payload["_missioncontrol_warning"] = cache_meta
+            # Inject local profile tools
+            for t in _PROFILE_LOCAL_TOOLS:
+                result_payload["tools"].append(
+                    {"name": t["name"], "description": t["description"], "inputSchema": t["input_schema"]}
+                )
             return rpc_result(msg_id, result_payload)
         return handle_tools_list(msg_id, http, fail_open_on_list)
 
     if method == "tools/call":
+        tool_name = params.get("name") or ""
+        tool_args = params.get("arguments") or {}
+
+        # Intercept local profile tools before forwarding to backend
+        if tool_name in _PROFILE_TOOL_NAMES and profile_store is not None and profile_sync_manager is not None:
+            return _handle_profile_tool(
+                msg_id,
+                str(tool_name),
+                tool_args if isinstance(tool_args, dict) else {},
+                http,
+                profile_store,
+                profile_sync_manager,
+            )
+
         if daemon is not None:
-            tool_name = params.get("name")
-            tool_args = params.get("arguments") or {}
             if not tool_name:
                 return rpc_error(msg_id, -32602, "Missing tool name")
             api_result = daemon.tools_call(str(tool_name), tool_args if isinstance(tool_args, dict) else {})
@@ -953,6 +1004,8 @@ def run() -> None:
     daemon = DaemonClient() if mode == "shim" else None
     fail_open_on_list = parse_bool_env("MC_FAIL_OPEN_ON_LIST", DEFAULT_FAIL_OPEN_ON_LIST)
     preflight_state = {"done": False}
+    profile_store = ProfileStore()
+    profile_sync_manager = ProfileSyncManager(profile_store, http)
     if daemon is not None:
         log(f"starting shim bridge daemon={_daemon_base_url()} backend={http.preferred_base_url}")
     else:
@@ -972,6 +1025,8 @@ def run() -> None:
                 daemon=daemon,
                 preflight_state=preflight_state,
                 fail_open_on_list=fail_open_on_list,
+                profile_store=profile_store,
+                profile_sync_manager=profile_sync_manager,
             )
             if response is not None:
                 write_message(response)
@@ -1631,14 +1686,216 @@ def _sync_promote_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _profile_command(argv: list[str]) -> int:
+    """Handles: missioncontrol-mcp profile <subcommand> [args]"""
+    p = argparse.ArgumentParser(prog="missioncontrol-mcp profile", description="Manage personal profiles")
+    sub = p.add_subparsers(dest="action")
+
+    sub.add_parser("list", help="List profiles")
+
+    use_p = sub.add_parser("use", help="Switch to a profile (sync + update active symlink)")
+    use_p.add_argument("name", help="Profile name")
+
+    show_p = sub.add_parser("show", help="Show profile metadata and local sync status")
+    show_p.add_argument("name", nargs="?", default="", help="Profile name (default: active)")
+
+    sync_p = sub.add_parser("sync", help="Resync current or named profile")
+    sync_p.add_argument("--name", default="", help="Profile name (default: active)")
+    sync_p.add_argument("--force", action="store_true", help="Force re-download even if sha256 matches")
+
+    create_p = sub.add_parser("create", help="Create a new (empty) profile record")
+    create_p.add_argument("--name", required=True, help="Profile name (slug)")
+    create_p.add_argument("--description", default="", help="Description")
+    create_p.add_argument("--default", action="store_true", dest="is_default", help="Set as default profile")
+
+    push_p = sub.add_parser("push", help="Tar a local directory and upload as profile bundle")
+    push_p.add_argument("--name", required=True, help="Profile name")
+    push_p.add_argument("--dir", required=True, help="Directory to bundle")
+
+    pull_p = sub.add_parser("pull", help="Download profile bundle and extract to a local directory")
+    pull_p.add_argument("--name", default="", help="Profile name (default: active)")
+    pull_p.add_argument("--out-dir", default="", help="Output directory (default: ~/.missioncontrol/profiles/<name>)")
+
+    delete_p = sub.add_parser("delete", help="Delete a profile")
+    delete_p.add_argument("name", help="Profile name")
+
+    sub.add_parser("setup-shims", help="Print one-time agent include instructions")
+
+    args = p.parse_args(argv)
+    if not args.action:
+        p.print_help()
+        return 1
+
+    http = MissionControlHttpClient()
+    store = ProfileStore()
+    sync_mgr = ProfileSyncManager(store, http)
+
+    if args.action == "list":
+        profiles = http.http_json("GET", "/me/profiles")
+        if not profiles:
+            print("No profiles found.")
+            return 0
+        print(f"{'NAME':<20} {'DEFAULT':<8} {'SHA256':<16} {'LAST SYNC'}")
+        for pr in profiles:
+            name = pr.get("name", "")
+            is_def = "yes" if pr.get("is_default") else "no"
+            sha = (pr.get("sha256") or "")[:12]
+            meta = store.get_profile_meta(name)
+            last_sync = meta.get("last_sync_at", "never")[:19] if meta else "never"
+            print(f"{name:<20} {is_def:<8} {sha:<16} {last_sync}")
+        return 0
+
+    if args.action == "use":
+        result = sync_mgr.sync(args.name)
+        if result.get("changed"):
+            print(f"Profile '{args.name}' synced and activated (sha256={result.get('sha256', '')[:12]})")
+        else:
+            print(f"Profile '{args.name}' already up to date — active symlink updated")
+            sync_mgr.update_symlink(args.name)
+            store.set_last_profile(args.name)
+        return 0
+
+    if args.action == "show":
+        name = args.name or _resolve_profile_name(store)
+        if not name:
+            print("No active profile. Use --name or set MC_PROFILE.")
+            return 1
+        pr = http.http_json("GET", f"/me/profiles/{name}")
+        meta = store.get_profile_meta(name)
+        active = store.resolve_active_symlink_name()
+        print(json.dumps({
+            **pr,
+            "_local": {
+                "active": active == name,
+                "last_sync_at": meta.get("last_sync_at") if meta else None,
+                "local_sha256": meta.get("sha256") if meta else None,
+            },
+        }, indent=2))
+        return 0
+
+    if args.action == "sync":
+        name = args.name or _resolve_profile_name(store)
+        if not name:
+            print("No active profile. Use --name or set MC_PROFILE.")
+            return 1
+        result = sync_mgr.sync(name, force=args.force)
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.action == "create":
+        # Create with empty tarball (single placeholder file)
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            data = b"# profile placeholder\n"
+            info = tarfile.TarInfo(name="README.md")
+            info.size = len(data)
+            info.mtime = 0
+            tf.addfile(info, io.BytesIO(data))
+        tarball_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        result = http.http_json("POST", "/me/profiles", {
+            "name": args.name,
+            "description": args.description,
+            "is_default": args.is_default,
+            "manifest": [],
+            "tarball_b64": tarball_b64,
+        })
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.action == "push":
+        src = Path(args.dir).expanduser()
+        if not src.is_dir():
+            print(f"Directory not found: {src}")
+            return 1
+        buf = io.BytesIO()
+        manifest_files = []
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            for fpath in sorted(src.rglob("*")):
+                if not fpath.is_file():
+                    continue
+                rel = str(fpath.relative_to(src)).replace("\\", "/")
+                data = fpath.read_bytes()
+                info = tarfile.TarInfo(name=rel)
+                info.size = len(data)
+                info.mtime = int(fpath.stat().st_mtime)
+                tf.addfile(info, io.BytesIO(data))
+                manifest_files.append({
+                    "path": rel,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "size_bytes": len(data),
+                })
+        tarball_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        # Check if profile exists to decide PUT vs POST
+        try:
+            existing = http.http_json("GET", f"/me/profiles/{args.name}")
+            result = http.http_json("PUT", f"/me/profiles/{args.name}", {
+                "name": args.name,
+                "description": existing.get("description", ""),
+                "is_default": existing.get("is_default", False),
+                "manifest": manifest_files,
+                "tarball_b64": tarball_b64,
+            })
+        except MissionControlHttpError:
+            result = http.http_json("POST", "/me/profiles", {
+                "name": args.name,
+                "description": "",
+                "is_default": False,
+                "manifest": manifest_files,
+                "tarball_b64": tarball_b64,
+            })
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.action == "pull":
+        name = args.name or _resolve_profile_name(store)
+        if not name:
+            print("No active profile. Use --name or set MC_PROFILE.")
+            return 1
+        out_dir = Path(args.out_dir).expanduser() if args.out_dir else store.profile_dir(name)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        dl = http.http_json("GET", f"/me/profiles/{name}/download")
+        extracted = _extract_snapshot_to_dir(dl["tarball_b64"], out_dir)
+        print(f"Extracted {len(extracted)} file(s) to {out_dir}")
+        return 0
+
+    if args.action == "delete":
+        http.http_json("DELETE", f"/me/profiles/{args.name}")
+        print(f"Profile '{args.name}' deleted.")
+        return 0
+
+    if args.action == "setup-shims":
+        print("""
+Profile shim setup (one-time, per agent):
+
+  Claude Code (~/.claude/CLAUDE.md):
+    Add this line:
+      @~/.missioncontrol/profiles/active/claude.md
+
+  Codex (~/.codex/config.toml):
+    Set:
+      instructions_file = "~/.missioncontrol/profiles/active/codex.md"
+
+  OpenClaw (agent config env):
+    MC_PROFILE_ACTIVE_PATH=~/.missioncontrol/profiles/active
+
+  Switching profiles:
+    missioncontrol-mcp profile use <name>
+    (atomic symlink swap — agents pick up new context on next session)
+""")
+        return 0
+
+    p.print_help()
+    return 1
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MissionControl MCP bridge")
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["serve", "daemon", "doctor", "sync", "sync-status", "sync-promote", "sign-bundle"],
+        choices=["serve", "daemon", "doctor", "sync", "sync-status", "sync-promote", "sign-bundle", "profile"],
         default="serve",
-        help="serve MCP over stdio (default), run daemon, doctor checks, sync helpers, or bundle signing helper",
+        help="serve MCP over stdio (default), run daemon, doctor checks, sync helpers, bundle signing, or profile management",
     )
     parser.add_argument("--mission-id", default="", help="mission id for sync commands")
     parser.add_argument("--kluster-id", default="", help="optional kluster id for sync commands")
@@ -1652,13 +1909,17 @@ def main() -> None:
     parser.add_argument("--manifest-file", default="", help="optional path to raw manifest JSON")
     parser.add_argument("--manifest-json", default="", help="optional raw manifest JSON string")
     parser.add_argument("--signing-secret", default="", help="optional signing secret override")
-    args = parser.parse_args()
+    args = parser.parse_args(sys.argv[1:2])  # only parse the command; subcommands handle the rest
     if args.command == "daemon":
         os.environ["MC_MCP_MODE"] = "daemon"
         run_daemon()
         return
     if args.command == "doctor":
         raise SystemExit(doctor())
+    if args.command == "profile":
+        raise SystemExit(_profile_command(sys.argv[2:]))
+    # For remaining commands, re-parse with full args
+    args = parser.parse_args()
     if args.command == "sync":
         if not args.mission_id:
             raise SystemExit("--mission-id is required for sync")

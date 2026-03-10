@@ -52,6 +52,10 @@ pipx install "git+ssh://git@github.com/missioncontrol-ai/missioncontrol.git#subd
 - `MQTT_PORT` (default: `1883`)
 - `MQTT_USERNAME` (default: `missioncontrol`)
 - `MQTT_PASSWORD` (required for MQTT inbox)
+- `MC_HOME` (default: `~/.missioncontrol`) — local state directory
+- `MC_PROFILE` (optional) — active profile name override
+- `MC_PROFILE_SYNC_ON_INIT` (default: `true`) — auto-sync profile on MCP initialize
+- `MC_PROFILE_SYNC_TIMEOUT_SEC` (default: `10`) — profile sync timeout on init
 
 ## Quick Local Test
 
@@ -131,6 +135,43 @@ MC_BASE_URL="http://localhost:8008" MC_TOKEN="..." missioncontrol-explorer admin
 ```bash
 MC_BASE_URL="http://localhost:8008" MC_TOKEN="..." missioncontrol-explorer admin policy draft-create --note "harden policy"
 ```
+
+## Profile Management
+
+Profiles are personal bundles of agent config files (env files, instructions, etc.) stored on the MissionControl backend and synced to `~/.missioncontrol/profiles/active` on the local machine.
+
+```bash
+# List available profiles
+missioncontrol-mcp profile list
+
+# Switch active profile
+missioncontrol-mcp profile use <name>
+
+# Show current active profile contents
+missioncontrol-mcp profile show
+
+# Sync active profile from backend
+missioncontrol-mcp profile sync
+
+# Create a new empty profile
+missioncontrol-mcp profile create <name>
+
+# Push local files into a profile bundle
+missioncontrol-mcp profile push <name> [--files file1 file2 ...]
+
+# Pull a profile bundle to a local directory
+missioncontrol-mcp profile pull <name> [--out-dir DIR]
+
+# Delete a profile
+missioncontrol-mcp profile delete <name>
+
+# Set up shims in ~/.missioncontrol/profiles/active for use in agent env
+missioncontrol-mcp profile setup-shims
+```
+
+Auto-sync on MCP initialize: when `MC_PROFILE_SYNC_ON_INIT=true` (default), the bridge syncs the active profile in a background thread (bounded by `MC_PROFILE_SYNC_TIMEOUT_SEC`) during MCP startup. This ensures agent files are up to date without blocking tool calls.
+
+MCP tools: `list_profiles`, `switch_profile`, `sync_profile` (handled locally, not forwarded to backend).
 
 ## MCP Client Config Snippet
 

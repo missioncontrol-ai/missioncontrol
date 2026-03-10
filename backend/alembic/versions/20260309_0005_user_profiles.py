@@ -16,6 +16,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    conn = op.get_bind()
+    from sqlalchemy import inspect as _inspect
+    tables = set(_inspect(conn).get_table_names())
+    if "userprofile" in tables:
+        return
     op.create_table(
         "userprofile",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),

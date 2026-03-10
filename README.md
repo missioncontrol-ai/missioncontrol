@@ -154,6 +154,9 @@ Open `http://localhost:8008/ui/` in a browser.
 - `GET /mcp/health` + `GET /mcp/tools` + `POST /mcp/call`
 - `GET /ops/metrics` (platform admin only)
 - `GET /ops/logs?limit=200` (platform admin only)
+- `GET /me/profiles` + `POST /me/profiles`
+- `GET /me/profiles/{name}` + `PUT /me/profiles/{name}` + `PATCH /me/profiles/{name}` + `DELETE /me/profiles/{name}`
+- `GET /me/profiles/{name}/download` + `POST /me/profiles/{name}/activate`
 
 All API responses include an `x-request-id` header for correlation and tracing.
 Set `MC_LOG_EXPORT_PATH=/abs/path/missioncontrol.jsonl` to export structured events as JSON lines.

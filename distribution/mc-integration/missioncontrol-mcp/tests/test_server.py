@@ -163,5 +163,211 @@ class ServerConfigTests(unittest.TestCase):
             self.assertEqual(sig1, sig2)
 
 
+class ProfileStoreTests(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp()
+        self._patcher = patch.dict(os.environ, {"MC_HOME": self._tmpdir}, clear=False)
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+        import shutil as _shutil
+        _shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _make_store(self):
+        return server.ProfileStore()
+
+    def test_state_file_roundtrip(self):
+        store = self._make_store()
+        self.assertIsNone(store.get_last_profile())
+        store.set_last_profile("work")
+        self.assertEqual(store.get_last_profile(), "work")
+
+    def test_profile_meta_roundtrip(self):
+        store = self._make_store()
+        self.assertEqual(store.get_profile_meta("work"), {})
+        store.set_profile_meta("work", "abc123", "2026-03-09T00:00:00")
+        meta = store.get_profile_meta("work")
+        self.assertEqual(meta["sha256"], "abc123")
+        self.assertEqual(meta["last_sync_at"], "2026-03-09T00:00:00")
+
+    def test_profile_dir_returns_path(self):
+        store = self._make_store()
+        d = store.profile_dir("work")
+        self.assertTrue(str(d).endswith("work"))
+
+    def test_active_link_not_symlink_initially(self):
+        store = self._make_store()
+        self.assertIsNone(store.resolve_active_symlink_name())
+
+    def test_resolve_active_name_env_override(self):
+        store = self._make_store()
+        store.set_last_profile("research")
+        with patch.dict(os.environ, {"MC_PROFILE": "work"}, clear=False):
+            self.assertEqual(server._resolve_profile_name(store), "work")
+
+    def test_resolve_active_name_falls_back_to_state(self):
+        store = self._make_store()
+        store.set_last_profile("research")
+        with patch.dict(os.environ, {"MC_PROFILE": ""}, clear=False):
+            self.assertEqual(server._resolve_profile_name(store), "research")
+
+    def test_resolve_active_name_none_when_not_set(self):
+        store = self._make_store()
+        with patch.dict(os.environ, {"MC_PROFILE": ""}, clear=False):
+            self.assertIsNone(server._resolve_profile_name(store))
+
+
+class ProfileSyncManagerTests(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp()
+        self._patcher = patch.dict(os.environ, {"MC_HOME": self._tmpdir}, clear=False)
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+        import shutil as _shutil
+        _shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _make_tarball_b64(self, files: dict) -> str:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            for path, text in files.items():
+                data = text.encode("utf-8") if isinstance(text, str) else text
+                info = tarfile.TarInfo(name=path)
+                info.size = len(data)
+                info.mtime = 0
+                tf.addfile(info, io.BytesIO(data))
+        import base64
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+
+    def _make_sync_mgr(self, downloaded: dict):
+        class _FakeHttp:
+            def http_json(self, method, path, payload=None):
+                return downloaded
+
+        store = server.ProfileStore()
+        http = _FakeHttp()
+        return store, server.ProfileSyncManager(store, http)
+
+    def test_sync_extracts_files(self):
+        import hashlib, base64
+        tb = self._make_tarball_b64({"claude.md": "hello"})
+        sha256 = hashlib.sha256(base64.b64decode(tb)).hexdigest()
+        store, mgr = self._make_sync_mgr({"sha256": sha256, "tarball_b64": tb})
+        result = mgr.sync("work")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["changed"])
+        self.assertTrue((server.Path(self._tmpdir) / "profiles" / "work" / "claude.md").exists())
+
+    def test_sync_skips_when_sha_matches(self):
+        import hashlib, base64
+        tb = self._make_tarball_b64({"claude.md": "hello"})
+        sha256 = hashlib.sha256(base64.b64decode(tb)).hexdigest()
+        store, mgr = self._make_sync_mgr({"sha256": sha256, "tarball_b64": tb})
+        mgr.sync("work")
+        # second sync without force
+        result = mgr.sync("work")
+        self.assertFalse(result.get("changed"))
+
+    def test_sync_force_re_downloads(self):
+        import hashlib, base64
+        tb = self._make_tarball_b64({"claude.md": "hello"})
+        sha256 = hashlib.sha256(base64.b64decode(tb)).hexdigest()
+        store, mgr = self._make_sync_mgr({"sha256": sha256, "tarball_b64": tb})
+        mgr.sync("work")
+        result = mgr.sync("work", force=True)
+        self.assertTrue(result["changed"])
+
+    def test_sync_updates_active_symlink(self):
+        import hashlib, base64
+        tb = self._make_tarball_b64({"soul.md": "values"})
+        sha256 = hashlib.sha256(base64.b64decode(tb)).hexdigest()
+        store, mgr = self._make_sync_mgr({"sha256": sha256, "tarball_b64": tb})
+        mgr.sync("work")
+        active_link = store.active_link()
+        self.assertTrue(active_link.is_symlink())
+        self.assertEqual(store.resolve_active_symlink_name(), "work")
+
+    def test_sync_updates_state_json(self):
+        import hashlib, base64
+        tb = self._make_tarball_b64({"claude.md": "ctx"})
+        sha256 = hashlib.sha256(base64.b64decode(tb)).hexdigest()
+        store, mgr = self._make_sync_mgr({"sha256": sha256, "tarball_b64": tb})
+        mgr.sync("research")
+        self.assertEqual(store.get_last_profile(), "research")
+        meta = store.get_profile_meta("research")
+        self.assertEqual(meta["sha256"], sha256)
+
+
+class ProfileToolHandlingTests(unittest.TestCase):
+    """Test profile tool interception in handle_request."""
+
+    def _make_http(self, response):
+        class _FakeHttp:
+            preferred_base_url = "http://localhost:8008"
+            base_url_candidates = ["http://localhost:8008"]
+
+            def http_json(self, method, path, payload=None):
+                return response
+
+        return _FakeHttp()
+
+    def test_profile_tools_appear_in_tools_list(self):
+        http = self._make_http([])
+        msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        resp = server.handle_request(
+            msg,
+            http=http,
+            daemon=None,
+            preflight_state={"done": True},
+            fail_open_on_list=False,
+        )
+        tool_names = {t["name"] for t in resp["result"]["tools"]}
+        self.assertIn("list_profiles", tool_names)
+        self.assertIn("switch_profile", tool_names)
+        self.assertIn("sync_profile", tool_names)
+
+    def test_profile_tool_not_forwarded_to_backend(self):
+        calls = []
+
+        class _FakeHttp:
+            preferred_base_url = "http://localhost:8008"
+            base_url_candidates = ["http://localhost:8008"]
+
+            def http_json(self, method, path, payload=None):
+                calls.append((method, path))
+                return []
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            with patch.dict(os.environ, {"MC_HOME": td}, clear=False):
+                store = server.ProfileStore()
+
+                class _FakeSyncMgr:
+                    def sync(self, name, force=False):
+                        return {"ok": True, "changed": True, "sha256": "abc"}
+
+                http = _FakeHttp()
+                msg = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "switch_profile", "arguments": {"name": "work"}},
+                }
+                resp = server.handle_request(
+                    msg,
+                    http=http,
+                    daemon=None,
+                    preflight_state={"done": True},
+                    fail_open_on_list=False,
+                    profile_store=store,
+                    profile_sync_manager=_FakeSyncMgr(),
+                )
+                # Should not have called /mcp/call
+                self.assertFalse(any(p == "/mcp/call" for _, p in calls))
+                self.assertFalse(resp["result"].get("isError", False))
+
+
 if __name__ == "__main__":
     unittest.main()
