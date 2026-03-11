@@ -1,0 +1,9 @@
+project           = "project-id"
+region            = "us-central1"
+zone              = "us-central1-a"
+subnetwork_cidr   = "10.10.0.0/24"
+kubernetes_node_count = 2
+kubernetes_node_type  = "e2-standard-2"
+postgres_tier         = "db-custom-1-3840"
+postgres_disk_size    = 50
+backend_bucket        = "missioncontrol-terraform-state"

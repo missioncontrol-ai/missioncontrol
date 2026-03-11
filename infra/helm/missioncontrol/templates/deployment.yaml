@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "missioncontrol.fullname" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "missioncontrol.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "missioncontrol.fullname" . }}
+    spec:
+      containers:
+        - name: missioncontrol
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "missioncontrol.fullname" . }}-config
+            {{- if .Values.secrets }}
+            - secretRef:
+                name: {{ include "missioncontrol.fullname" . }}-secrets
+            {{- end }}
+          ports:
+            - containerPort: 8008
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8008
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8008

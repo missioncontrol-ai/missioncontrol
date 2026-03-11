@@ -1,0 +1,29 @@
+nameOverride: ""
+replicaCount: 2
+
+image:
+  repository: ghcr.io/missioncontrol-ai/missioncontrol
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+config:
+  MC_BASE_URL: https://missioncontrol.internal
+  MC_TOKEN: placeholder-token
+  POSTGRES_HOST: placeholder-postgres
+  POSTGRES_USER: mc_admin
+  POSTGRES_PASSWORD: placeholder
+  MC_OBJECT_STORAGE_ENDPOINT: http://minio.missioncontrol.svc.cluster.local
+  MC_OBJECT_STORAGE_BUCKET: missioncontrol
+  MC_OBJECT_STORAGE_ACCESS_KEY: minio
+  MC_OBJECT_STORAGE_ACCESS_SECRET: minio123
+
+secrets: {}
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
