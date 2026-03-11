@@ -1,5 +1,5 @@
 {
-  "extends": "./node_modules/@sveltejs/kit/tsconfig.json",
+  "extends": "./.svelte-kit/tsconfig.json",
   "compilerOptions": {
     "types": ["svelte"]
   }

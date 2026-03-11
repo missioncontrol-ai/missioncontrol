@@ -93,6 +93,7 @@ run_profile() {
   fi
 
   curl -fsS "http://localhost:8008/api/openapi.json" >/dev/null
+  # Ensure the SvelteKit UI build was produced (`cd web && npm run build`)
   curl -fsS "http://localhost:8008/ui/" >/dev/null
   curl -fsS "http://localhost:8008/agent-onboarding.json" >/dev/null
   check_protected_endpoint "http://localhost:8008/schema-pack"

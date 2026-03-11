@@ -1,6 +1,5 @@
 <script>
   import { authStore, logout } from '$lib/auth';
-  export let data;
 </script>
 
 <div class="shell">

@@ -7,13 +7,12 @@
     startMatrixStream,
     stopMatrixStream
   } from '$lib/telemetry';
-  import {
-    fetchTree,
-    fetchPolicy,
-    fetchGovernanceEvents,
-    ExplorerTree,
-    PolicySummary
-  } from '$lib/api';
+import {
+  fetchTree,
+  fetchPolicy,
+  fetchGovernanceEvents
+} from '$lib/api';
+import type { ExplorerTree, PolicySummary } from '$lib/api';
   import { derived, get } from 'svelte/store';
 
   let initialToken = '';
@@ -64,7 +63,7 @@
   }
 
   async function loadManifest() {
-    manifestUrl = `${onboardingEndpoint.replace(/\\/$/, '')}/agent-onboarding.json`;
+    manifestUrl = `${onboardingEndpoint.replace(/\/$/, '')}/agent-onboarding.json`;
     onboardingManifest = JSON.stringify(
       {
         endpoint: onboardingEndpoint,

@@ -100,6 +100,13 @@ OIDC credentials rotated, and expose `/mcp/health` together with the matrix stre
 running the daemon inside a container (see [`.dev/MC-CONTAINER.md`](.dev/MC-CONTAINER.md)) so secrets, fan-out ports, and local storage are
 explicitly scoped per host.
 
+## Web UI
+
+The SvelteKit front-end lives in `web/` (see [`web/README.md`](../web/README.md) for full details). Build it with `npm run build` so
+the backend can mount the generated `web/build` assets at `/ui/`, or run `npm run dev` to let the Svelte dev server host it on port 5173
+during development. The interface now surfaces the matrix telemetry, explorer tree, onboarding manifest builder, and governance tabs,
+all while reusing the same SSE contracts documented in [`docs/REAL-TIME.md`](REAL-TIME.md) plus the telemetry/doctor story.
+
 ## Next steps
 
 - Document the SSE schema in [`docs/REAL-TIME.md`](REAL-TIME.md) so `mc daemon` can be wired into dashboards, and link the story from

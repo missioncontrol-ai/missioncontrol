@@ -495,4 +495,7 @@ def _web_dir() -> Path | None:
 
 web_dir = _web_dir()
 if web_dir is not None:
-    app.mount("/ui", StaticFiles(directory=str(web_dir), html=True), name="ui")
+    ui_dir = web_dir / "build"
+    if not ui_dir.exists():
+        ui_dir = web_dir
+    app.mount("/ui", StaticFiles(directory=str(ui_dir), html=True), name="ui")

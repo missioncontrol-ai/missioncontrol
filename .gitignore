@@ -170,3 +170,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# SvelteKit build artifacts
+web/build/
+web/.svelte-kit/
+
+# Rust integration target
+integrations/mc/target/

@@ -71,6 +71,11 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 | Install MCP bridge | `integrations/mc/` — `cargo install --path integrations/mc` (Rust native `mc`, see README) |
 | Philosophy & vision | [MISSIONCONTROL_PHILOSOPHY.md](MISSIONCONTROL_PHILOSOPHY.md) |
 | API reference | `/docs` (Swagger UI, when running locally) |
+| Web UI (SvelteKit) | `web/README.md` (dev server, build, SvelteKit dashboard features, OIDC login) |
+
+## Web UI (SvelteKit)
+
+The `web/` directory is now a standalone SvelteKit 2 application that powers the matrix telemetry dashboard, explorer tree, onboarding manifest builder, and governance mini-console (see [`docs/REAL-TIME.md`](docs/REAL-TIME.md) for the SSE contracts it consumes). For local experimentation run `cd web && npm install && npm run dev -- --host 0.0.0.0 --port 5173`. Production (or API-bundled) usage is handled by `npm run build`, which emits static files into `web/build`; the FastAPI backend mounts that directory at `/ui/`, so you can open `http://localhost:8008/ui/` once the API is running. The UI supports both legacy `MC_TOKEN` persistence and OIDC login, and it relies on `$lib/telemetry.ts` to mirror the rate-limit aware matrix feed.
 
 ---
 
@@ -194,7 +199,7 @@ uvicorn app.main:app --reload
 
 3. Open the UI:
 
-Open `http://localhost:8008/ui/` in a browser.
+After building the front-end (`cd web && npm run build`) the backend serves `/ui/` so you can browse `http://localhost:8008/ui/`. For active editing, run `cd web && npm run dev -- --host 0.0.0.0 --port 5173` and point your browser there instead.
 
 ## API Overview
 
