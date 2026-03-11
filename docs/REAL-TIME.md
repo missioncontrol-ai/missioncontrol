@@ -54,4 +54,4 @@ If an operator needs faster-than-LLM loops, supply `--booster-wasm` with a Wasm 
 
 - Document how to launch the daemon alongside Ruflo-style swarms: run `mc daemon --matrix-endpoint /events/stream --fanout-port 11234` on the planner host so scrapers or dashboards can read the local SSE feed.
 - Mention TLS/rate-limit prerequisites (the daemon may need `MC_ALLOW_INSECURE` for dev proxies), document `MC_SCHEMA_PACK_FILE` so boosters share the same schema pack, and remind operators to keep `MC_TOKEN` or OIDC tokens rotate-ready.
-- Tie this doc back to the wider architecture conversation in [.dev/ARCHITECTURE-COMPARISON-RUFLO.md](.dev/ARCHITECTURE-COMPARISON-RUFLO.md) and the `mc` companion guide at [docs/MC-RUST.md](MC-RUST.md).
+- Tie this doc back to the `mc` companion guide at [docs/MC-RUST.md](MC-RUST.md).

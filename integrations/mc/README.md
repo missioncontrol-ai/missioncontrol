@@ -5,7 +5,7 @@ Rust-native Mission Control CLI, daemon, and matrix bridge.
 This binary (previously referred to as mc-mcp-rs) is now the canonical local agent gateway: it talks
 to the FastAPI MCP surface, keeps a lightweight agent context so approvals and sync metadata stay
 aligned, and exposes the SSE matrix feed that powers the real-time inbox/approval dashboards described
-in [.dev/ARCHITECTURE-COMPARISON-RUFLO.md](../.dev/ARCHITECTURE-COMPARISON-RUFLO.md).
+in [`docs/REAL-TIME.md`](../docs/REAL-TIME.md).
 
 ## Building & installing
 
@@ -103,8 +103,7 @@ mc [--base-url URL] [--token TOKEN] [--agent-id ID] [--allow-insecure] \
 The daemon mode connects to `/events/stream` and prints the chunked telemetry that powers the inbox,
 approval, and matrix dashboards. When you pair local Ruflo-style swarms with Mission Control, run the
 `mc daemon` process alongside the swarm’s leader so that the governance plane (approvals, policy
-enforcement, skill sync metadata) stays in lockstep with the agent planners and vector memory described
-in [.dev/ARCHITECTURE-COMPARISON-RUFLO.md](../.dev/ARCHITECTURE-COMPARISON-RUFLO.md).
+enforcement, skill sync metadata) stays in lockstep with the agent planners and vector memory.
 
 Run `mc daemon` with `--fanout-port <port>` to expose a local SSE server on `/events` for dashboards and
 Ruflo queens. The new [docs/REAL-TIME.md](../docs/REAL-TIME.md) describes the `/events/stream` schema,
@@ -125,6 +124,6 @@ skill sync handshake, and the SSE stream ensures users see rapid alignment or ap
 noise.
 
 ## Containerized daemon (optional)
-Spin up `.dev/MC-CONTAINER.md` for a hardened container that runs `mc daemon` with `MC_HOME` mounted,
-fan-out ports exposed, and secrets injected via Compose-managed files. The default experience still runs the
-native binary, but the containerized daemon is recommended for production guardrails.
+Spin up a hardened container that runs `mc daemon` with `MC_HOME` mounted, fan-out ports exposed, and
+secrets injected via Compose-managed files. The default experience still runs the native binary, but the
+containerized daemon is recommended for production guardrails.

@@ -106,10 +106,9 @@ curl http://localhost:8000/readyz
   - `/healthz`: process alive
   - `/readyz`: DB ready, object storage reachable when configured, MQTT connected when required
 
-## Kubernetes Note
+## Kubernetes note
 
-In Kubernetes, do not use `.env` files. Inject env vars from `InfisicalSecret` managed Secrets
-into the deployment (`envFrom.secretRef` / `env.valueFrom.secretKeyRef`).
+When deploying on Kubernetes, provide secrets via the platform’s secret objects and avoid checked-in `.env` files. Mount values through `envFrom`/`env.valueFrom` references so runtime credentials stay outside Git history.
 
 ## Validation Checklist
 - `curl http://localhost:8000/` returns status ok.

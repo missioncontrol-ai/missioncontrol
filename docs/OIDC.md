@@ -2,7 +2,7 @@
 
 This repo supports OIDC JWT validation in the MissionControl API while keeping token auth for MCP compatibility.
 
-Production requirement: all secret values must come from `InfisicalSecret`-managed Kubernetes Secrets (no inline literals, no checked-in `.env`).
+Production requirement: manage secret values through Kubernetes Secrets (no inline literals, no checked-in `.env`).
 
 ## MissionControl API env
 
@@ -30,8 +30,8 @@ If `AUTH_MODE` is unset, runtime defaults to OIDC when OIDC vars are present, an
 
 ## Kubernetes secret guidance
 
-- Source all auth settings from `InfisicalSecret` -> K8s Secrets only.
-- Do not commit client secrets, service tokens, or static MCP token values.
+- Source all auth settings from Kubernetes Secrets.
+- Do not commit client secrets, service tokens, or static `MC_TOKEN` values.
 - Mount/inject only secret refs in manifests (`envFrom.secretRef` / `env.valueFrom.secretKeyRef`).
 - Roll out with:
   1. `AUTH_MODE=oidc`, `OIDC_REQUIRED=false`

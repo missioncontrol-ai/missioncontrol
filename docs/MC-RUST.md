@@ -3,8 +3,8 @@
 The `mc` binary (previously known as the `missioncontrol-mcp` Python bridge) is the canonical Rust-native local agent gateway.
 It carries the agent context, governance headers, and SSE matrix telemetry in a single binary that can ship to laptops, Ruflo-style
 queen hosts, or local planners that need an exceptional offline/online experience. `mc` speaks the same FastAPI surface as the
-Python bridge (tools, explorer, governance, sync) while adding the matrix/doctor/booster hardening documented in
-[`docs/REAL-TIME.md`](REAL-TIME.md) and our architecture comparison in [`.dev/ARCHITECTURE-COMPARISON-RUFLO.md`](.dev/ARCHITECTURE-COMPARISON-RUFLO.md).
+ Python bridge (tools, explorer, governance, sync) while adding the matrix/doctor/booster hardening documented in
+ [`docs/REAL-TIME.md`](REAL-TIME.md).
 
 ## Why Rust-first
 
@@ -94,11 +94,10 @@ headers, TLS failures, and timeouts so dashboards know whether the daemon is hea
 
 ## Operational hardening
 
-Follow the checklist in [`.dev/RELEASE-CHECKLIST.md`](.dev/RELEASE-CHECKLIST.md) whenever you turn up `mc` for production-grade
-workloads. At minimum, terminate TLS through a reverse proxy, enforce rate limits when you forward `/events/stream`, keep `MC_TOKEN`/
-OIDC credentials rotated, and expose `/mcp/health` together with the matrix stream so orchestrators can probe the daemon. We also prefer
-running the daemon inside a container (see [`.dev/MC-CONTAINER.md`](.dev/MC-CONTAINER.md)) so secrets, fan-out ports, and local storage are
-explicitly scoped per host.
+Follow the Rust CLI production checklist whenever you turn up `mc` for production-grade workloads: terminate TLS through a reverse
+proxy, enforce rate limits when you forward `/events/stream`, keep `MC_TOKEN`/OIDC credentials rotated, and expose `/mcp/health`
+together with the matrix stream so orchestrators can probe the daemon. Harden daemon hosts by running inside containers so secrets,
+fan-out ports, and local storage are scoped per host.
 
 ## Web UI
 
@@ -109,8 +108,7 @@ all while reusing the same SSE contracts documented in [`docs/REAL-TIME.md`](REA
 
 ## Next steps
 
-- Document the SSE schema in [`docs/REAL-TIME.md`](REAL-TIME.md) so `mc daemon` can be wired into dashboards, and link the story from
-  [`.dev/ARCHITECTURE-COMPARISON-RUFLO.md`](.dev/ARCHITECTURE-COMPARISON-RUFLO.md).
+- Document the SSE schema in [`docs/REAL-TIME.md`](REAL-TIME.md) so `mc daemon` can be wired into dashboards.
 - Add formal WASM booster plumbing in `integrations/mc` that mirrors the schema pack validations in `backend/app/services/schema_pack.py`
   so quick checks run before every MCP call.
 - Keep expanding the `mc` CLI until every critical Python command has parity and the Rust daemon hosts the matrix + MQTT pipeline for

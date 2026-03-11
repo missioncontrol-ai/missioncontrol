@@ -142,28 +142,27 @@ bash scripts/dev-up-full.sh
 bash scripts/dev-down-full.sh
 ```
 
-## Docker Dev (Cluster-Backed)
+## Docker Compose (recommended)
 
-Use this mode when you want fast local API iteration but keep using the deployed
-MissionControl Postgres/MQTT in Kubernetes.
+Run the full compose stack to get a production-ish deployment on a single host:
 
-1. Start local API container against cluster services:
-
-```bash
-bash scripts/dev-up-cluster.sh
-```
-
-2. Stop:
+1. Start the stack (Postgres + pgvector + MQTT + RustFS):
 
 ```bash
-bash scripts/dev-down-cluster.sh
+bash scripts/dev-up-full.sh
 ```
 
-3. The script prints the host IP it is bound to.
-4. Optional: export `GIT_PUBLISH_*` env vars before running the script if you want
-artifact publish to commit/push into a Git repo during local cluster-backed testing.
-If `GIT_PUBLISH_TOKEN` is not exported, the script will also check Kubernetes secret
-`missioncontrol-git-publish` key `GIT_PUBLISH_TOKEN` in namespace `missioncontrol`.
+2. Verify the API is responsive (the default token is shipped with the compose stack):
+
+```bash
+curl -H "Authorization: Bearer Change-Now-Socrates-Plato-Aristotle-Aurelius" http://localhost:8008/
+```
+
+3. Shutdown:
+
+```bash
+bash scripts/dev-down-full.sh
+```
 
 ## Quickstart (Python)
 
@@ -238,16 +237,12 @@ After building the front-end (`cd web && npm run build`) the backend serves `/ui
 All API responses include an `x-request-id` header for correlation and tracing.
 Set `MC_LOG_EXPORT_PATH=/abs/path/missioncontrol.jsonl` to export structured events as JSON lines.
 
-## Agent Integration (Codex + Claude)
+## Agent Integration
 
-- MCP bridge package: `distribution/missioncontrol-mcp`
-- MCP doctor: `missioncontrol-mcp doctor`
-- MCP lifecycle validation playbook: `scripts/mcp-validation-playbook.sh` (docs: `docs/MCP-VALIDATION-PLAYBOOK.md`)
-- Explorer CLI add-on: `missioncontrol-explorer tree --format ansi`
-- Config generator: `bash scripts/generate-agent-config.sh --base-url http://localhost:8008 --agent all --out ./generated-agent-config`
-- Team install/run guide: `docs/AGENT-INSTALL.md`
-- API supports `AUTH_MODE=token|oidc|dual`.
-- Runtime default preference is OIDC. If `AUTH_MODE` is unset and only `MC_TOKEN` is configured, startup falls back to token mode.
+- **Rust CLI (`mc`) first:** see `integrations/mc/README.md` for installation, daemon, governance, tooling, sync, and matrix telemetry commands; the CLI mirrors the HTTP/MCP surface described elsewhere in this README and is the recommended interface for most OSS users.
+- **`missioncontrol-mcp` bridge compatibility:** the Python bridge remains available under `distribution/missioncontrol-mcp` for environments that need MCP stdio; client shims, skill sync helpers, and the `missioncontrol-explorer` CLI live there.
+- **Agent configs & doctor:** use `scripts/generate-agent-config.sh` to emit MCP onboarding manifests and run `missioncontrol-mcp doctor` or `mc doctor` to validate connectivity before handing configs to Codex/Claude.
+- **Auth modes:** API accepts `token`, `oidc`, or `dual` via `AUTH_MODE`; the default runtime preference is OIDC when those credentials are present, otherwise it falls back to the static `MC_TOKEN`.
 
 ## MCP Examples
 
@@ -322,7 +317,6 @@ alembic upgrade head
 Migration CI workflow: `.github/workflows/ci-migrations.yml`
 
 Release procedure checklist: `docs/RELEASE-UPGRADE-CHECKLIST.md`
-Rust CLI release checklist: `.dev/RELEASE-CHECKLIST.md` (covers `mc` tooling, SSE matrix, TLS/rate limits, and CI hooks).
 
 ## Tests
 
@@ -415,4 +409,3 @@ Approval token header:
 ## Open Core and Public Readiness
 
 - Open core model: `docs/OPEN-CORE-MODEL.md`
-- Public readiness checklist: `docs/PUBLIC-READINESS-CHECKLIST.md`
