@@ -95,6 +95,7 @@ curl http://localhost:8000/readyz
 ## Docker Compose
 
 - `docker-compose.yml` is now the production-oriented stack.
+- Bucket bootstrap is handled by the one-shot `rustfs-init` service using Python/boto3 (no `minio/mc` dependency).
 - Provide secrets through the environment before startup:
   - `POSTGRES_PASSWORD`
   - `MQTT_PASSWORD`

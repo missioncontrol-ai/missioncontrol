@@ -64,17 +64,59 @@ services:
     cpus: 1.5
 
   rustfs-init:
-    image: minio/mc:latest
+    image: missioncontrol-api
     container_name: missioncontrol-rustfs-init
     depends_on:
       rustfs:
         condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-        mc alias set local http://rustfs:9000 ${MC_OBJECT_STORAGE_ACCESS_KEY} ${MC_OBJECT_STORAGE_ACCESS_SECRET} &&
-        mc mb --ignore-existing local/${MC_OBJECT_STORAGE_BUCKET:-missioncontrol} &&
-        echo 'bucket ready'
-      "
+    environment:
+      MC_OBJECT_STORAGE_ENDPOINT: http://rustfs:9000
+      MC_OBJECT_STORAGE_REGION: us-east-1
+      MC_OBJECT_STORAGE_BUCKET: ${MC_OBJECT_STORAGE_BUCKET:-missioncontrol}
+      MC_OBJECT_STORAGE_ACCESS_KEY: ${MC_OBJECT_STORAGE_ACCESS_KEY:?set MC_OBJECT_STORAGE_ACCESS_KEY}
+      MC_OBJECT_STORAGE_ACCESS_SECRET: ${MC_OBJECT_STORAGE_ACCESS_SECRET:?set MC_OBJECT_STORAGE_ACCESS_SECRET}
+    entrypoint:
+      - python
+      - -c
+      - |
+          import os
+          import sys
+          import time
+          import boto3
+          from botocore.exceptions import ClientError
+
+          endpoint = os.environ["MC_OBJECT_STORAGE_ENDPOINT"]
+          region = os.environ.get("MC_OBJECT_STORAGE_REGION", "us-east-1")
+          bucket = os.environ["MC_OBJECT_STORAGE_BUCKET"]
+          access = os.environ["MC_OBJECT_STORAGE_ACCESS_KEY"]
+          secret = os.environ["MC_OBJECT_STORAGE_ACCESS_SECRET"]
+
+          client = boto3.client(
+              "s3",
+              endpoint_url=endpoint,
+              region_name=region,
+              aws_access_key_id=access,
+              aws_secret_access_key=secret,
+              use_ssl=False,
+          )
+
+          for attempt in range(1, 31):
+              try:
+                  client.create_bucket(Bucket=bucket)
+                  print(f"bucket created: {bucket}")
+                  sys.exit(0)
+              except ClientError as exc:
+                  code = (exc.response.get("Error") or {}).get("Code", "")
+                  if code in {"BucketAlreadyOwnedByYou", "BucketAlreadyExists"}:
+                      print(f"bucket exists: {bucket}")
+                      sys.exit(0)
+                  if attempt == 30:
+                      raise
+                  time.sleep(1.0)
+              except Exception:
+                  if attempt == 30:
+                      raise
+                  time.sleep(1.0)
     restart: "no"
 
   api:
