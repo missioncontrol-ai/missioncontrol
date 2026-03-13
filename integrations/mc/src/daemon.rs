@@ -1,17 +1,24 @@
 use crate::agent_context::AgentContext;
 use crate::client::MissionControlClient;
 use anyhow::Context;
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 use chrono::{DateTime, Utc};
 use clap::Args;
 use futures_util::StreamExt;
 use reqwest::Method;
 use rumqttc::{AsyncClient, Event as MqttEvent, Packet, QoS, TlsConfiguration, Transport};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{net::SocketAddr, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 use tracing::{info, warn};
 use url::Url;
 
@@ -33,6 +40,18 @@ pub struct DaemonArgs {
     /// Optional port to host a local SSE fan-out server for dashboards or Ruflo queens.
     #[arg(long)]
     pub fanout_port: Option<u16>,
+
+    /// Local host for the shim-compatible control API.
+    #[arg(long, env = "MC_DAEMON_HOST", default_value = "127.0.0.1")]
+    pub shim_host: String,
+
+    /// Local port for the shim-compatible control API.
+    #[arg(long, env = "MC_DAEMON_PORT", default_value_t = 8765)]
+    pub shim_port: u16,
+
+    /// Cache TTL (seconds) for `/v1/tools` responses.
+    #[arg(long, env = "MC_TOOLS_CACHE_TTL_SEC", default_value_t = 60)]
+    pub tools_cache_ttl_sec: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -48,6 +67,70 @@ struct RawSseChunk {
     id: Option<String>,
     event: Option<String>,
     data: String,
+}
+
+#[derive(Clone)]
+struct ShimApiState {
+    client: MissionControlClient,
+    cache: Arc<RwLock<Option<ToolsCache>>>,
+    ttl: Duration,
+}
+
+#[derive(Clone)]
+struct ToolsCache {
+    tools: Value,
+    cached_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ShimToolCallRequest {
+    name: String,
+    #[serde(default)]
+    arguments: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct ShimErrorPayload {
+    ok: bool,
+    error: String,
+}
+
+impl ShimApiState {
+    fn new(client: MissionControlClient, ttl: Duration) -> Self {
+        Self {
+            client,
+            cache: Arc::new(RwLock::new(None)),
+            ttl,
+        }
+    }
+
+    async fn refresh_tools(&self) -> anyhow::Result<Value> {
+        let tools = self.client.get_json("/mcp/tools").await?;
+        let mut cache = self.cache.write().await;
+        *cache = Some(ToolsCache {
+            tools: tools.clone(),
+            cached_at: Utc::now(),
+        });
+        Ok(tools)
+    }
+
+    async fn tools_with_cache(&self) -> anyhow::Result<(Value, f64)> {
+        let now = Utc::now();
+        {
+            let cache = self.cache.read().await;
+            if let Some(cached) = cache.as_ref() {
+                let age = now
+                    .signed_duration_since(cached.cached_at)
+                    .to_std()
+                    .unwrap_or_else(|_| Duration::from_secs(0));
+                if age <= self.ttl {
+                    return Ok((cached.tools.clone(), age.as_secs_f64()));
+                }
+            }
+        }
+        let tools = self.refresh_tools().await?;
+        Ok((tools, 0.0))
+    }
 }
 
 impl MatrixEvent {
@@ -69,7 +152,13 @@ pub async fn run(
     client: &MissionControlClient,
     ctx: AgentContext,
 ) -> anyhow::Result<()> {
-    info!(matrix = %args.matrix_endpoint, agent_id = ?ctx.agent_id, "starting mc daemon");
+    info!(
+        matrix = %args.matrix_endpoint,
+        agent_id = ?ctx.agent_id,
+        shim_host = %args.shim_host,
+        shim_port = args.shim_port,
+        "starting mc daemon"
+    );
     if let Some(ref mqtt_url) = args.mqtt_url {
         info!(mqtt_broker = %mqtt_url, "MQTT sync support is experimental and disabled until configured");
     }
@@ -90,7 +179,26 @@ pub async fn run(
         });
     }
 
-    stream_matrix_events(client.clone(), &args.matrix_endpoint, tx).await
+    let shim_ip = args
+        .shim_host
+        .parse::<std::net::IpAddr>()
+        .context("invalid --shim-host value; expected a literal IPv4/IPv6 address")?;
+    let shim_addr = SocketAddr::from((shim_ip, args.shim_port));
+    let shim_state = ShimApiState::new(
+        client.clone(),
+        Duration::from_secs(args.tools_cache_ttl_sec.max(1)),
+    );
+    let shim_task = tokio::spawn(start_shim_api(shim_addr, shim_state));
+
+    tokio::select! {
+        stream_res = stream_matrix_events(client.clone(), &args.matrix_endpoint, tx) => stream_res,
+        shim_res = shim_task => {
+            match shim_res {
+                Ok(server_res) => server_res,
+                Err(join_err) => Err(anyhow::anyhow!("shim api task failed: {join_err}")),
+            }
+        }
+    }
 }
 
 async fn stream_matrix_events(
@@ -257,6 +365,104 @@ async fn serve_sse(
         }
     }
     Ok(())
+}
+
+async fn start_shim_api(addr: SocketAddr, state: ShimApiState) -> anyhow::Result<()> {
+    let app = Router::new()
+        .route("/v1/initialize", post(shim_initialize))
+        .route("/v1/tools", get(shim_tools))
+        .route("/v1/call", post(shim_call))
+        .route("/v1/health", get(shim_health))
+        .route("/healthz", get(shim_health))
+        .route("/readyz", get(shim_health))
+        .route("/livez", get(shim_health))
+        .with_state(state);
+
+    let listener = TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("failed to bind shim API listener at {addr}"))?;
+    info!(address = %addr, "shim API server started");
+    axum::serve(listener, app)
+        .await
+        .context("shim API server exited unexpectedly")
+}
+
+async fn shim_initialize(State(state): State<ShimApiState>) -> impl IntoResponse {
+    let prefetch = state.clone();
+    tokio::spawn(async move {
+        if let Err(err) = prefetch.refresh_tools().await {
+            warn!(error = %err, "shim initialize prefetch failed");
+        }
+    });
+
+    Json(serde_json::json!({
+        "ok": true,
+        "preflight_started": true,
+        "cache_age_sec": serde_json::Value::Null
+    }))
+}
+
+async fn shim_tools(State(state): State<ShimApiState>) -> impl IntoResponse {
+    match state.tools_with_cache().await {
+        Ok((tools, age_sec)) => Json(serde_json::json!({
+            "ok": true,
+            "tools": tools,
+            "cache": { "state": "fresh", "age_sec": age_sec }
+        }))
+        .into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(ShimErrorPayload {
+                ok: false,
+                error: err.to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn shim_call(
+    State(state): State<ShimApiState>,
+    Json(body): Json<ShimToolCallRequest>,
+) -> impl IntoResponse {
+    let args = if body.arguments.is_object() {
+        body.arguments
+    } else {
+        Value::Object(Default::default())
+    };
+    let payload = serde_json::json!({
+        "tool": body.name,
+        "args": args
+    });
+    match state.client.post_json("/mcp/call", &payload).await {
+        Ok(result) => Json(result).into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(ShimErrorPayload {
+                ok: false,
+                error: err.to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn shim_health(State(state): State<ShimApiState>) -> impl IntoResponse {
+    let cache_age = {
+        let cache = state.cache.read().await;
+        cache.as_ref().map(|entry| {
+            Utc::now()
+                .signed_duration_since(entry.cached_at)
+                .to_std()
+                .unwrap_or_else(|_| Duration::from_secs(0))
+                .as_secs_f64()
+        })
+    };
+    Json(serde_json::json!({
+        "ok": true,
+        "mode": "mc-daemon",
+        "cache_tools_age_sec": cache_age
+    }))
 }
 
 async fn start_mqtt_sync(

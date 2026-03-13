@@ -79,7 +79,15 @@ Always-on daemon mode:
 MC_MCP_MODE=daemon missioncontrol-mcp daemon
 ```
 
-Shim mode for MCP clients (connects to local daemon):
+Shim mode for MCP clients (connects to local daemon on `MC_DAEMON_HOST:MC_DAEMON_PORT`, default `127.0.0.1:8765`):
+
+Preferred local daemon backend (Rust `mc` integration):
+
+```bash
+mc daemon --shim-host 127.0.0.1 --shim-port 8765
+```
+
+Then run shim mode:
 
 ```bash
 MC_MCP_MODE=shim missioncontrol-mcp

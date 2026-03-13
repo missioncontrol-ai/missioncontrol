@@ -372,6 +372,58 @@ def _preflight(http: MissionControlHttpClient, mode: str) -> None:
         return
 
 
+def _start_preflight_async(
+    *,
+    http: MissionControlHttpClient,
+    preflight_mode: str,
+    preflight_state: dict[str, bool],
+) -> None:
+    if preflight_state.get("done"):
+        return
+    preflight_state["done"] = True
+
+    def _runner() -> None:
+        try:
+            _preflight(http, preflight_mode)
+        except Exception as exc:
+            log(f"preflight_failed mode={preflight_mode} base_url={http.preferred_base_url} error={exc}")
+
+    t = threading.Thread(target=_runner, daemon=True, name="missioncontrol-mcp-preflight")
+    t.start()
+
+
+def _start_profile_sync_on_init(
+    *,
+    profile_name: str,
+    profile_sync_manager: "ProfileSyncManager",
+    timeout_sec: int,
+) -> None:
+    def _runner() -> None:
+        result_holder: list[Any] = []
+        exc_holder: list[Exception] = []
+
+        def _do_sync() -> None:
+            try:
+                result_holder.append(profile_sync_manager.sync(profile_name))
+            except Exception as exc:
+                exc_holder.append(exc)
+
+        worker = threading.Thread(target=_do_sync, daemon=True, name="missioncontrol-profile-sync")
+        worker.start()
+        worker.join(timeout=float(timeout_sec))
+        if worker.is_alive():
+            log(f"Profile sync still running after {timeout_sec}s for '{profile_name}'")
+            return
+        if exc_holder:
+            log(f"Profile sync skipped: {exc_holder[0]}")
+            return
+        if result_holder and result_holder[0].get("changed"):
+            log(f"Profile '{profile_name}' synced")
+
+    t = threading.Thread(target=_runner, daemon=True, name="missioncontrol-profile-sync-init")
+    t.start()
+
+
 def handle_tools_list(msg_id: Any, http: MissionControlHttpClient, fail_open_on_list: bool) -> dict[str, Any]:
     try:
         tools = http.http_json("GET", "/mcp/tools")
@@ -824,14 +876,11 @@ def handle_request(
             except Exception as exc:
                 log(f"daemon initialize warning: {exc}")
         else:
-            preflight_mode = _preflight_mode()
-            if not preflight_state["done"]:
-                try:
-                    _preflight(http, preflight_mode)
-                except Exception as exc:
-                    log(f"preflight_failed mode={preflight_mode} base_url={http.preferred_base_url} error={exc}")
-                finally:
-                    preflight_state["done"] = True
+            _start_preflight_async(
+                http=http,
+                preflight_mode=_preflight_mode(),
+                preflight_state=preflight_state,
+            )
 
         # Auto-sync active profile on initialize (fail-graceful)
         if profile_store is not None and profile_sync_manager is not None:
@@ -839,23 +888,11 @@ def handle_request(
                 profile_name = _resolve_profile_name(profile_store)
                 if profile_name:
                     timeout_sec = max(1, parse_int_env("MC_PROFILE_SYNC_TIMEOUT_SEC", 10))
-                    result_holder: list[Any] = []
-                    exc_holder: list[Exception] = []
-
-                    def _do_sync():
-                        try:
-                            r = profile_sync_manager.sync(profile_name)
-                            result_holder.append(r)
-                        except Exception as e:
-                            exc_holder.append(e)
-
-                    t = threading.Thread(target=_do_sync, daemon=True)
-                    t.start()
-                    t.join(timeout=float(timeout_sec))
-                    if exc_holder:
-                        log(f"Profile sync skipped: {exc_holder[0]}")
-                    elif result_holder and result_holder[0].get("changed"):
-                        log(f"Profile '{profile_name}' synced")
+                    _start_profile_sync_on_init(
+                        profile_name=profile_name,
+                        profile_sync_manager=profile_sync_manager,
+                        timeout_sec=timeout_sec,
+                    )
 
         return rpc_result(
             msg_id,
