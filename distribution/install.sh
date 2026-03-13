@@ -10,6 +10,7 @@ ENDPOINT=""
 TOKEN=""
 AGENT="both"
 INSTALL_DIR="${HOME}/.missioncontrol"
+NO_EMBED_TOKEN=0
 
 usage() {
   cat <<USAGE
@@ -18,8 +19,9 @@ Usage: bash install.sh [options]
 Options:
   --endpoint URL         MissionControl base URL (optional)
   --token TOKEN          MissionControl token (optional)
-  --agent VALUE          codex|claude|both (default: both)
+  --agent VALUE          codex|claude|gemini|both (default: both)
   --install-dir DIR      Output directory (default: ~/.missioncontrol)
+  --no-embed-token       Omit MC_TOKEN from written configs (for OIDC / short-lived tokens)
   -h, --help             Show help
 USAGE
 }
@@ -42,6 +44,10 @@ while [[ $# -gt 0 ]]; do
       INSTALL_DIR="${2:-$HOME/.missioncontrol}"
       shift 2
       ;;
+    --no-embed-token)
+      NO_EMBED_TOKEN=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -55,9 +61,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$AGENT" in
-  codex|claude|both) ;;
+  codex|claude|gemini|both) ;;
   *)
-    echo "--agent must be codex|claude|both" >&2
+    echo "--agent must be codex|claude|gemini|both" >&2
     exit 2
     ;;
 esac
@@ -138,19 +144,39 @@ render_templates() {
   endpoint_toml="$(toml_escape "$effective_endpoint")"
   token_toml="$(toml_escape "$TOKEN")"
 
+  # Resolve token embedding: skip when --no-embed-token or when TOKEN is empty.
+  local embed_token=1
+  if [[ "$NO_EMBED_TOKEN" -eq 1 || -z "$TOKEN" ]]; then
+    embed_token=0
+    if [[ -z "$TOKEN" && "$NO_EMBED_TOKEN" -eq 0 ]]; then
+      echo "note: MC_TOKEN is empty — omitting token from written configs (set MC_TOKEN at agent launch time)"
+    fi
+  fi
+
   if [[ "$AGENT" == "codex" || "$AGENT" == "both" ]]; then
-    cat > "$config_dir/codex.mcp.toml" <<TOML
+    if [[ "$embed_token" -eq 1 ]]; then
+      cat > "$config_dir/codex.mcp.toml" <<TOML
 [mcp_servers.missioncontrol]
 command = "missioncontrol-mcp"
 startup_timeout_sec = 45
 tool_timeout_sec = 60
 env = { MC_BASE_URL = $endpoint_toml, MC_TOKEN = $token_toml }
 TOML
+    else
+      cat > "$config_dir/codex.mcp.toml" <<TOML
+[mcp_servers.missioncontrol]
+command = "missioncontrol-mcp"
+startup_timeout_sec = 45
+tool_timeout_sec = 60
+env = { MC_BASE_URL = $endpoint_toml }
+TOML
+    fi
     echo "wrote $config_dir/codex.mcp.toml"
   fi
 
   if [[ "$AGENT" == "claude" || "$AGENT" == "both" ]]; then
-    cat > "$config_dir/claude.mcp.json" <<JSON
+    if [[ "$embed_token" -eq 1 ]]; then
+      cat > "$config_dir/claude.mcp.json" <<JSON
 {
   "mcpServers": {
     "missioncontrol": {
@@ -163,7 +189,63 @@ TOML
   }
 }
 JSON
+    else
+      cat > "$config_dir/claude.mcp.json" <<JSON
+{
+  "mcpServers": {
+    "missioncontrol": {
+      "command": "missioncontrol-mcp",
+      "env": {
+        "MC_BASE_URL": $endpoint_json
+      }
+    }
+  }
+}
+JSON
+    fi
     echo "wrote $config_dir/claude.mcp.json"
+  fi
+
+  if [[ "$AGENT" == "gemini" || "$AGENT" == "both" ]]; then
+    if [[ "$embed_token" -eq 1 ]]; then
+      cat > "$config_dir/gemini.mcp.json" <<JSON
+{
+  "mcpServers": {
+    "missioncontrol": {
+      "command": "missioncontrol-mcp",
+      "env": {
+        "MC_BASE_URL": $endpoint_json,
+        "MC_TOKEN": $token_json,
+        "MC_MCP_MODE": "shim",
+        "MC_DAEMON_HOST": "127.0.0.1",
+        "MC_DAEMON_PORT": "8765",
+        "MC_FAIL_OPEN_ON_LIST": "1",
+        "MC_STARTUP_PREFLIGHT": "none"
+      }
+    }
+  }
+}
+JSON
+    else
+      cat > "$config_dir/gemini.mcp.json" <<JSON
+{
+  "mcpServers": {
+    "missioncontrol": {
+      "command": "missioncontrol-mcp",
+      "env": {
+        "MC_BASE_URL": $endpoint_json,
+        "MC_MCP_MODE": "shim",
+        "MC_DAEMON_HOST": "127.0.0.1",
+        "MC_DAEMON_PORT": "8765",
+        "MC_FAIL_OPEN_ON_LIST": "1",
+        "MC_STARTUP_PREFLIGHT": "none"
+      }
+    }
+  }
+}
+JSON
+    fi
+    echo "wrote $config_dir/gemini.mcp.json"
   fi
 }
 
@@ -211,8 +293,9 @@ Next steps:
    $doctor_hint
 
 3) Add MCP config in your agent:
-   - Codex:  $config_dir/codex.mcp.toml
-   - Claude: $config_dir/claude.mcp.json
+   - Codex:   $config_dir/codex.mcp.toml
+   - Claude:  $config_dir/claude.mcp.json
+   - Gemini:  $config_dir/gemini.mcp.json  → ~/.gemini/settings.json
 
 Auth/connect guidance:
 - Default endpoint is localhost ($DEFAULT_LOCAL_ENDPOINT).

@@ -48,9 +48,20 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let opts = CliOpts::parse();
+
+    // Resolve the effective token: CLI/env takes precedence; fall back to a
+    // saved session token in ~/.missioncontrol/session.json.
+    let token = opts.token.clone().or_else(|| {
+        let sess = mc::config::load_session_token(&opts.base_url);
+        if sess.is_some() {
+            tracing::debug!("using session token from ~/.missioncontrol/session.json");
+        }
+        sess
+    });
+
     let config = McConfig::from_parts(
         &opts.base_url,
-        opts.token.clone(),
+        token,
         opts.agent_id.clone(),
         opts.timeout_secs,
         opts.allow_insecure,

@@ -64,6 +64,14 @@ fn resolve_agent_id(arg: Option<String>) -> Option<String> {
         .or_else(read_agent_id_from_disk)
 }
 
+/// Load a session token from `~/.missioncontrol/session.json` if one exists,
+/// has not expired, and was created for `base_url`.
+///
+/// Called by `main.rs` when `MC_TOKEN` / `--token` is absent.
+pub fn load_session_token(base_url: &str) -> Option<String> {
+    crate::auth::load_saved_session(base_url).map(|s| s.token)
+}
+
 pub fn mc_home_dir() -> PathBuf {
     expand_home_path(&env::var("MC_HOME").unwrap_or_else(|_| "~/.missioncontrol".into()))
 }

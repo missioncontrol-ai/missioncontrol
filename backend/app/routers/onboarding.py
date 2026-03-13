@@ -113,6 +113,12 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
                     "env": mcp_env,
                 }
             },
+            "gemini": {
+                "missioncontrol": {
+                    "command": "missioncontrol-mcp",
+                    "env": mcp_env,
+                }
+            },
         },
         "bootstrap": {
             "remote_script": "bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/mc-integration/main/install.sh) --endpoint "

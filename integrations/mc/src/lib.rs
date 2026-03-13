@@ -1,10 +1,12 @@
 pub mod agent_context;
+pub mod auth;
 pub mod booster;
 pub mod client;
 pub mod commands;
 pub mod config;
 pub mod daemon;
 pub mod governance;
+pub mod launch;
 pub mod maintenance;
 pub mod mcp_tools;
 pub mod ops;

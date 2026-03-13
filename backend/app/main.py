@@ -15,6 +15,7 @@ from sqlalchemy import text
 from app.auth import OidcValidationError, OidcValidator, load_auth_settings
 from app.db import init_db
 from app.db import get_session
+from app.routers import auth_sessions
 from app.services.authz import assert_platform_admin
 from app.services.log_export import emit_structured_log, recent_logs
 from app.services.telemetry import telemetry
@@ -240,6 +241,10 @@ async def require_auth(request, call_next):
             start=start,
         )
 
+    # Session tokens (mcs_*) are validated against the DB regardless of AUTH_MODE.
+    if token.startswith("mcs_"):
+        return await _require_session_token(request, token, call_next, start)
+
     if AUTH_SETTINGS.mode == "token":
         if not AUTH_SETTINGS.missioncontrol_token or not hmac.compare_digest(token, AUTH_SETTINGS.missioncontrol_token):
             return _unauthorized(request, "invalid_token", "Unauthorized: invalid bearer token", start=start)
@@ -314,6 +319,53 @@ async def _require_oidc_token(request, token: str, call_next, start: float):
         "subject": principal.subject,
         "email": principal.email,
         "auth_type": "oidc",
+    }
+    response = await _call_next_with_guards(request, call_next)
+    return _finalize_response(request, response, start)
+
+
+async def _require_session_token(request, token: str, call_next, start: float):
+    import hashlib
+    from datetime import datetime as _dt
+    from sqlmodel import select as _select
+    from app.models import UserSession
+
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    now = _dt.utcnow()
+    session_row = None
+    with get_session() as db:
+        row = db.exec(
+            _select(UserSession)
+            .where(UserSession.token_hash == token_hash)
+            .where(UserSession.revoked == False)  # noqa: E712
+            .where(UserSession.expires_at > now)
+        ).first()
+        if row is None:
+            return _unauthorized(
+                request,
+                "invalid_session",
+                "Unauthorized: invalid or expired session token",
+                start=start,
+            )
+        session_row = {
+            "subject": row.subject,
+            "session_id": row.id,
+            "expires_at": row.expires_at,
+            "stale_last_used": (now - row.last_used_at).total_seconds() > 300,
+            "row_id": row.id,
+        }
+        # Update last_used_at if stale (> 5 min) to avoid a write on every request
+        if session_row["stale_last_used"]:
+            row.last_used_at = now
+            db.add(row)
+            db.commit()
+
+    request.state.principal = {
+        "subject": session_row["subject"],
+        "email": None,
+        "auth_type": "session",
+        "session_id": session_row["session_id"],
+        "session_expires_at": session_row["expires_at"],
     }
     response = await _call_next_with_guards(request, call_next)
     return _finalize_response(request, response, start)
@@ -480,6 +532,7 @@ app.include_router(skills.router)
 app.include_router(google_chat_integrations.router)
 app.include_router(teams_integrations.router)
 app.include_router(profiles.router)
+app.include_router(auth_sessions.router)
 
 
 def _web_dir() -> Path | None:

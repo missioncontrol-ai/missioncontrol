@@ -1,102 +1,183 @@
-# MissionControl Agent Install (Codex + Claude)
+# MissionControl Agent Setup
 
-Goal: make local coding agents talk to MissionControl via MCP.
+## The Quick Way (recommended)
 
-## 0) One-Command Bootstrap (recommended)
-
-```bash
-MC_TOKEN="Change-Now-Socrates-Plato-Aristotle-Aurelius" \
-bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/bootstrap-missioncontrol-agent.sh)
-```
-
-Or from local clone:
+**Step 1 — Install mc:**
 
 ```bash
-MC_TOKEN="Change-Now-Socrates-Plato-Aristotle-Aurelius" \
-bash scripts/bootstrap-missioncontrol-agent.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/install-mc.sh)
 ```
 
-## 0.5) Generate Agent Config Snippets (optional)
+**Step 2 — Authenticate:**
 
-Generate machine-readable MCP config snippets from MissionControl's onboarding manifest:
+With a static token (simplest):
+```bash
+export MC_TOKEN="<your-token>"
+export MC_BASE_URL="https://your-mc.example.com"
+```
+
+Or create a session token (recommended — see [Session tokens](#session-tokens)):
+```bash
+export MC_BASE_URL="https://your-mc.example.com"
+MC_TOKEN="<your-token>" mc login   # saves ~/.missioncontrol/session.json
+# MC_TOKEN no longer needed in env after this
+```
+
+**Step 3 — Launch your agent:**
 
 ```bash
-bash scripts/generate-agent-config.sh --base-url http://localhost:8008 --agent all --out ./generated-agent-config
+mc launch claude        # Claude Code
+mc launch codex         # OpenAI Codex CLI
+mc launch gemini        # Google Gemini CLI
+mc launch openclaw      # OpenClaw
+mc launch nanoclaw      # NanoClaw
 ```
 
-This writes:
-- `generated-agent-config/missioncontrol.mcp.json`
-- `generated-agent-config/missioncontrol.legacy.mcp.json`
-- `generated-agent-config/codex.mcp.json`
-- `generated-agent-config/claude-code.mcp.json`
-- `generated-agent-config/openclaw.mcp.json`
-- `generated-agent-config/nanoclaw.mcp.json`
-- `generated-agent-config/codex.mcp.toml`
-- `generated-agent-config/codex.legacy.mcp.toml`
-- `generated-agent-config/claude.mcp.json`
-- `generated-agent-config/openclaw.acp.json`
-- `generated-agent-config/nanoclaw.acp.json`
+That's it. `mc launch` handles: daemon startup, auth preflight, config generation, and exec.
 
-## 1) Install Bridge
+---
+
+## What `mc launch` does
+
+1. Checks agent binary is on PATH (with install hint if not)
+2. Ensures mc daemon is running on 127.0.0.1:8765 (starts it if not)
+3. Validates auth against the MC API
+4. Fetches agent config from the onboarding manifest
+5. Writes config to the agent's canonical location (token not embedded if using session)
+6. Injects `MC_TOKEN` into the agent's process environment
+7. exec's the agent
+
+## Flags
+
+| Flag | Effect |
+|---|---|
+| `--preflight-only` | Validate env + auth without launching (CI-safe) |
+| `--no-daemon` | Skip daemon management (daemon externally managed) |
+| `--skip-config-gen` | Use existing config, skip manifest fetch |
+| `--no-embed-token` | Omit `MC_TOKEN` from written config file (auto-implied for session tokens) |
+| `--daemon-timeout N` | Seconds to wait for daemon ready (default: 15) |
+| `-- <args>` | Pass remaining args verbatim to the agent |
+
+## Agent Config Locations
+
+| Agent | Config written by `mc launch` |
+|---|---|
+| Claude Code | `~/.claude.json` (`.mcpServers.missioncontrol`) |
+| Codex | `~/.codex/config.toml` (appended, idempotent) |
+| Gemini CLI | `~/.gemini/settings.json` (`.mcpServers.missioncontrol`) |
+| OpenClaw | `~/.missioncontrol/config/openclaw.acp.json` |
+| NanoClaw | `~/.missioncontrol/config/nanoclaw.acp.json` |
+
+---
+
+## Session tokens
+
+`mc login` exchanges your current credentials for a server-issued session token
+(`mcs_*` prefix) stored at `~/.missioncontrol/session.json` (chmod 600).
+
+Session tokens are:
+- **Revocable** — `mc logout` revokes server-side instantly
+- **Never written to agent config files** — injected into the agent process at exec time only
+- **Auto-loaded** — `mc` reads `session.json` automatically when `MC_TOKEN` is not set
+- **Expiring** — default 8h TTL, configurable with `--ttl-hours` (max 720h / 30 days)
+
+### Login / logout / whoami
+
+```bash
+# Create a session (exchange any valid credential for an mcs_ token)
+mc login                      # default 8h TTL
+mc login --ttl-hours 24       # longer TTL
+mc login --print-token        # print token to stdout (for scripting)
+
+# Check identity and session expiry
+mc whoami
+
+# Revoke session server-side and clear local file
+mc logout
+mc logout --local-only        # clear local file only (no server call)
+```
+
+### Session token workflow
+
+```bash
+export MC_BASE_URL="https://your-mc.example.com"
+
+# One-time: bootstrap a session from a static token
+MC_TOKEN="<static-token>" mc login
+
+# From now on — no MC_TOKEN needed in env
+mc launch claude   # session loaded from ~/.missioncontrol/session.json
+mc launch codex    # token injected into agent process at exec, not written to config
+mc whoami          # verify identity
+mc logout          # revoke when done
+```
+
+### OIDC / short-lived JWTs
+
+When you authenticate via OIDC (Authentik, SSO), your `MC_TOKEN` is a short-lived JWT.
+The recommended pattern is to exchange it for a session token immediately:
+
+```bash
+# Exchange OIDC JWT for a longer-lived mc session token
+MC_TOKEN="$(get-oidc-token)" mc login --ttl-hours 8
+mc launch claude
+```
+
+Or use `--no-embed-token` to keep the OIDC JWT in env only (never written to disk):
+
+```bash
+export MC_TOKEN="$(get-oidc-token)"
+mc launch claude --no-embed-token
+```
+
+**Token embedding rules in `mc launch`:**
+- Session tokens (`mcs_*`) → never embedded, always injected at exec time
+- `--no-embed-token` flag → never embedded
+- `MC_TOKEN` absent → never embedded (auto-implied, notice printed)
+- Static token present → embedded by default (can override with `--no-embed-token`)
+
+---
+
+## Manual Setup (alternative)
+
+Use this path when you need explicit control over config or are integrating into CI.
+
+### 1) Install Bridge
 
 ```bash
 pipx install "git+ssh://git@github.com/missioncontrol-ai/missioncontrol.git#subdirectory=distribution/missioncontrol-mcp"
 ```
 
-## 2) Set MissionControl Endpoint
-
-Use the Tailscale MagicDNS route (recommended):
+### 2) Set MissionControl Endpoint
 
 ```bash
 export MC_BASE_URL="https://mc.example.com"
-export MC_BASE_URLS="https://mc.example.com,http://localhost:8008"
-export MC_TOKEN="Change-Now-Socrates-Plato-Aristotle-Aurelius"
+export MC_TOKEN="<your-token>"
 ```
 
-Fallback (if you intentionally want public ingress):
-
-```bash
-export MC_BASE_URL="https://mc.example.com"
-```
-
-## 3) Install mc (one-time per update)
+### 3) Install mc (one-time per update)
 
 ```bash
 bash scripts/install-mc.sh
 ```
 
-By default this installs to `~/.local/bin/mc`. Ensure `~/.local/bin` is on `PATH`.
+By default installs to `~/.local/bin/mc`. Ensure `~/.local/bin` is on `PATH`.
 
-## 4) Start Rust Daemon (every session)
-
-Run the Rust daemon (canonical control plane):
+### 4) Start Rust Daemon (every session)
 
 ```bash
-MC_BASE_URL="https://mc.example.com" MC_TOKEN="Change-Now-Socrates-Plato-Aristotle-Aurelius" \
-bash scripts/start-mc-daemon.sh
-```
-
-Equivalent direct command:
-
-```bash
-MC_BASE_URL="https://mc.example.com" MC_TOKEN="Change-Now-Socrates-Plato-Aristotle-Aurelius" \
 mc daemon --shim-host 127.0.0.1 --shim-port 8765
 ```
 
-By default, `start-mc-daemon.sh` starts shim API only and disables matrix streaming (`MC_ENABLE_MATRIX=0`).
-Enable matrix streaming explicitly when your backend exposes `/events/stream`:
+Or via the convenience script:
 
 ```bash
-MC_ENABLE_MATRIX=1 MC_MATRIX_ENDPOINT=/events/stream \
-MC_BASE_URL="https://mc.example.com" MC_TOKEN="Change-Now-Socrates-Plato-Aristotle-Aurelius" \
 bash scripts/start-mc-daemon.sh
 ```
 
-## 5) Add MCP Server to Your Client
+### 5) Add MCP Server to Your Agent
 
-Default is shim mode (Python bridge only as stdio transport, Rust daemon handles control flow).
-
-Use this MCP server definition:
+Default shim-mode config (works for Claude Code, Gemini CLI, and others supporting `mcpServers`):
 
 ```json
 {
@@ -108,30 +189,45 @@ Use this MCP server definition:
       "MC_DAEMON_PORT": "8765",
       "MC_FAIL_OPEN_ON_LIST": "1",
       "MC_BASE_URL": "https://mc.example.com",
-      "MC_BASE_URLS": "https://mc.example.com,http://localhost:8008",
       "MC_STARTUP_PREFLIGHT": "none",
-      "MC_HTTP_TIMEOUT_SEC": "20",
-      "MC_HTTP_RETRIES": "2",
-      "MC_HTTP_RETRY_BACKOFF_MS": "250",
-      "MC_TOKEN": "Change-Now-Socrates-Plato-Aristotle-Aurelius"
+      "MC_TOKEN": "<your-token>"
     }
   }
 }
 ```
 
-Codex timeout defaults in `~/.codex/config.toml`:
+Codex TOML format (`~/.codex/config.toml`):
 
 ```toml
 [mcp_servers.missioncontrol]
 command = "missioncontrol-mcp"
 startup_timeout_sec = 45
 tool_timeout_sec = 60
-env = { MC_MCP_MODE = "shim", MC_DAEMON_HOST = "127.0.0.1", MC_DAEMON_PORT = "8765", MC_FAIL_OPEN_ON_LIST = "1", MC_STARTUP_PREFLIGHT = "none", MC_BASE_URL = "https://mc.example.com", MC_TOKEN = "Change-Now-Socrates-Plato-Aristotle-Aurelius" }
+env = { MC_MCP_MODE = "shim", MC_DAEMON_HOST = "127.0.0.1", MC_DAEMON_PORT = "8765", MC_FAIL_OPEN_ON_LIST = "1", MC_STARTUP_PREFLIGHT = "none", MC_BASE_URL = "https://mc.example.com", MC_TOKEN = "<your-token>" }
 ```
 
-Legacy direct mode remains available only for explicit fallback (`missioncontrol.legacy.mcp.json`, `codex.legacy.mcp.toml`).
+Gemini CLI (`~/.gemini/settings.json`):
 
-## 6) Validate In Agent
+```json
+{
+  "mcpServers": {
+    "missioncontrol": {
+      "command": "missioncontrol-mcp",
+      "env": {
+        "MC_MCP_MODE": "shim",
+        "MC_DAEMON_HOST": "127.0.0.1",
+        "MC_DAEMON_PORT": "8765",
+        "MC_FAIL_OPEN_ON_LIST": "1",
+        "MC_STARTUP_PREFLIGHT": "none",
+        "MC_BASE_URL": "https://mc.example.com",
+        "MC_TOKEN": "<your-token>"
+      }
+    }
+  }
+}
+```
+
+### 6) Validate In Agent
 
 Ask agent to list tools and call one:
 
@@ -139,55 +235,39 @@ Ask agent to list tools and call one:
 - create a task in cluster 1
 - list tasks in cluster 1
 
+---
+
 ## Codex Swarm Workflow
 
 For first-class Codex multi-session collaboration (without nested `codex exec`), follow:
 
 - `docs/CODEX-SWARM-WORKFLOW.md`
 
-## 7) Skill Sync (Mission/Kluster Scope)
+## Skill Sync (Mission/Kluster Scope)
 
 Resolve and materialize effective skills for an active mission/kluster:
 
 ```bash
-MC_BASE_URL="http://localhost:8008" MC_TOKEN="..." \
 missioncontrol-mcp sync --mission-id <mission-id> --kluster-id <optional-kluster-id>
 ```
 
-Check last sync state:
+---
 
-```bash
-MC_BASE_URL="http://localhost:8008" MC_TOKEN="..." \
-missioncontrol-mcp sync-status --mission-id <mission-id> --kluster-id <optional-kluster-id>
-```
+## Auth Reference
 
-Generate signed bundle metadata for skill bundle publish:
+| Auth type | How it works | Recommended for |
+|---|---|---|
+| Static `MC_TOKEN` | Shared secret, never expires | Local dev, CI |
+| Session token (`mcs_*`) | DB-backed, revocable, expiring | Interactive use, OIDC users |
+| OIDC JWT | Short-lived, identity-bound | SSO/Authentik environments |
 
-```bash
-MC_SKILLS_SIGNING_SECRET="..." \
-missioncontrol-mcp sign-bundle \
-  --bundle-file ./skill-bundle.tar.gz \
-  --scope-type mission \
-  --scope-id <mission-id> \
-  --mission-id <mission-id> \
-  --signing-key-id v1
-```
-
-## Current Auth
-
-- MVP auth mode is dual:
-  - User paths can use OIDC bearer JWTs (Authentik).
-  - MCP/agent paths can continue using `MC_TOKEN`.
-- MCP bridge clients send `Authorization: Bearer $MC_TOKEN`.
-
-## Next Auth Upgrade Path
-
-- Move MCP bridge from static token to Authentik service-account/client-credentials tokens.
+All auth types work with `mc launch`. Session tokens are always injected into the agent process at exec time rather than written to config files.
 
 ## Troubleshooting: Startup Timeout
 
 If Codex shows `MCP startup incomplete (failed: missioncontrol)`:
 
-- Ensure your MCP env vars are `MC_*` (not `MISSIONCONTROL_*`).
 - Ensure `mc daemon` is running on `127.0.0.1:8765`.
-- Use shim defaults (`MC_MCP_MODE=shim`, `MC_STARTUP_PREFLIGHT=none`) to avoid backend preflight startup stalls.
+- Use shim defaults (`MC_MCP_MODE=shim`, `MC_STARTUP_PREFLIGHT=none`).
+- Ensure your MCP env vars are `MC_*` (not `MISSIONCONTROL_*`).
+- Run `mc whoami` to verify auth is working before launching an agent.

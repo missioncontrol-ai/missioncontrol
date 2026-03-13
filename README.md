@@ -68,7 +68,7 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 | | |
 |---|---|
 | Docker full stack (default) | `bash scripts/dev-up.sh` |
-| Install MCP bridge | `integrations/mc/` — `cargo install --path integrations/mc` (Rust native `mc`, see README) |
+| Install mc CLI | `bash scripts/install-mc.sh` (pre-built binary or source build) |
 | Philosophy & vision | [MISSIONCONTROL_PHILOSOPHY.md](MISSIONCONTROL_PHILOSOPHY.md) |
 | API reference | `/docs` (Swagger UI, when running locally) |
 | Web UI (SvelteKit) | `web/README.md` (dev server, build, SvelteKit dashboard features, OIDC login) |
@@ -239,11 +239,48 @@ Set `MC_LOG_EXPORT_PATH=/abs/path/missioncontrol.jsonl` to export structured eve
 
 ## Agent Integration
 
+### Launch any agent with one command
+
+Install `mc`:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/install-mc.sh)
+```
+
+Then launch:
+
+```bash
+export MC_TOKEN="<your-token>"
+export MC_BASE_URL="https://your-mc.example.com"
+
+mc launch claude    # Claude Code — writes ~/.claude.json
+mc launch codex     # OpenAI Codex CLI — appends ~/.codex/config.toml
+mc launch gemini    # Google Gemini CLI — writes ~/.gemini/settings.json
+mc launch openclaw  # OpenClaw — writes ~/.missioncontrol/config/openclaw.acp.json
+```
+
+`mc launch` auto-starts the daemon, validates auth, writes agent config, and exec's the agent.
+
+Use `mc login` to create a server-issued session token (`mcs_*`) stored locally — no more
+token in agent config files, revocable any time, auto-loaded by `mc` on next run:
+
+```bash
+MC_TOKEN="<static-token>" mc login   # exchange for session token
+mc launch claude                     # session auto-loaded, token injected at exec
+mc whoami                            # verify identity
+mc logout                            # revoke session
+```
+
+Pass `--preflight-only` to validate without launching (useful in CI).
+Pass `-- <args>` to forward arguments to the agent binary.
+
+For manual setup, session token details, Codex swarm workflows, and skill sync: see [`docs/AGENT-INSTALL.md`](docs/AGENT-INSTALL.md).
+
 - **Rust CLI (`mc`) first:** see `integrations/mc/README.md` for installation, daemon, governance, tooling, sync, and matrix telemetry commands; the CLI mirrors the HTTP/MCP surface described elsewhere in this README and is the recommended interface for most OSS users.
 - **`missioncontrol-mcp` bridge compatibility:** the Python bridge remains available under `distribution/missioncontrol-mcp` for environments that need MCP stdio; client shims, skill sync helpers, and the `missioncontrol-explorer` CLI live there.
-- **Agent configs & doctor:** use `scripts/generate-agent-config.sh` to emit MCP onboarding manifests and run `missioncontrol-mcp doctor` or `mc doctor` to validate connectivity before handing configs to Codex/Claude.
+- **Agent configs & doctor:** use `scripts/generate-agent-config.sh` to emit MCP onboarding manifests and run `missioncontrol-mcp doctor` or `mc doctor` to validate connectivity before handing configs to Codex/Claude/Gemini.
 - **Codex multi-session swarms:** follow `docs/CODEX-SWARM-WORKFLOW.md` for first-class collaborative runs without nested `codex exec`.
-- **Auth modes:** API accepts `token`, `oidc`, or `dual` via `AUTH_MODE`; the default runtime preference is OIDC when those credentials are present, otherwise it falls back to the static `MC_TOKEN`.
+- **Auth modes:** API accepts `token`, `oidc`, or `dual` via `AUTH_MODE`. `mc login` issues server-side session tokens (`mcs_*`) that work across all auth modes, are revocable, and never need to be written to agent config files.
 
 ## MCP Examples
 

@@ -379,3 +379,19 @@ class WorkspaceLease(SQLModel, table=True):
     released_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class UserSession(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    # The subject this session belongs to (email or opaque OIDC subject)
+    subject: str = Field(index=True)
+    # SHA-256 hex digest of the raw token — stored instead of plaintext
+    token_hash: str = Field(unique=True, index=True)
+    # First 8 chars of the raw token — for display/debugging only
+    token_prefix: str = ""
+    expires_at: datetime = Field(index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_used_at: datetime = Field(default_factory=datetime.utcnow)
+    # Optional: user-agent string from the client that created the session
+    user_agent: str = Field(default="")
+    revoked: bool = Field(default=False, index=True)

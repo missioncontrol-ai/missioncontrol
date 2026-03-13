@@ -68,4 +68,14 @@ impl MissionControlClient {
             .await
             .context("unable to parse json response")
     }
+
+    pub async fn delete(&self, path: &str) -> Result<()> {
+        self.request_builder(Method::DELETE, path)?
+            .send()
+            .await
+            .context("request failed")?
+            .error_for_status()
+            .context("unexpected status code")?;
+        Ok(())
+    }
 }
