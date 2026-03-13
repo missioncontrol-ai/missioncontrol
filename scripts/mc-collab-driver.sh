@@ -108,6 +108,14 @@ echo "mission_id=$MISSION_ID"
 echo "kluster_id=$KLUSTER_ID"
 echo "duration_sec=$DURATION_SEC poll_sec=$POLL_SEC"
 echo "out_dir=$RUN_DIR"
+
+cat > "$RUN_DIR/run-context.env" <<EOF
+RUN_ID=${RUN_ID}
+MC_BASE_URL=${BASE_URL}
+MC_STACK_PROFILE=${STACK_PROFILE}
+MC_COLLAB_MISSION_ID=${MISSION_ID}
+MC_COLLAB_KLUSTER_ID=${KLUSTER_ID}
+EOF
 echo
 echo "Other sessions can now collaborate on this kluster by updating task status/description:"
 echo "  1) Stabilize codex MCP handshake under concurrency"

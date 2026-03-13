@@ -25,6 +25,7 @@ AGENT_STARTUP_TIMEOUT_SEC="${MC_PRESSURE_AGENT_STARTUP_TIMEOUT_SEC:-120}"
 AGENT_TOOL_TIMEOUT_SEC="${MC_PRESSURE_AGENT_TOOL_TIMEOUT_SEC:-120}"
 AGENT_ITER_SLEEP_MS="${MC_PRESSURE_AGENT_ITER_SLEEP_MS:-500}"
 AGENT_EXEC_TIMEOUT_SEC="${MC_PRESSURE_AGENT_EXEC_TIMEOUT_SEC:-300}"
+DIAGNOSTIC_SAMPLE_LIMIT="${MC_PRESSURE_DIAGNOSTIC_SAMPLE_LIMIT:-5}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required" >&2
@@ -62,6 +63,18 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+collect_log_samples() {
+  local pattern="$1"
+  local limit="${2:-$DIAGNOSTIC_SAMPLE_LIMIT}"
+  local matches
+  matches="$(rg --no-heading -e "$pattern" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' -g '*.txt' 2>/dev/null || true)"
+  if [[ -z "$matches" ]]; then
+    echo '[]'
+    return
+  fi
+  printf '%s\n' "$matches" | head -n "$limit" | jq -R -s 'split("\n") | map(select(length > 0))'
+}
 
 echo "== MC pressure test =="
 echo "run_id=$RUN_ID"
@@ -255,6 +268,14 @@ playbook_results_file="$RUN_DIR/playbook-results.jsonl"
 { rg --no-heading -n "PLAYBOOK_RESULT_JSON=" "$RUN_DIR/workers" -g '*.log' 2>/dev/null || true; } \
   | sed 's/^.*PLAYBOOK_RESULT_JSON=//' > "$playbook_results_file"
 
+diag_startup_samples="$(collect_log_samples 'MCP startup incomplete|timed out handshaking|timed out after|unexpected status code|Connection refused')"
+diag_rate_limit_samples="$(collect_log_samples ' 429|error: 429|URL returned error: 429|too many requests')"
+diag_auth_samples="$(collect_log_samples 'MC_TOKEN is required|Forbidden|Unauthorized')"
+diag_ownership_samples="$(collect_log_samples 'owner required|contributor or owner required')"
+diag_shim_samples="$(collect_log_samples 'MCP startup incomplete|timed out handshaking|timed out after|unexpected status code|Connection refused')"
+diag_api_samples="$(collect_log_samples 'HTTP 5[0-9][0-9]')"
+diag_scenario_samples="$(collect_log_samples 'scenario_assertion')"
+
 jq -s \
   --arg report_version "$REPORT_VERSION" \
   --arg run_id "$RUN_ID" \
@@ -271,6 +292,14 @@ jq -s \
   --argjson shim_transport_hits "$shim_transport_hits" \
   --argjson api_5xx_hits "$api_5xx_hits" \
   --argjson scenario_assertion_hits "$scenario_assertion_hits" \
+  --argjson diag_sample_limit "$DIAGNOSTIC_SAMPLE_LIMIT" \
+  --argjson diag_startup_samples "$diag_startup_samples" \
+  --argjson diag_rate_limit_samples "$diag_rate_limit_samples" \
+  --argjson diag_auth_samples "$diag_auth_samples" \
+  --argjson diag_ownership_samples "$diag_ownership_samples" \
+  --argjson diag_shim_samples "$diag_shim_samples" \
+  --argjson diag_api_samples "$diag_api_samples" \
+  --argjson diag_scenario_samples "$diag_scenario_samples" \
   --slurpfile playbook_results "$playbook_results_file" \
   '{
     report_version: $report_version,
@@ -296,6 +325,19 @@ jq -s \
       shim_transport: $shim_transport_hits,
       api_5xx: $api_5xx_hits,
       scenario_assertion: $scenario_assertion_hits
+    },
+    diagnostics: {
+      sample_limit: $diag_sample_limit,
+      failure_drilldowns: {
+        startup_timeout: {count: $startup_timeout_hits, samples: $diag_startup_samples},
+        rate_limit: {count: $rate_limit_hits, samples: $diag_rate_limit_samples},
+        auth_config: {count: $auth_config_hits, samples: $diag_auth_samples},
+        ownership_acl: {count: $ownership_acl_hits, samples: $diag_ownership_samples},
+        shim_transport: {count: $shim_transport_hits, samples: $diag_shim_samples},
+        api_5xx: {count: $api_5xx_hits, samples: $diag_api_samples},
+        scenario_assertion: {count: $scenario_assertion_hits, samples: $diag_scenario_samples}
+      },
+      note: ("Failure samples are trimmed to " + ($diag_sample_limit | tostring) + " entries per category for readability.")
     },
     endpoint: {
       base_url: $base_url,
