@@ -47,6 +47,10 @@ MC_PRESSURE_MODE=playbook MC_PRESSURE_WORKERS=5 MC_PRESSURE_DURATION_SEC=600 \
 scripts/mc-pressure-test.sh
 ```
 
+For real multi-session Codex collaboration pressure (non-nested), use:
+
+- `docs/CODEX-SWARM-WORKFLOW.md`
+
 The pressure harness now emits a versioned summary report at:
 
 - `artifacts/pressure/<run_id>/summary.json`

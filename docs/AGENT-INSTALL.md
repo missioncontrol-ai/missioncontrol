@@ -139,6 +139,12 @@ Ask agent to list tools and call one:
 - create a task in cluster 1
 - list tasks in cluster 1
 
+## Codex Swarm Workflow
+
+For first-class Codex multi-session collaboration (without nested `codex exec`), follow:
+
+- `docs/CODEX-SWARM-WORKFLOW.md`
+
 ## 7) Skill Sync (Mission/Kluster Scope)
 
 Resolve and materialize effective skills for an active mission/kluster:

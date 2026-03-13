@@ -242,6 +242,7 @@ Set `MC_LOG_EXPORT_PATH=/abs/path/missioncontrol.jsonl` to export structured eve
 - **Rust CLI (`mc`) first:** see `integrations/mc/README.md` for installation, daemon, governance, tooling, sync, and matrix telemetry commands; the CLI mirrors the HTTP/MCP surface described elsewhere in this README and is the recommended interface for most OSS users.
 - **`missioncontrol-mcp` bridge compatibility:** the Python bridge remains available under `distribution/missioncontrol-mcp` for environments that need MCP stdio; client shims, skill sync helpers, and the `missioncontrol-explorer` CLI live there.
 - **Agent configs & doctor:** use `scripts/generate-agent-config.sh` to emit MCP onboarding manifests and run `missioncontrol-mcp doctor` or `mc doctor` to validate connectivity before handing configs to Codex/Claude.
+- **Codex multi-session swarms:** follow `docs/CODEX-SWARM-WORKFLOW.md` for first-class collaborative runs without nested `codex exec`.
 - **Auth modes:** API accepts `token`, `oidc`, or `dual` via `AUTH_MODE`; the default runtime preference is OIDC when those credentials are present, otherwise it falls back to the static `MC_TOKEN`.
 
 ## MCP Examples
