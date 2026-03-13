@@ -100,7 +100,7 @@ curl http://localhost:8000/readyz
   - `MQTT_PASSWORD`
   - `MC_OBJECT_STORAGE_ACCESS_KEY`
   - `MC_OBJECT_STORAGE_ACCESS_SECRET`
-- Create a Mosquitto password file at `docker/mosquitto/passwords` before starting the production stack.
+- Create a Mosquitto password file at `docker/mosquitto/passwords/passwords` before starting the production stack.
 - `docker-compose.quickstart.yml` keeps the local/dev posture with sqlite and anonymous MQTT.
 - API health contracts:
   - `/healthz`: process alive

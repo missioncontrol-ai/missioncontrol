@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:0.8.2-pg18-trixie
+    image: pgvector/pgvector:0.8.2-pg18
     container_name: missioncontrol-postgres
     restart: unless-stopped
     environment:
@@ -32,9 +32,9 @@ services:
       - "1884:1883"
     volumes:
       - ./docker/mosquitto/mosquitto.prod.conf:/mosquitto/config/mosquitto.conf:ro
-      - ${MQTT_PASSWORD_FILE:-./docker/mosquitto/passwords}:/mosquitto/config/passwords:ro
+      - ${MQTT_PASSWORD_FILE:-./docker/mosquitto/passwords/passwords}:/mosquitto/config/passwords/passwords:ro
     healthcheck:
-      test: ["CMD-SHELL", "mosquitto_sub -C 1 -t '$SYS/broker/version' -i healthcheck -u \"$MQTT_USERNAME\" -P \"$MQTT_PASSWORD\" >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "mosquitto_sub -C 1 -t '$$SYS/broker/version' -i healthcheck -u \"$$MQTT_USERNAME\" -P \"$$MQTT_PASSWORD\" >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 8
@@ -48,14 +48,14 @@ services:
     restart: unless-stopped
     environment:
       RUSTFS_ACCESS_KEY: ${MC_OBJECT_STORAGE_ACCESS_KEY:?set MC_OBJECT_STORAGE_ACCESS_KEY}
-      RUSTFS_ACCESS_SECRET: ${MC_OBJECT_STORAGE_ACCESS_SECRET:?set MC_OBJECT_STORAGE_ACCESS_SECRET}
+      RUSTFS_SECRET_KEY: ${MC_OBJECT_STORAGE_ACCESS_SECRET:?set MC_OBJECT_STORAGE_ACCESS_SECRET}
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
       - missioncontrol-rustfs-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health/live || exit 1"]
+      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9000/health/live || true); [ \"$$code\" = \"200\" ] || [ \"$$code\" = \"403\" ]"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -98,7 +98,8 @@ services:
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
       DB_POOL_PRE_PING: ${DB_POOL_PRE_PING:-true}
       DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-3600}
-      MC_DB_RUNTIME_MIGRATIONS: "false"
+      MC_DB_AUTO_CREATE: "true"
+      MC_DB_RUNTIME_MIGRATIONS: "true"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
       MQTT_USERNAME: ${MQTT_USERNAME:-missioncontrol}
@@ -115,7 +116,7 @@ services:
     volumes:
       - ./backend/chroma:/app/chroma
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8008/readyz || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8008/readyz', timeout=3).status == 200 else 1)\""]
       interval: 15s
       timeout: 5s
       retries: 8
@@ -141,7 +142,7 @@ services:
     ports:
       - "8765:8765"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8765/healthz || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8765/healthz', timeout=3).status == 200 else 1)\""]
       interval: 15s
       timeout: 5s
       retries: 8

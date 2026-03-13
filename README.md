@@ -383,7 +383,7 @@ Approval token header:
 
 ## Notes
 
-- Docker default database is Postgres (`pgvector/pgvector:0.8.2-pg18-trixie` image).
+- Docker default database is Postgres (`pgvector/pgvector:0.8.2-pg18` image).
 - Set CORS allowlist via `MC_CORS_ALLOW_ORIGINS` (comma-separated origins).
 - Default vector store is pgvector when using Postgres.
 - Quickstart fallback database remains SQLite (`backend/taskman.db`) with Chroma (`backend/chroma`) vector fallback.

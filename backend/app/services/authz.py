@@ -54,6 +54,11 @@ def assert_platform_admin(request: Request | None) -> None:
         raise HTTPException(status_code=403, detail="Forbidden: platform admin required")
 
 
+def ensure_platform_admin(request: Request | None) -> None:
+    """Backward-compatible alias used by older router imports."""
+    assert_platform_admin(request)
+
+
 def assert_mission_owner_or_admin(*, session: Session, request: Request | None, mission_id: str) -> Mission:
     mission = session.get(Mission, mission_id)
     if not mission:
