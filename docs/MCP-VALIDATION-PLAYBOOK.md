@@ -24,12 +24,14 @@ Defaults:
 - workers: `5`
 - duration: `600` seconds
 - model: `gpt-5.1-codex-mini`
+- stack profile: `full` (`MC_STACK_PROFILE=full`)
 
 Required env:
 
 - `MC_BASE_URL`
 - `MC_TOKEN`
 - local shim must be reachable at `MC_DAEMON_HOST:MC_DAEMON_PORT` (defaults `127.0.0.1:8765`)
+- full Docker stack should be running (`bash scripts/dev-up.sh`)
 
 Example:
 
@@ -44,6 +46,13 @@ Deterministic baseline mode (no Codex workers):
 
 ```bash
 MC_PRESSURE_MODE=playbook MC_PRESSURE_WORKERS=5 MC_PRESSURE_DURATION_SEC=600 \
+scripts/mc-pressure-test.sh
+```
+
+Quickstart remains available for local debugging only:
+
+```bash
+MC_STACK_PROFILE=quickstart MC_PRESSURE_MODE=playbook MC_PRESSURE_WORKERS=1 MC_PRESSURE_DURATION_SEC=15 \
 scripts/mc-pressure-test.sh
 ```
 

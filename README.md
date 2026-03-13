@@ -67,7 +67,7 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 
 | | |
 |---|---|
-| Docker quickstart | `bash scripts/dev-up.sh` |
+| Docker full stack (default) | `bash scripts/dev-up.sh` |
 | Install MCP bridge | `integrations/mc/` — `cargo install --path integrations/mc` (Rust native `mc`, see README) |
 | Philosophy & vision | [MISSIONCONTROL_PHILOSOPHY.md](MISSIONCONTROL_PHILOSOPHY.md) |
 | API reference | `/docs` (Swagger UI, when running locally) |
@@ -81,9 +81,9 @@ The `web/` directory is now a standalone SvelteKit 2 application that powers the
 
 ## Docker Dev (Recommended)
 
-Quickstart profile (SQLite + Chroma fallback):
+Full profile (default; Postgres + pgvector + MQTT + RustFS):
 
-1. Start API + MQTT:
+1. Start full stack:
 
 ```bash
 bash scripts/dev-up.sh
@@ -95,10 +95,10 @@ bash scripts/dev-up.sh
 curl -H "Authorization: Bearer Change-Now-Socrates-Plato-Aristotle-Aurelius" http://localhost:8008/
 ```
 
-or run automated profile smoke checks:
+or run automated full-profile smoke checks:
 
 ```bash
-bash scripts/smoke.sh --profile both
+bash scripts/smoke.sh --profile full
 ```
 
 3. Stop:
@@ -128,18 +128,18 @@ MC_OBJECT_STORAGE_ACCESS_SECRET=<secret>
 
 Note: the compose file's built-in RustFS config takes precedence for local runs. `.env` overrides apply when pointing at an external store (remove or override the compose environment block).
 
-Full stack profile (Postgres + pgvector + MQTT):
+Quickstart profile (local-only fast loop; SQLite + Chroma fallback):
 
-1. Start full stack:
+1. Start quickstart:
 
 ```bash
-bash scripts/dev-up-full.sh
+MC_STACK_PROFILE=quickstart bash scripts/dev-up.sh
 ```
 
-2. Stop full stack:
+2. Stop quickstart:
 
 ```bash
-bash scripts/dev-down-full.sh
+MC_STACK_PROFILE=quickstart bash scripts/dev-down.sh
 ```
 
 ## Docker Compose (recommended)
@@ -149,7 +149,7 @@ Run the full compose stack to get a production-ish deployment on a single host:
 1. Start the stack (Postgres + pgvector + MQTT + RustFS):
 
 ```bash
-bash scripts/dev-up-full.sh
+bash scripts/dev-up.sh
 ```
 
 2. Verify the API is responsive (the default token is shipped with the compose stack):
@@ -161,7 +161,7 @@ curl -H "Authorization: Bearer Change-Now-Socrates-Plato-Aristotle-Aurelius" htt
 3. Shutdown:
 
 ```bash
-bash scripts/dev-down-full.sh
+bash scripts/dev-down.sh
 ```
 
 ## Quickstart (Python)

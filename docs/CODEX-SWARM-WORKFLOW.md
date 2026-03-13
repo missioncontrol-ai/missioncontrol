@@ -12,7 +12,7 @@ Goal: run multiple Codex sessions collaborating on the same mission/kluster with
 
 ## Prerequisites
 
-- MissionControl quickstart stack healthy (`api`, `mcpd`, `mosquitto`, `rustfs`).
+- MissionControl full stack healthy (`postgres`, `api`, `mcpd`, `mosquitto`, `rustfs`).
 - Local shim reachable at `127.0.0.1:8765`.
 - `MC_TOKEN` valid for your API.
 
@@ -23,6 +23,7 @@ Run in one terminal:
 ```bash
 MC_BASE_URL=http://localhost:8008 \
 MC_TOKEN="<token>" \
+MC_STACK_PROFILE=full \
 MC_COLLAB_DURATION_SEC=600 \
 MC_COLLAB_POLL_SEC=5 \
 bash scripts/mc-collab-driver.sh
@@ -40,6 +41,7 @@ Attach to an existing mission/kluster instead:
 ```bash
 MC_BASE_URL=http://localhost:8008 \
 MC_TOKEN="<token>" \
+MC_STACK_PROFILE=full \
 MC_COLLAB_MISSION_ID="<mission_id>" \
 MC_COLLAB_KLUSTER_ID="<kluster_id>" \
 bash scripts/mc-collab-driver.sh
@@ -96,7 +98,7 @@ Key fields:
 
 - If `mcpd` fails to start on `:8765`, stop any local `mc daemon` already bound there.
 - If Codex reports MCP startup incomplete, verify `MC_*` env names (not `MISSIONCONTROL_*`).
-- If Mosquitto blocks startup, run `bash scripts/dev-up.sh` (it now clears preexisting/orphan containers first).
+- If stack services are stale, run `bash scripts/dev-up.sh` (defaults to full profile and clears preexisting/orphan containers first).
 
 ## 6) Recommended pressure sequence
 

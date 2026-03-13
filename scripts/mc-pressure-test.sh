@@ -12,6 +12,7 @@ BASE_URL="${MC_BASE_URL:-http://localhost:8008}"
 MCP_CMD="${MC_PRESSURE_MCP_COMMAND:-missioncontrol-mcp}"
 SHIM_HOST="${MC_DAEMON_HOST:-127.0.0.1}"
 SHIM_PORT="${MC_DAEMON_PORT:-8765}"
+STACK_PROFILE="${MC_STACK_PROFILE:-full}"
 UNSANDBOXED="${MC_PRESSURE_UNSANDBOXED:-0}"
 AUTOSTART_DAEMON="${MC_PRESSURE_AUTOSTART_DAEMON:-1}"
 DAEMON_PID=""
@@ -66,9 +67,28 @@ echo "== MC pressure test =="
 echo "run_id=$RUN_ID"
 echo "mode=$MODE workers=$WORKERS duration_sec=$DURATION_SEC model=$MODEL"
 echo "base_url=$BASE_URL shim=${SHIM_HOST}:${SHIM_PORT}"
+echo "stack_profile=$STACK_PROFILE"
 echo "out_dir=$RUN_DIR"
 
 echo "== preflight checks =="
+if [[ "$STACK_PROFILE" == "full" ]]; then
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    if [[ "$(docker inspect --format '{{.State.Running}}' missioncontrol-postgres 2>/dev/null || true)" != "true" ]]; then
+      echo "full profile requires running postgres service; run MC_STACK_PROFILE=full bash scripts/dev-up.sh" >&2
+      exit 1
+    fi
+    if ! docker exec missioncontrol-postgres psql -U "${POSTGRES_USER:-missioncontrol}" -d "${POSTGRES_DB:-missioncontrol}" -tAc \
+      "SELECT extname FROM pg_extension WHERE extname='vector';" | rg -q "vector"; then
+      echo "full profile preflight failed: pgvector extension is not enabled/reachable" >&2
+      exit 1
+    fi
+  else
+    echo "warning: docker socket not accessible; skipping postgres/pgvector container assertions" >&2
+  fi
+else
+  echo "warning: running non-gating quickstart profile (sqlite)" >&2
+fi
+
 if ! curl -fsS "http://${SHIM_HOST}:${SHIM_PORT}/v1/health" >/dev/null 2>&1; then
   if [[ "$AUTOSTART_DAEMON" == "1" ]]; then
     if ! command -v mc >/dev/null 2>&1; then

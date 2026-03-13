@@ -9,6 +9,7 @@ OUT_ROOT="${MC_COLLAB_OUT_ROOT:-$ROOT_DIR/artifacts/collab}"
 SCENARIO_FILE="${MC_COLLAB_SCENARIO_FILE:-$ROOT_DIR/scripts/pressure-scenarios/reliability-trio.json}"
 DURATION_SEC="${MC_COLLAB_DURATION_SEC:-600}"
 POLL_SEC="${MC_COLLAB_POLL_SEC:-5}"
+STACK_PROFILE="${MC_STACK_PROFILE:-full}"
 MISSION_ID="${MC_COLLAB_MISSION_ID:-}"
 KLUSTER_ID="${MC_COLLAB_KLUSTER_ID:-}"
 ACTOR="${MC_COLLAB_ACTOR:-token-client}"
@@ -81,9 +82,28 @@ create_seed_if_needed() {
 
 create_seed_if_needed
 
+if [[ "$STACK_PROFILE" == "full" ]]; then
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    if [[ "$(docker inspect --format '{{.State.Running}}' missioncontrol-postgres 2>/dev/null || true)" != "true" ]]; then
+      echo "full profile requires running postgres service; run MC_STACK_PROFILE=full bash scripts/dev-up.sh" >&2
+      exit 1
+    fi
+    if ! docker exec missioncontrol-postgres psql -U "${POSTGRES_USER:-missioncontrol}" -d "${POSTGRES_DB:-missioncontrol}" -tAc \
+      "SELECT extname FROM pg_extension WHERE extname='vector';" | rg -q "vector"; then
+      echo "full profile preflight failed: pgvector extension is not enabled/reachable" >&2
+      exit 1
+    fi
+  else
+    echo "warning: docker socket not accessible; skipping postgres/pgvector container assertions" >&2
+  fi
+else
+  echo "warning: running non-gating quickstart profile (sqlite)" >&2
+fi
+
 echo "== MC collab driver =="
 echo "run_id=$RUN_ID"
 echo "base_url=$BASE_URL"
+echo "stack_profile=$STACK_PROFILE"
 echo "mission_id=$MISSION_ID"
 echo "kluster_id=$KLUSTER_ID"
 echo "duration_sec=$DURATION_SEC poll_sec=$POLL_SEC"
