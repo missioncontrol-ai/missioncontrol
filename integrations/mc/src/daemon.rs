@@ -3,7 +3,7 @@ use crate::client::MissionControlClient;
 use anyhow::Context;
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -52,6 +52,14 @@ pub struct DaemonArgs {
     /// Cache TTL (seconds) for `/v1/tools` responses.
     #[arg(long, env = "MC_TOOLS_CACHE_TTL_SEC", default_value_t = 60)]
     pub tools_cache_ttl_sec: u64,
+
+    /// Maximum stale cache age (seconds) for `/v1/tools` when backend refresh fails.
+    #[arg(long, env = "MC_TOOLS_STALE_SEC", default_value_t = 600)]
+    pub tools_stale_sec: u64,
+
+    /// Optional local bearer token required for shim API access.
+    #[arg(long, env = "MC_DAEMON_SHIM_TOKEN")]
+    pub shim_token: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -73,7 +81,9 @@ struct RawSseChunk {
 struct ShimApiState {
     client: MissionControlClient,
     cache: Arc<RwLock<Option<ToolsCache>>>,
-    ttl: Duration,
+    ttl_fresh: Duration,
+    ttl_stale: Duration,
+    shim_token: Option<String>,
 }
 
 #[derive(Clone)]
@@ -93,14 +103,22 @@ struct ShimToolCallRequest {
 struct ShimErrorPayload {
     ok: bool,
     error: String,
+    category: String,
 }
 
 impl ShimApiState {
-    fn new(client: MissionControlClient, ttl: Duration) -> Self {
+    fn new(
+        client: MissionControlClient,
+        ttl_fresh: Duration,
+        ttl_stale: Duration,
+        shim_token: Option<String>,
+    ) -> Self {
         Self {
             client,
             cache: Arc::new(RwLock::new(None)),
-            ttl,
+            ttl_fresh,
+            ttl_stale,
+            shim_token,
         }
     }
 
@@ -114,7 +132,7 @@ impl ShimApiState {
         Ok(tools)
     }
 
-    async fn tools_with_cache(&self) -> anyhow::Result<(Value, f64)> {
+    async fn tools_with_cache(&self) -> anyhow::Result<(Value, String, f64, Option<String>)> {
         let now = Utc::now();
         {
             let cache = self.cache.read().await;
@@ -123,13 +141,54 @@ impl ShimApiState {
                     .signed_duration_since(cached.cached_at)
                     .to_std()
                     .unwrap_or_else(|_| Duration::from_secs(0));
-                if age <= self.ttl {
-                    return Ok((cached.tools.clone(), age.as_secs_f64()));
+                if age <= self.ttl_fresh {
+                    return Ok((
+                        cached.tools.clone(),
+                        "fresh".to_string(),
+                        age.as_secs_f64(),
+                        None,
+                    ));
                 }
             }
         }
-        let tools = self.refresh_tools().await?;
-        Ok((tools, 0.0))
+        match self.refresh_tools().await {
+            Ok(tools) => Ok((tools, "fresh".to_string(), 0.0, None)),
+            Err(err) => {
+                let category = classify_error_category(&err).to_string();
+                let cache = self.cache.read().await;
+                if let Some(cached) = cache.as_ref() {
+                    let age = now
+                        .signed_duration_since(cached.cached_at)
+                        .to_std()
+                        .unwrap_or_else(|_| Duration::from_secs(0));
+                    if age <= self.ttl_stale {
+                        return Ok((
+                            cached.tools.clone(),
+                            "stale".to_string(),
+                            age.as_secs_f64(),
+                            Some(format!("{} ({})", err, category)),
+                        ));
+                    }
+                }
+                Err(err)
+            }
+        }
+    }
+
+    async fn ready_state(&self) -> (bool, Option<f64>) {
+        let cache = self.cache.read().await;
+        if let Some(cached) = cache.as_ref() {
+            let age = Utc::now()
+                .signed_duration_since(cached.cached_at)
+                .to_std()
+                .unwrap_or_else(|_| Duration::from_secs(0))
+                .as_secs_f64();
+            if age <= self.ttl_stale.as_secs_f64() {
+                return (true, Some(age));
+            }
+            return (false, Some(age));
+        }
+        (false, None)
     }
 }
 
@@ -157,6 +216,7 @@ pub async fn run(
         agent_id = ?ctx.agent_id,
         shim_host = %args.shim_host,
         shim_port = args.shim_port,
+        shim_auth = args.shim_token.is_some(),
         "starting mc daemon"
     );
     if let Some(ref mqtt_url) = args.mqtt_url {
@@ -184,9 +244,13 @@ pub async fn run(
         .parse::<std::net::IpAddr>()
         .context("invalid --shim-host value; expected a literal IPv4/IPv6 address")?;
     let shim_addr = SocketAddr::from((shim_ip, args.shim_port));
+    let fresh_ttl = Duration::from_secs(args.tools_cache_ttl_sec.max(1));
+    let stale_ttl = Duration::from_secs(args.tools_stale_sec.max(args.tools_cache_ttl_sec).max(1));
     let shim_state = ShimApiState::new(
         client.clone(),
-        Duration::from_secs(args.tools_cache_ttl_sec.max(1)),
+        fresh_ttl,
+        stale_ttl,
+        args.shim_token.clone(),
     );
     let shim_task = tokio::spawn(start_shim_api(shim_addr, shim_state));
 
@@ -373,9 +437,9 @@ async fn start_shim_api(addr: SocketAddr, state: ShimApiState) -> anyhow::Result
         .route("/v1/tools", get(shim_tools))
         .route("/v1/call", post(shim_call))
         .route("/v1/health", get(shim_health))
-        .route("/healthz", get(shim_health))
-        .route("/readyz", get(shim_health))
-        .route("/livez", get(shim_health))
+        .route("/healthz", get(shim_livez))
+        .route("/readyz", get(shim_readyz))
+        .route("/livez", get(shim_livez))
         .with_state(state);
 
     let listener = TcpListener::bind(addr)
@@ -387,7 +451,14 @@ async fn start_shim_api(addr: SocketAddr, state: ShimApiState) -> anyhow::Result
         .context("shim API server exited unexpectedly")
 }
 
-async fn shim_initialize(State(state): State<ShimApiState>) -> impl IntoResponse {
+async fn shim_initialize(
+    State(state): State<ShimApiState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(resp) = check_shim_auth(&headers, &state) {
+        return resp;
+    }
+
     let prefetch = state.clone();
     tokio::spawn(async move {
         if let Err(err) = prefetch.refresh_tools().await {
@@ -400,31 +471,122 @@ async fn shim_initialize(State(state): State<ShimApiState>) -> impl IntoResponse
         "preflight_started": true,
         "cache_age_sec": serde_json::Value::Null
     }))
+    .into_response()
 }
 
-async fn shim_tools(State(state): State<ShimApiState>) -> impl IntoResponse {
+fn classify_error_category(err: &anyhow::Error) -> &'static str {
+    for cause in err.chain() {
+        if let Some(req_err) = cause.downcast_ref::<reqwest::Error>() {
+            if req_err.is_timeout() {
+                return "timeout";
+            }
+            if req_err.is_connect() {
+                return "network_error";
+            }
+            if let Some(status) = req_err.status() {
+                if status.as_u16() == 401 || status.as_u16() == 403 {
+                    return "auth_error";
+                }
+                if status.is_server_error() {
+                    return "http_5xx";
+                }
+                if status.is_client_error() {
+                    return "http_4xx";
+                }
+            }
+        }
+    }
+    "unknown_error"
+}
+
+fn shim_error(
+    status: StatusCode,
+    category: &str,
+    message: impl Into<String>,
+) -> axum::response::Response {
+    (
+        status,
+        Json(ShimErrorPayload {
+            ok: false,
+            error: message.into(),
+            category: category.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn check_shim_auth(
+    headers: &HeaderMap,
+    state: &ShimApiState,
+) -> Result<(), axum::response::Response> {
+    let Some(expected) = state.shim_token.as_ref() else {
+        return Ok(());
+    };
+    let auth = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let token_header = headers
+        .get("x-mc-shim-token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+
+    let bearer_ok = auth
+        .strip_prefix("Bearer ")
+        .map(|v| v.trim() == expected)
+        .unwrap_or(false);
+    let token_ok = token_header == expected;
+    if bearer_ok || token_ok {
+        Ok(())
+    } else {
+        Err(shim_error(
+            StatusCode::UNAUTHORIZED,
+            "auth_error",
+            "missing or invalid shim token",
+        ))
+    }
+}
+
+async fn shim_tools(State(state): State<ShimApiState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Err(resp) = check_shim_auth(&headers, &state) {
+        return resp;
+    }
+
     match state.tools_with_cache().await {
-        Ok((tools, age_sec)) => Json(serde_json::json!({
+        Ok((tools, cache_state, age_sec, warning)) => Json(serde_json::json!({
             "ok": true,
             "tools": tools,
-            "cache": { "state": "fresh", "age_sec": age_sec }
+            "cache": {
+                "state": cache_state,
+                "age_sec": age_sec,
+                "warning": warning
+            }
         }))
         .into_response(),
-        Err(err) => (
+        Err(err) => shim_error(
             StatusCode::BAD_GATEWAY,
-            Json(ShimErrorPayload {
-                ok: false,
-                error: err.to_string(),
-            }),
-        )
-            .into_response(),
+            classify_error_category(&err),
+            err.to_string(),
+        ),
     }
 }
 
 async fn shim_call(
     State(state): State<ShimApiState>,
+    headers: HeaderMap,
     Json(body): Json<ShimToolCallRequest>,
 ) -> impl IntoResponse {
+    if let Err(resp) = check_shim_auth(&headers, &state) {
+        return resp;
+    }
+    if body.name.trim().is_empty() {
+        return shim_error(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "missing tool name",
+        );
+    }
+
     let args = if body.arguments.is_object() {
         body.arguments
     } else {
@@ -436,32 +598,55 @@ async fn shim_call(
     });
     match state.client.post_json("/mcp/call", &payload).await {
         Ok(result) => Json(result).into_response(),
-        Err(err) => (
+        Err(err) => shim_error(
             StatusCode::BAD_GATEWAY,
-            Json(ShimErrorPayload {
-                ok: false,
-                error: err.to_string(),
-            }),
-        )
-            .into_response(),
+            classify_error_category(&err),
+            err.to_string(),
+        ),
     }
 }
 
-async fn shim_health(State(state): State<ShimApiState>) -> impl IntoResponse {
-    let cache_age = {
-        let cache = state.cache.read().await;
-        cache.as_ref().map(|entry| {
-            Utc::now()
-                .signed_duration_since(entry.cached_at)
-                .to_std()
-                .unwrap_or_else(|_| Duration::from_secs(0))
-                .as_secs_f64()
-        })
-    };
+async fn shim_health(State(state): State<ShimApiState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Err(resp) = check_shim_auth(&headers, &state) {
+        return resp;
+    }
+    let (ready, cache_age) = state.ready_state().await;
     Json(serde_json::json!({
         "ok": true,
         "mode": "mc-daemon",
-        "cache_tools_age_sec": cache_age
+        "ready": ready,
+        "cache_tools_age_sec": cache_age,
+        "tools_cache_ttl_sec": state.ttl_fresh.as_secs_f64(),
+        "tools_stale_sec": state.ttl_stale.as_secs_f64()
+    }))
+    .into_response()
+}
+
+async fn shim_readyz(State(state): State<ShimApiState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Err(resp) = check_shim_auth(&headers, &state) {
+        return resp;
+    }
+    let (ready, cache_age) = state.ready_state().await;
+    if ready {
+        Json(serde_json::json!({
+            "ok": true,
+            "ready": true,
+            "cache_tools_age_sec": cache_age
+        }))
+        .into_response()
+    } else {
+        shim_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "not_ready",
+            "shim daemon is alive but has no usable tool cache yet",
+        )
+    }
+}
+
+async fn shim_livez() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "ok": true,
+        "alive": true
     }))
 }
 

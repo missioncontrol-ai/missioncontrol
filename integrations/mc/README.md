@@ -96,7 +96,7 @@ mc [--base-url URL] [--token TOKEN] [--agent-id ID] [--allow-insecure] \
 
 ### Doctor & daemon
 - `mc doctor [--matrix-endpoint /events/stream] [--matrix-sample-seconds 5] [--repair]` — runs the health, tools, and matrix checks described in `[docs/REAL-TIME.md](../docs/REAL-TIME.md)` and prints a JSON report; `--repair` ensures local directories + agent_id metadata are available for future runs.
-- `mc daemon --matrix-endpoint /events/stream [--fanout-port <port>] [--mqtt-url mqtt://host:1884] [--mqtt-topic missioncontrol/inbox] [--shim-host 127.0.0.1] [--shim-port 8765] [--tools-cache-ttl-sec 60]` — keeps an SSE stream alive for the matrix/inbox feed; fan-out and MQTT options replay the telemetry to local dashboards, and the shim API exposes local `/v1/*` control endpoints for MCP shim clients.
+- `mc daemon --matrix-endpoint /events/stream [--fanout-port <port>] [--mqtt-url mqtt://host:1884] [--mqtt-topic missioncontrol/inbox] [--shim-host 127.0.0.1] [--shim-port 8765] [--tools-cache-ttl-sec 60] [--tools-stale-sec 600] [--shim-token <token>]` — keeps an SSE stream alive for the matrix/inbox feed; fan-out and MQTT options replay the telemetry to local dashboards, and the shim API exposes local `/v1/*` control endpoints for MCP shim clients.
 
 ## Real-time matrix & Ruflo integration
 
@@ -130,6 +130,11 @@ SSE fan-out so local swarms stay synced.
 
 This lets MCP shim clients use the Rust daemon as their local control plane while keeping Mission Control
 API access centralized in `mc`.
+
+If `--shim-token` (or `MC_DAEMON_SHIM_TOKEN`) is set, shim requests must include either:
+
+- `Authorization: Bearer <token>`
+- `X-MC-Shim-Token: <token>`
 
 The Rust CLI keeps scratchstate simple: tools use `serde_json` for payloads, sync/promote automates the
 skill sync handshake, and the SSE stream ensures users see rapid alignment or approvals without poll

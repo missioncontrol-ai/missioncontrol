@@ -44,6 +44,7 @@ pipx install "git+ssh://git@github.com/missioncontrol-ai/missioncontrol.git#subd
 - `MC_TOOLS_STALE_SEC` (default: `600`, daemon mode)
 - `MC_DAEMON_HOST` (default: `127.0.0.1`)
 - `MC_DAEMON_PORT` (default: `8765`)
+- `MC_DAEMON_SHIM_TOKEN` (optional) — bearer token used when calling a protected local shim daemon
 - `MC_DAEMON_CONNECT_TIMEOUT_MS` (default: `100`, shim mode)
 - `MC_DAEMON_TOOLS_TIMEOUT_MS` (default: `2000`, shim mode)
 - `MC_DAEMON_CALL_TIMEOUT_MS` (default: `30000`, shim mode)
@@ -92,6 +93,8 @@ Then run shim mode:
 ```bash
 MC_MCP_MODE=shim missioncontrol-mcp
 ```
+
+If the Rust daemon is started with `--shim-token`, set `MC_DAEMON_SHIM_TOKEN` to the same value for shim mode.
 
 Skill sync helper examples:
 

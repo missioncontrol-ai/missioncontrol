@@ -497,10 +497,15 @@ def _daemon_base_url() -> str:
 def _daemon_call(path: str, *, method: str = "GET", payload: dict[str, Any] | None = None, timeout_ms: int = 2000) -> dict[str, Any]:
     url = f"{_daemon_base_url()}{path}"
     data = None if payload is None else json.dumps(payload).encode("utf-8")
+    headers = {"Accept": "application/json", "Content-Type": "application/json", "User-Agent": USER_AGENT}
+    shim_token = (os.getenv("MC_DAEMON_SHIM_TOKEN") or "").strip()
+    if shim_token:
+        headers["Authorization"] = f"Bearer {shim_token}"
+        headers["X-MC-Shim-Token"] = shim_token
     req = request.Request(
         url=url,
         data=data,
-        headers={"Accept": "application/json", "Content-Type": "application/json", "User-Agent": USER_AGENT},
+        headers=headers,
         method=method,
     )
     timeout_sec = max(0.05, float(timeout_ms) / 1000.0)
