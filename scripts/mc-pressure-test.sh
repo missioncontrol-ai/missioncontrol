@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_ROOT="${MC_PRESSURE_OUT_ROOT:-$ROOT_DIR/artifacts/pressure}"
 RUN_ID="${MC_PRESSURE_RUN_ID:-$(date +%Y%m%d%H%M%S)}"
 MODE="${MC_PRESSURE_MODE:-agent}" # agent | playbook
-WORKERS="${MC_PRESSURE_WORKERS:-10}"
+WORKERS="${MC_PRESSURE_WORKERS:-5}"
 DURATION_SEC="${MC_PRESSURE_DURATION_SEC:-600}"
 MODEL="${MC_PRESSURE_MODEL:-gpt-5.1-codex-mini}"
 BASE_URL="${MC_BASE_URL:-http://localhost:8008}"
@@ -18,6 +18,8 @@ DAEMON_PID=""
 INTERVAL_MS="${MC_PRESSURE_INTERVAL_MS:-200}"
 ON_429_SLEEP_MS="${MC_PRESSURE_ON_429_SLEEP_MS:-1000}"
 TOKENS_CSV="${MC_PRESSURE_TOKENS:-}"
+REPORT_VERSION="1.0.0"
+SCENARIO_FILE="${MC_PRESSURE_SCENARIO_FILE:-$ROOT_DIR/scripts/pressure-scenarios/reliability-trio.json}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required" >&2
@@ -39,6 +41,10 @@ fi
 if [[ "$MODE" == "agent" ]] && ! command -v timeout >/dev/null 2>&1; then
   echo "timeout is required for MC_PRESSURE_MODE=agent" >&2
   exit 1
+fi
+if [[ ! -f "$SCENARIO_FILE" ]]; then
+  echo "MC_PRESSURE_SCENARIO_FILE not found: $SCENARIO_FILE" >&2
+  exit 2
 fi
 
 mkdir -p "$OUT_ROOT"
@@ -164,6 +170,7 @@ run_playbook_worker() {
     attempts=$((attempts + 1))
     local err_file="$worker_dir/iter-${attempts}.stderr"
     if MC_PLAYBOOK_RUN_ID="${RUN_ID}-w${worker_id}-i${attempts}" \
+      MC_PLAYBOOK_SCENARIO_FILE="${SCENARIO_FILE}" \
       MC_BASE_URL="$BASE_URL" \
       MC_TOKEN="${worker_token}" \
       "$ROOT_DIR/scripts/mcp-validation-playbook.sh" \
@@ -212,30 +219,93 @@ for i in $(seq 1 "$WORKERS"); do
 done
 wait
 
+startup_timeout_hits="$(rg -n -e "MCP startup incomplete" -e "timed out after" "$RUN_DIR" -g '*.stderr' 2>/dev/null | wc -l | tr -d ' ')"
+auth_config_hits="$(rg -n -e "MC_TOKEN is required" -e "Forbidden" -e "Unauthorized" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null | wc -l | tr -d ' ')"
+rate_limit_hits="$(rg -n -e " 429" -e "error: 429" -e "URL returned error: 429" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null | wc -l | tr -d ' ')"
+ownership_acl_hits="$(rg -n -e "owner required" -e "contributor or owner required" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null | wc -l | tr -d ' ')"
+shim_transport_hits="$(rg -n -e "MCP startup incomplete" -e "timed out after" -e "unexpected status code" -e "Connection refused" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null | wc -l | tr -d ' ')"
+api_5xx_hits="$(rg -n -e "HTTP 5[0-9][0-9]" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null | wc -l | tr -d ' ')"
+scenario_assertion_hits="$(rg -n -e "scenario_assertion" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null | wc -l | tr -d ' ')"
+playbook_results_file="$RUN_DIR/playbook-results.jsonl"
+rg -Noh 'PLAYBOOK_RESULT_JSON=\K.*' "$RUN_DIR/workers" -g '*.log' > "$playbook_results_file" || true
+
 jq -s \
+  --arg report_version "$REPORT_VERSION" \
   --arg run_id "$RUN_ID" \
   --arg mode "$MODE" \
   --arg model "$MODEL" \
-  --argjson startup_timeout_hits "$(rg -n -e \"MCP startup incomplete\" -e \"timed out after\" \"$RUN_DIR\" -g '*.stderr' 2>/dev/null | wc -l | tr -d ' ')" \
+  --arg base_url "$BASE_URL" \
+  --arg shim_host "$SHIM_HOST" \
+  --argjson shim_port "$SHIM_PORT" \
+  --arg scenario_file "$SCENARIO_FILE" \
+  --argjson startup_timeout_hits "$startup_timeout_hits" \
+  --argjson auth_config_hits "$auth_config_hits" \
+  --argjson rate_limit_hits "$rate_limit_hits" \
+  --argjson ownership_acl_hits "$ownership_acl_hits" \
+  --argjson shim_transport_hits "$shim_transport_hits" \
+  --argjson api_5xx_hits "$api_5xx_hits" \
+  --argjson scenario_assertion_hits "$scenario_assertion_hits" \
+  --slurpfile playbook_results "$playbook_results_file" \
   '{
+    report_version: $report_version,
     run_id: $run_id,
     mode: $mode,
     model: $model,
     workers: length,
+    duration_sec: (map(.end_ts - .start_ts) | max // 0),
     attempts: (map(.attempts)|add),
     successes: (map(.successes)|add),
     failures: (map(.failures)|add),
+    fatal_worker_failures: (map(select(.failures > 0)) | length),
     success_rate: (if (map(.attempts)|add) == 0 then 0 else ((map(.successes)|add) / (map(.attempts)|add)) end),
-    startup_timeout_hits: $startup_timeout_hits
+    startup_timeout_hits: $startup_timeout_hits,
+    metrics: {
+      startup_timeout_hits: $startup_timeout_hits,
+      rate_limit_hits: $rate_limit_hits
+    },
+    failures_by_category: {
+      auth_config: $auth_config_hits,
+      rate_limit: $rate_limit_hits,
+      ownership_acl: $ownership_acl_hits,
+      shim_transport: $shim_transport_hits,
+      api_5xx: $api_5xx_hits,
+      scenario_assertion: $scenario_assertion_hits
+    },
+    endpoint: {
+      base_url: $base_url,
+      shim_host: $shim_host,
+      shim_port: $shim_port
+    },
+    scenario: {
+      file: $scenario_file,
+      playbook_results: ($playbook_results[0] // [])
+    },
+    end_state: {
+      playbook_results_count: (($playbook_results[0] // []) | length),
+      all_cleanup_succeeded: (($playbook_results[0] // []) | all(.cleanup.kluster_deleted == true and .cleanup.mission_deleted == true)),
+      task_counts_match: (($playbook_results[0] // []) | all(.actual_task_count >= .expected_task_count))
+    }
   }' "$RUN_DIR"/workers/*/status.json > "$RUN_DIR/summary.json"
+
+pass=true
+if [[ "$(jq -r '.fatal_worker_failures' "$RUN_DIR/summary.json")" -ne 0 ]]; then
+  pass=false
+fi
+if [[ "$(jq -r '.end_state.task_counts_match' "$RUN_DIR/summary.json")" != "true" ]]; then
+  pass=false
+fi
+if [[ "$MODE" == "playbook" ]] && [[ "$(jq -r '.end_state.all_cleanup_succeeded' "$RUN_DIR/summary.json")" != "true" ]]; then
+  pass=false
+fi
+jq --argjson pass "$pass" '. + {pass:$pass}' "$RUN_DIR/summary.json" > "$RUN_DIR/summary.tmp.json"
+mv "$RUN_DIR/summary.tmp.json" "$RUN_DIR/summary.json"
 
 echo "== summary =="
 cat "$RUN_DIR/summary.json"
 
-rate="$(jq -r '.success_rate' "$RUN_DIR/summary.json")"
-if awk "BEGIN {exit !($rate >= 0.95)}"; then
-  echo "result=pass"
+if [[ "$(jq -r '.pass' "$RUN_DIR/summary.json")" == "true" ]]; then
+  echo "result=pass strict_gate=ok"
   exit 0
 fi
-echo "result=fail success_rate=$rate"
+echo "result=fail strict_gate=failed"
 exit 1

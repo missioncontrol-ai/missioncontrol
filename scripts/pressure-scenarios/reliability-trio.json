@@ -1,0 +1,21 @@
+{
+  "name": "reliability-trio",
+  "version": "1.0.0",
+  "tasks": [
+    {
+      "title": "MCP startup resiliency validation",
+      "description": "Verify shim initialize/tools path is available and stable."
+    },
+    {
+      "title": "429 retry and backoff validation",
+      "description": "Exercise sustained mutations and ensure retry policy recovers safely."
+    },
+    {
+      "title": "Runbook and docs accuracy validation",
+      "description": "Confirm operator docs and scripts reflect observed behavior."
+    }
+  ],
+  "expected": {
+    "task_count": 3
+  }
+}

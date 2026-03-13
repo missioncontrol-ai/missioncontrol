@@ -2,7 +2,7 @@
   <img src="assets/MissionControl-Repo.clean.png" alt="MissionControl" width="100%">
 </p>
 
-# AI Mission Control - Strategic Enterprise AI Orchestration
+# Mission Control - Strategic Enterprise AI Orchestration
 
 > **The coordination layer for AI-native organizations.**
 
