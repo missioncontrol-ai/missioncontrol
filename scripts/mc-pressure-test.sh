@@ -20,6 +20,10 @@ ON_429_SLEEP_MS="${MC_PRESSURE_ON_429_SLEEP_MS:-1000}"
 TOKENS_CSV="${MC_PRESSURE_TOKENS:-}"
 REPORT_VERSION="1.0.0"
 SCENARIO_FILE="${MC_PRESSURE_SCENARIO_FILE:-$ROOT_DIR/scripts/pressure-scenarios/reliability-trio.json}"
+AGENT_STARTUP_TIMEOUT_SEC="${MC_PRESSURE_AGENT_STARTUP_TIMEOUT_SEC:-120}"
+AGENT_TOOL_TIMEOUT_SEC="${MC_PRESSURE_AGENT_TOOL_TIMEOUT_SEC:-120}"
+AGENT_ITER_SLEEP_MS="${MC_PRESSURE_AGENT_ITER_SLEEP_MS:-500}"
+AGENT_EXEC_TIMEOUT_SEC="${MC_PRESSURE_AGENT_EXEC_TIMEOUT_SEC:-300}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required" >&2
@@ -123,10 +127,10 @@ EOF
     else
       codex_args+=(--sandbox workspace-write)
     fi
-    if timeout 120 codex "${codex_args[@]}" \
+    if timeout "${AGENT_EXEC_TIMEOUT_SEC}" codex "${codex_args[@]}" \
       -c "mcp_servers.missioncontrol.command=\"$MCP_CMD\"" \
-      -c 'mcp_servers.missioncontrol.startup_timeout_sec=45' \
-      -c 'mcp_servers.missioncontrol.tool_timeout_sec=60' \
+      -c "mcp_servers.missioncontrol.startup_timeout_sec=${AGENT_STARTUP_TIMEOUT_SEC}" \
+      -c "mcp_servers.missioncontrol.tool_timeout_sec=${AGENT_TOOL_TIMEOUT_SEC}" \
       -c "mcp_servers.missioncontrol.env={MC_MCP_MODE=\"shim\",MC_DAEMON_HOST=\"$SHIM_HOST\",MC_DAEMON_PORT=\"$SHIM_PORT\",MC_FAIL_OPEN_ON_LIST=\"1\",MC_STARTUP_PREFLIGHT=\"none\",MC_BASE_URL=\"$BASE_URL\",MC_TOKEN=\"${worker_token}\"}" \
       -o "$iter_msg" "$prompt" >"$iter_log" 2>"$worker_dir/iter-${attempts}.stderr"; then
       if rg -q "RESULT: ok" "$iter_msg"; then
@@ -137,6 +141,7 @@ EOF
     else
       failures=$((failures + 1))
     fi
+    sleep "$(awk "BEGIN{printf \"%.3f\", ${AGENT_ITER_SLEEP_MS}/1000}")"
   done
 
   local end_ts
@@ -219,11 +224,11 @@ for i in $(seq 1 "$WORKERS"); do
 done
 wait
 
-startup_timeout_hits="$({ rg -n -e "MCP startup incomplete" -e "timed out after" "$RUN_DIR" -g '*.stderr' 2>/dev/null || true; } | wc -l | tr -d ' ')"
+startup_timeout_hits="$({ rg -n -e "MCP startup incomplete" -e "timed out after" "$RUN_DIR" -g '*.stderr' -g '*.txt' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 auth_config_hits="$({ rg -n -e "MC_TOKEN is required" -e "Forbidden" -e "Unauthorized" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 rate_limit_hits="$({ rg -n -e " 429" -e "error: 429" -e "URL returned error: 429" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 ownership_acl_hits="$({ rg -n -e "owner required" -e "contributor or owner required" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
-shim_transport_hits="$({ rg -n -e "MCP startup incomplete" -e "timed out after" -e "unexpected status code" -e "Connection refused" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
+shim_transport_hits="$({ rg -n -e "MCP startup incomplete" -e "timed out handshaking" -e "timed out after" -e "unexpected status code" -e "Connection refused" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' -g '*.txt' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 api_5xx_hits="$({ rg -n -e "HTTP 5[0-9][0-9]" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 scenario_assertion_hits="$({ rg -n -e "scenario_assertion" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 playbook_results_file="$RUN_DIR/playbook-results.jsonl"
