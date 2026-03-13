@@ -25,7 +25,10 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
   let onboardingManifest = '';
   let manifestUrl = '';
   let statusMessage = '';
+  let toastVisible = false;
+  let toastTimer: ReturnType<typeof setTimeout> | null = null;
   let searchInput = '';
+  let lastRefreshed = '';
 
   const hasEvents = derived(matrixEvents, ($events) => $events.length > 0);
   const lastEvent = derived(matrixEvents, ($events) => ($events.length ? $events[0] : null));
@@ -42,13 +45,20 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
     startOidcLogin();
   }
 
+  function showToast(msg: string) {
+    statusMessage = msg;
+    toastVisible = true;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastVisible = false; }, 4000);
+  }
+
   async function refreshTree() {
     try {
       const data = await fetchTree(get(token));
       tree = data;
-      statusMessage = 'Explorer refreshed';
+      lastRefreshed = new Date().toLocaleTimeString();
     } catch (err) {
-      statusMessage = err instanceof Error ? err.message : 'Failed to fetch tree';
+      showToast(err instanceof Error ? err.message : 'Failed to fetch tree');
     }
   }
 
@@ -96,6 +106,10 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
     };
   });
 
+  $: filteredMissions = (tree.missions ?? []).filter(
+    (m: any) => !searchInput || m.name?.toLowerCase().includes(searchInput.toLowerCase())
+  );
+
   const eventChunks = derived(matrixEvents, ($events) =>
     $events.map((event) => ({
       label: event.type ?? 'matrix',
@@ -113,6 +127,23 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
     flex-direction: column;
     gap: 1rem;
     padding: 1rem 2rem 2rem;
+  }
+  .toast {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    background: var(--color-error, #c0392b);
+    color: #fff;
+    padding: 0.75rem 1.25rem;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    font-size: 0.9rem;
+    z-index: 9999;
+    animation: slide-in 0.2s ease;
+  }
+  @keyframes slide-in {
+    from { transform: translateY(1rem); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
   }
 </style>
 
@@ -172,21 +203,28 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
           <div>
             <h3>Mission Tree</h3>
             <button class="ghost" on:click={refreshTree}>Refresh</button>
+            {#if lastRefreshed}<small class="muted">Updated {lastRefreshed}</small>{/if}
           </div>
-          <div class="status-chip">Search: {searchInput || 'all'}</div>
+          <input
+            bind:value={searchInput}
+            placeholder="Filter missions..."
+            style="max-width:220px"
+          />
         </div>
         <div class="grid">
           <section class="glass-panel">
-            <h4>Missions</h4>
+            <h4>Missions {filteredMissions.length > 0 ? `(${filteredMissions.length})` : ''}</h4>
             <ul>
-              {#each tree.missions ?? [] as mission}
+              {#each filteredMissions as mission}
                 <li>
                   <button class="ghost" on:click={() => (selectedNode = mission)}>
                     {mission.name}
                   </button>
                 </li>
               {:else}
-                <li>No missions yet</li>
+                <li class="muted">
+                  {searchInput ? `No missions match "${searchInput}"` : 'No missions yet — create one with mc launch'}
+                </li>
               {/each}
             </ul>
           </section>
@@ -249,8 +287,8 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
       </div>
     {/if}
 
-    {#if statusMessage}
-      <div class="glass-panel error">{statusMessage}</div>
+    {#if toastVisible && statusMessage}
+      <div class="toast" role="alert">{statusMessage}</div>
     {/if}
   </div>
 {:else}

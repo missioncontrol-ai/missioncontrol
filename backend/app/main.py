@@ -46,6 +46,7 @@ from app.routers import (
     chat_integrations,
     ops,
     profiles,
+    evolve,
 )
 
 app = FastAPI(
@@ -532,6 +533,7 @@ app.include_router(skills.router)
 app.include_router(google_chat_integrations.router)
 app.include_router(teams_integrations.router)
 app.include_router(profiles.router)
+app.include_router(evolve.router)
 app.include_router(auth_sessions.router)
 
 

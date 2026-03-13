@@ -16,6 +16,7 @@ STACK_PROFILE="${MC_STACK_PROFILE:-full}"
 UNSANDBOXED="${MC_PRESSURE_UNSANDBOXED:-0}"
 AUTOSTART_DAEMON="${MC_PRESSURE_AUTOSTART_DAEMON:-1}"
 DAEMON_PID=""
+WORKER_PIDS=()
 INTERVAL_MS="${MC_PRESSURE_INTERVAL_MS:-200}"
 ON_429_SLEEP_MS="${MC_PRESSURE_ON_429_SLEEP_MS:-1000}"
 TOKENS_CSV="${MC_PRESSURE_TOKENS:-}"
@@ -58,11 +59,15 @@ RUN_DIR="$OUT_ROOT/$RUN_ID"
 mkdir -p "$RUN_DIR/workers"
 
 cleanup() {
+  trap - EXIT INT TERM
+  if [[ "${#WORKER_PIDS[@]}" -gt 0 ]]; then
+    kill "${WORKER_PIDS[@]}" >/dev/null 2>&1 || true
+  fi
   if [[ -n "$DAEMON_PID" ]]; then
     kill "$DAEMON_PID" >/dev/null 2>&1 || true
   fi
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 collect_log_samples() {
   local pattern="$1"
@@ -154,6 +159,8 @@ Use the missioncontrol MCP server.
 EOF
     )
 
+    local iter_start_ms
+    iter_start_ms="$(date +%s%3N)"
     codex_args=(exec --json --skip-git-repo-check -C "$ROOT_DIR" -m "$MODEL")
     if [[ "$UNSANDBOXED" == "1" ]]; then
       codex_args+=(--dangerously-bypass-approvals-and-sandbox)
@@ -174,6 +181,7 @@ EOF
     else
       failures=$((failures + 1))
     fi
+    echo $(( $(date +%s%3N) - iter_start_ms )) >> "$worker_dir/latencies.txt"
     sleep "$(awk "BEGIN{printf \"%.3f\", ${AGENT_ITER_SLEEP_MS}/1000}")"
   done
 
@@ -203,10 +211,13 @@ run_playbook_worker() {
   local attempts=0
   local successes=0
   local failures=0
+  local consecutive_429s=0
 
   while [[ "$(date +%s)" -lt "$deadline" ]]; do
     attempts=$((attempts + 1))
     local err_file="$worker_dir/iter-${attempts}.stderr"
+    local iter_start_ms
+    iter_start_ms="$(date +%s%3N)"
     if MC_PLAYBOOK_RUN_ID="${RUN_ID}-w${worker_id}-i${attempts}" \
       MC_PLAYBOOK_SCENARIO_FILE="${SCENARIO_FILE}" \
       MC_BASE_URL="$BASE_URL" \
@@ -214,12 +225,29 @@ run_playbook_worker() {
       "$ROOT_DIR/scripts/mcp-validation-playbook.sh" \
       >"$worker_dir/iter-${attempts}.log" 2>"$err_file"; then
       successes=$((successes + 1))
+      consecutive_429s=0
     else
       failures=$((failures + 1))
       if rg -q " 429|error: 429|URL returned error: 429" "$err_file" 2>/dev/null; then
-        sleep "$(awk "BEGIN{printf \"%.3f\", ${ON_429_SLEEP_MS}/1000}")"
+        consecutive_429s=$((consecutive_429s + 1))
+        local retry_after
+        retry_after="$(rg -oI 'retry-after:\s*([0-9]+)' -i "$err_file" --replace '$1' 2>/dev/null | head -1 || true)"
+        local backoff_ms
+        if [[ -n "$retry_after" ]]; then
+          backoff_ms=$(( retry_after * 1000 ))
+          [[ $backoff_ms -gt 30000 ]] && backoff_ms=30000
+        else
+          local exp=$(( consecutive_429s > 5 ? 5 : consecutive_429s - 1 ))
+          local exp_ms=$(( ON_429_SLEEP_MS * (1 << exp) ))
+          [[ $exp_ms -gt 30000 ]] && exp_ms=30000
+          backoff_ms=$(( exp_ms + (RANDOM % 1000) ))
+        fi
+        sleep "$(awk "BEGIN{printf \"%.3f\", ${backoff_ms}/1000}")"
+      else
+        consecutive_429s=0
       fi
     fi
+    echo $(( $(date +%s%3N) - iter_start_ms )) >> "$worker_dir/latencies.txt"
     sleep "$(awk "BEGIN{printf \"%.3f\", ${INTERVAL_MS}/1000}")"
   done
 
@@ -254,8 +282,16 @@ for i in $(seq 1 "$WORKERS"); do
   else
     run_playbook_worker "$i" "$worker_token" &
   fi
+  WORKER_PIDS+=("$!")
 done
 wait
+
+all_latencies_json="$(cat "$RUN_DIR"/workers/*/latencies.txt 2>/dev/null \
+  | jq -Rs 'split("\n") | map(select(length > 0) | tonumber) | sort' || echo "[]")"
+latency_count=$(echo "$all_latencies_json" | jq 'length')
+latency_p50=$(echo "$all_latencies_json" | jq 'if length > 0 then .[floor(length * 0.50)] else 0 end')
+latency_p95=$(echo "$all_latencies_json" | jq 'if length > 0 then .[floor(length * 0.95)] else 0 end')
+latency_p99=$(echo "$all_latencies_json" | jq 'if length > 0 then .[floor(length * 0.99)] else 0 end')
 
 startup_timeout_hits="$({ rg -n -e "MCP startup incomplete" -e "timed out after" "$RUN_DIR" -g '*.stderr' -g '*.txt' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 auth_config_hits="$({ rg -n -e "MC_TOKEN is required" -e "Forbidden" -e "Unauthorized" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
@@ -300,6 +336,10 @@ jq -s \
   --argjson diag_shim_samples "$diag_shim_samples" \
   --argjson diag_api_samples "$diag_api_samples" \
   --argjson diag_scenario_samples "$diag_scenario_samples" \
+  --argjson latency_count "$latency_count" \
+  --argjson latency_p50 "$latency_p50" \
+  --argjson latency_p95 "$latency_p95" \
+  --argjson latency_p99 "$latency_p99" \
   --slurpfile playbook_results "$playbook_results_file" \
   '{
     report_version: $report_version,
@@ -314,9 +354,18 @@ jq -s \
     fatal_worker_failures: (map(select(.failures > 0)) | length),
     success_rate: (if (map(.attempts)|add) == 0 then 0 else ((map(.successes)|add) / (map(.attempts)|add)) end),
     startup_timeout_hits: $startup_timeout_hits,
+    latency: {
+      count: $latency_count,
+      p50_ms: $latency_p50,
+      p95_ms: $latency_p95,
+      p99_ms: $latency_p99
+    },
     metrics: {
       startup_timeout_hits: $startup_timeout_hits,
-      rate_limit_hits: $rate_limit_hits
+      rate_limit_hits: $rate_limit_hits,
+      latency_p50_ms: $latency_p50,
+      latency_p95_ms: $latency_p95,
+      latency_p99_ms: $latency_p99
     },
     failures_by_category: {
       auth_config: $auth_config_hits,

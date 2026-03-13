@@ -5,7 +5,7 @@ use crate::{
     client::MissionControlClient,
     config::McConfig,
     daemon::{self, DaemonArgs},
-    governance, launch, maintenance, mcp_tools, ops, remote,
+    evolve, governance, launch, maintenance, mcp_tools, ops, remote,
     schema_pack::SchemaPack,
     update,
 };
@@ -54,6 +54,8 @@ pub enum McCommand {
     Daemon(DaemonArgs),
     /// Launch an agent with a fully wired MissionControl harness.
     Launch(launch::LaunchArgs),
+    /// Self-improvement loop — run agents against MC's own backlog to evolve the codebase.
+    Evolve(evolve::EvolveArgs),
     /// Authenticate and create a session token stored at ~/.missioncontrol/session.json.
     Login(auth::LoginArgs),
     /// Revoke the current session token and clear local credentials.
@@ -301,6 +303,7 @@ pub async fn run(
         McCommand::Update(cmd) => update::run(cmd, &config).await,
         McCommand::Daemon(args) => daemon::run(&args, &client, ctx).await,
         McCommand::Launch(args) => launch::run(args, &client, &config).await,
+        McCommand::Evolve(args) => evolve::run(args, &client).await,
         McCommand::Login(args) => auth::login(args, &client, config.base_url.as_str()).await,
         McCommand::Logout(args) => auth::logout(args, &client).await,
         McCommand::Whoami(_) => auth::whoami(&client).await,
