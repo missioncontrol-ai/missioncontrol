@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE_URL="${MC_BASE_URL:-http://localhost:8008}"
 TOKEN="${MC_TOKEN:-}"
-ACTOR="${MC_PLAYBOOK_ACTOR:-ops@example.com}"
+ACTOR="${MC_PLAYBOOK_ACTOR:-token-client}"
 RUN_ID="${MC_PLAYBOOK_RUN_ID:-$(date +%Y%m%d%H%M%S)}"
 
 if [[ -z "$TOKEN" ]]; then
@@ -13,24 +13,68 @@ fi
 
 API_AUTH=(-H "Authorization: Bearer ${TOKEN}")
 JSON_HDR=(-H "Content-Type: application/json")
+HTTP_RETRIES="${MC_PLAYBOOK_HTTP_RETRIES:-4}"
+HTTP_RETRY_SLEEP_SEC="${MC_PLAYBOOK_HTTP_RETRY_SLEEP_SEC:-0.5}"
+HTTP_RETRY_MAX_SLEEP_SEC="${MC_PLAYBOOK_HTTP_RETRY_MAX_SLEEP_SEC:-5}"
+
+http_request() {
+  local method="$1"
+  local url="$2"
+  local data="${3:-}"
+  local attempt=1
+  local max_attempts="$HTTP_RETRIES"
+  if [[ "$max_attempts" -lt 1 ]]; then
+    max_attempts=1
+  fi
+  while true; do
+    local response http_code body hdr_file retry_after next_sleep
+    hdr_file="$(mktemp)"
+    if [[ -n "$data" ]]; then
+      response="$(curl -sS -D "$hdr_file" "${API_AUTH[@]}" "${JSON_HDR[@]}" -X "$method" "$url" -d "$data" -w $'\n%{http_code}')"
+    else
+      response="$(curl -sS -D "$hdr_file" "${API_AUTH[@]}" -X "$method" "$url" -w $'\n%{http_code}')"
+    fi
+    http_code="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+      printf '%s' "$body"
+      rm -f "$hdr_file"
+      return 0
+    fi
+    if [[ "$http_code" == "429" || "$http_code" =~ ^5[0-9][0-9]$ ]]; then
+      if [[ "$attempt" -lt "$max_attempts" ]]; then
+        retry_after="$(awk 'BEGIN{IGNORECASE=1} /^retry-after:/ {gsub("\r","",$2); print $2; exit}' "$hdr_file" 2>/dev/null || true)"
+        if [[ -n "$retry_after" && "$retry_after" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+          sleep "$retry_after"
+        else
+          next_sleep="$(awk "BEGIN{v=${HTTP_RETRY_SLEEP_SEC} * (2^(${attempt}-1)); if (v>${HTTP_RETRY_MAX_SLEEP_SEC}) v=${HTTP_RETRY_MAX_SLEEP_SEC}; printf \"%.3f\", v}")"
+          sleep "$next_sleep"
+        fi
+        attempt=$((attempt + 1))
+        rm -f "$hdr_file"
+        continue
+      fi
+    fi
+    echo "HTTP ${http_code}: ${url}" >&2
+    if [[ -n "$body" ]]; then
+      echo "$body" >&2
+    fi
+    rm -f "$hdr_file"
+    return 22
+  done
+}
 
 mcp_call() {
   local tool="$1"
   local args_json="$2"
-  curl -fsS "${API_AUTH[@]}" "${JSON_HDR[@]}" \
-    -X POST "${BASE_URL}/mcp/call" \
-    -d "{\"tool\":\"${tool}\",\"args\":${args_json}}"
+  http_request "POST" "${BASE_URL}/mcp/call" "{\"tool\":\"${tool}\",\"args\":${args_json}}"
 }
 
 api_call() {
   local method="$1"
   local path="$2"
   local payload="${3:-}"
-  if [[ -n "$payload" ]]; then
-    curl -fsS "${API_AUTH[@]}" "${JSON_HDR[@]}" -X "$method" "${BASE_URL}${path}" -d "$payload"
-  else
-    curl -fsS "${API_AUTH[@]}" -X "$method" "${BASE_URL}${path}"
-  fi
+  http_request "$method" "${BASE_URL}${path}" "$payload"
 }
 
 assert_ok() {

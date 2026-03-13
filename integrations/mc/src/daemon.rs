@@ -29,6 +29,10 @@ pub struct DaemonArgs {
     #[arg(long, default_value = "/events/stream")]
     pub matrix_endpoint: String,
 
+    /// Disable matrix SSE stream and run shim API only.
+    #[arg(long, env = "MC_DISABLE_MATRIX", default_value_t = false)]
+    pub disable_matrix: bool,
+
     /// Optional MQTT broker URL the daemon will keep alive while syncing.
     #[arg(long)]
     pub mqtt_url: Option<String>,
@@ -213,6 +217,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     info!(
         matrix = %args.matrix_endpoint,
+        matrix_enabled = !args.disable_matrix,
         agent_id = ?ctx.agent_id,
         shim_host = %args.shim_host,
         shim_port = args.shim_port,
@@ -254,12 +259,19 @@ pub async fn run(
     );
     let shim_task = tokio::spawn(start_shim_api(shim_addr, shim_state));
 
-    tokio::select! {
-        stream_res = stream_matrix_events(client.clone(), &args.matrix_endpoint, tx) => stream_res,
-        shim_res = shim_task => {
-            match shim_res {
-                Ok(server_res) => server_res,
-                Err(join_err) => Err(anyhow::anyhow!("shim api task failed: {join_err}")),
+    if args.disable_matrix {
+        match shim_task.await {
+            Ok(server_res) => server_res,
+            Err(join_err) => Err(anyhow::anyhow!("shim api task failed: {join_err}")),
+        }
+    } else {
+        tokio::select! {
+            stream_res = stream_matrix_events(client.clone(), &args.matrix_endpoint, tx) => stream_res,
+            shim_res = shim_task => {
+                match shim_res {
+                    Ok(server_res) => server_res,
+                    Err(join_err) => Err(anyhow::anyhow!("shim api task failed: {join_err}")),
+                }
             }
         }
     }
@@ -459,17 +471,22 @@ async fn shim_initialize(
         return resp;
     }
 
-    let prefetch = state.clone();
-    tokio::spawn(async move {
-        if let Err(err) = prefetch.refresh_tools().await {
-            warn!(error = %err, "shim initialize prefetch failed");
-        }
-    });
+    let (ready, cache_age_sec) = state.ready_state().await;
+    let mut preflight_started = false;
+    if !ready {
+        let prefetch = state.clone();
+        preflight_started = true;
+        tokio::spawn(async move {
+            if let Err(err) = prefetch.refresh_tools().await {
+                warn!(error = %err, category = classify_error_category(&err), "shim initialize prefetch failed");
+            }
+        });
+    }
 
     Json(serde_json::json!({
         "ok": true,
-        "preflight_started": true,
-        "cache_age_sec": serde_json::Value::Null
+        "preflight_started": preflight_started,
+        "cache_age_sec": cache_age_sec
     }))
     .into_response()
 }

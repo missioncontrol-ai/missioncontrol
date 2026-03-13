@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OUT_ROOT="${MC_PRESSURE_OUT_ROOT:-$ROOT_DIR/artifacts/pressure}"
+RUN_ID="${MC_PRESSURE_RUN_ID:-$(date +%Y%m%d%H%M%S)}"
+MODE="${MC_PRESSURE_MODE:-agent}" # agent | playbook
+WORKERS="${MC_PRESSURE_WORKERS:-10}"
+DURATION_SEC="${MC_PRESSURE_DURATION_SEC:-600}"
+MODEL="${MC_PRESSURE_MODEL:-gpt-5.1-codex-mini}"
+BASE_URL="${MC_BASE_URL:-http://localhost:8008}"
+MCP_CMD="${MC_PRESSURE_MCP_COMMAND:-missioncontrol-mcp}"
+SHIM_HOST="${MC_DAEMON_HOST:-127.0.0.1}"
+SHIM_PORT="${MC_DAEMON_PORT:-8765}"
+UNSANDBOXED="${MC_PRESSURE_UNSANDBOXED:-0}"
+AUTOSTART_DAEMON="${MC_PRESSURE_AUTOSTART_DAEMON:-1}"
+DAEMON_PID=""
+INTERVAL_MS="${MC_PRESSURE_INTERVAL_MS:-200}"
+ON_429_SLEEP_MS="${MC_PRESSURE_ON_429_SLEEP_MS:-1000}"
+TOKENS_CSV="${MC_PRESSURE_TOKENS:-}"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required" >&2
+  exit 1
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  echo "curl is required" >&2
+  exit 1
+fi
+if [[ -z "${MC_TOKEN:-}" ]]; then
+  echo "MC_TOKEN is required" >&2
+  exit 2
+fi
+
+if [[ "$MODE" == "agent" ]] && ! command -v codex >/dev/null 2>&1; then
+  echo "codex is required for MC_PRESSURE_MODE=agent" >&2
+  exit 1
+fi
+if [[ "$MODE" == "agent" ]] && ! command -v timeout >/dev/null 2>&1; then
+  echo "timeout is required for MC_PRESSURE_MODE=agent" >&2
+  exit 1
+fi
+
+mkdir -p "$OUT_ROOT"
+RUN_DIR="$OUT_ROOT/$RUN_ID"
+mkdir -p "$RUN_DIR/workers"
+
+cleanup() {
+  if [[ -n "$DAEMON_PID" ]]; then
+    kill "$DAEMON_PID" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+echo "== MC pressure test =="
+echo "run_id=$RUN_ID"
+echo "mode=$MODE workers=$WORKERS duration_sec=$DURATION_SEC model=$MODEL"
+echo "base_url=$BASE_URL shim=${SHIM_HOST}:${SHIM_PORT}"
+echo "out_dir=$RUN_DIR"
+
+echo "== preflight checks =="
+if ! curl -fsS "http://${SHIM_HOST}:${SHIM_PORT}/v1/health" >/dev/null 2>&1; then
+  if [[ "$AUTOSTART_DAEMON" == "1" ]]; then
+    if ! command -v mc >/dev/null 2>&1; then
+      echo "mc is required when MC_PRESSURE_AUTOSTART_DAEMON=1" >&2
+      exit 1
+    fi
+    echo "shim not reachable; auto-starting mc daemon"
+    MC_BASE_URL="$BASE_URL" MC_TOKEN="${MC_TOKEN}" \
+      mc daemon --disable-matrix --shim-host "$SHIM_HOST" --shim-port "$SHIM_PORT" \
+      >"$RUN_DIR/mc-daemon.log" 2>&1 &
+    DAEMON_PID="$!"
+    for _ in $(seq 1 40); do
+      if curl -fsS "http://${SHIM_HOST}:${SHIM_PORT}/v1/health" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 0.25
+    done
+  fi
+fi
+curl -fsS -H "Authorization: Bearer ${MC_TOKEN}" "$BASE_URL/mcp/health" >/dev/null
+curl -fsS "http://${SHIM_HOST}:${SHIM_PORT}/v1/health" >/dev/null
+echo "preflight=ok"
+
+run_agent_worker() {
+  local worker_id="$1"
+  local worker_token="$2"
+  local worker_dir="$RUN_DIR/workers/agent-${worker_id}"
+  mkdir -p "$worker_dir"
+  local status_file="$worker_dir/status.json"
+  local start_ts
+  start_ts="$(date +%s)"
+  local deadline=$((start_ts + DURATION_SEC))
+  local attempts=0
+  local successes=0
+  local failures=0
+
+  while [[ "$(date +%s)" -lt "$deadline" ]]; do
+    attempts=$((attempts + 1))
+    local iter_log="$worker_dir/iter-${attempts}.jsonl"
+    local iter_msg="$worker_dir/iter-${attempts}.txt"
+    local prompt
+    prompt=$(
+      cat <<EOF
+You are pressure-test worker ${worker_id} run ${RUN_ID} attempt ${attempts}.
+Use the missioncontrol MCP server.
+1) Validate MCP connectivity by querying missioncontrol MCP resources/templates.
+2) If missioncontrol MCP connects successfully, return RESULT: ok even when no resources are exposed.
+3) If write/read resources are available, execute one write action and one read action.
+4) End with exactly one line: RESULT: ok | RESULT: fail
+EOF
+    )
+
+    codex_args=(exec --json --skip-git-repo-check -C "$ROOT_DIR" -m "$MODEL")
+    if [[ "$UNSANDBOXED" == "1" ]]; then
+      codex_args+=(--dangerously-bypass-approvals-and-sandbox)
+    else
+      codex_args+=(--sandbox workspace-write)
+    fi
+    if timeout 120 codex "${codex_args[@]}" \
+      -c "mcp_servers.missioncontrol.command=\"$MCP_CMD\"" \
+      -c 'mcp_servers.missioncontrol.startup_timeout_sec=45' \
+      -c 'mcp_servers.missioncontrol.tool_timeout_sec=60' \
+      -c "mcp_servers.missioncontrol.env={MC_MCP_MODE=\"shim\",MC_DAEMON_HOST=\"$SHIM_HOST\",MC_DAEMON_PORT=\"$SHIM_PORT\",MC_FAIL_OPEN_ON_LIST=\"1\",MC_STARTUP_PREFLIGHT=\"none\",MC_BASE_URL=\"$BASE_URL\",MC_TOKEN=\"${worker_token}\"}" \
+      -o "$iter_msg" "$prompt" >"$iter_log" 2>"$worker_dir/iter-${attempts}.stderr"; then
+      if rg -q "RESULT: ok" "$iter_msg"; then
+        successes=$((successes + 1))
+      else
+        failures=$((failures + 1))
+      fi
+    else
+      failures=$((failures + 1))
+    fi
+  done
+
+  local end_ts
+  end_ts="$(date +%s)"
+  jq -n \
+    --arg worker_id "$worker_id" \
+    --arg mode "$MODE" \
+    --argjson attempts "$attempts" \
+    --argjson successes "$successes" \
+    --argjson failures "$failures" \
+    --argjson start_ts "$start_ts" \
+    --argjson end_ts "$end_ts" \
+    '{worker_id:$worker_id,mode:$mode,attempts:$attempts,successes:$successes,failures:$failures,start_ts:$start_ts,end_ts:$end_ts}' \
+    > "$status_file"
+}
+
+run_playbook_worker() {
+  local worker_id="$1"
+  local worker_token="$2"
+  local worker_dir="$RUN_DIR/workers/playbook-${worker_id}"
+  mkdir -p "$worker_dir"
+  local status_file="$worker_dir/status.json"
+  local start_ts
+  start_ts="$(date +%s)"
+  local deadline=$((start_ts + DURATION_SEC))
+  local attempts=0
+  local successes=0
+  local failures=0
+
+  while [[ "$(date +%s)" -lt "$deadline" ]]; do
+    attempts=$((attempts + 1))
+    local err_file="$worker_dir/iter-${attempts}.stderr"
+    if MC_PLAYBOOK_RUN_ID="${RUN_ID}-w${worker_id}-i${attempts}" \
+      MC_BASE_URL="$BASE_URL" \
+      MC_TOKEN="${worker_token}" \
+      "$ROOT_DIR/scripts/mcp-validation-playbook.sh" \
+      >"$worker_dir/iter-${attempts}.log" 2>"$err_file"; then
+      successes=$((successes + 1))
+    else
+      failures=$((failures + 1))
+      if rg -q " 429|error: 429|URL returned error: 429" "$err_file" 2>/dev/null; then
+        sleep "$(awk "BEGIN{printf \"%.3f\", ${ON_429_SLEEP_MS}/1000}")"
+      fi
+    fi
+    sleep "$(awk "BEGIN{printf \"%.3f\", ${INTERVAL_MS}/1000}")"
+  done
+
+  local end_ts
+  end_ts="$(date +%s)"
+  jq -n \
+    --arg worker_id "$worker_id" \
+    --arg mode "$MODE" \
+    --argjson attempts "$attempts" \
+    --argjson successes "$successes" \
+    --argjson failures "$failures" \
+    --argjson start_ts "$start_ts" \
+    --argjson end_ts "$end_ts" \
+    '{worker_id:$worker_id,mode:$mode,attempts:$attempts,successes:$successes,failures:$failures,start_ts:$start_ts,end_ts:$end_ts}' \
+    > "$status_file"
+}
+
+IFS=',' read -r -a token_list <<< "$TOKENS_CSV"
+token_count="${#token_list[@]}"
+for i in $(seq 1 "$WORKERS"); do
+  worker_token="${MC_TOKEN:-}"
+  if [[ "$token_count" -gt 0 && -n "${token_list[0]}" ]]; then
+    idx=$(( (i - 1) % token_count ))
+    worker_token="$(echo "${token_list[$idx]}" | xargs)"
+  fi
+  if [[ -z "$worker_token" ]]; then
+    echo "worker $i has empty token; set MC_TOKEN or MC_PRESSURE_TOKENS" >&2
+    exit 2
+  fi
+  if [[ "$MODE" == "agent" ]]; then
+    run_agent_worker "$i" "$worker_token" &
+  else
+    run_playbook_worker "$i" "$worker_token" &
+  fi
+done
+wait
+
+jq -s \
+  --arg run_id "$RUN_ID" \
+  --arg mode "$MODE" \
+  --arg model "$MODEL" \
+  --argjson startup_timeout_hits "$(rg -n -e \"MCP startup incomplete\" -e \"timed out after\" \"$RUN_DIR\" -g '*.stderr' 2>/dev/null | wc -l | tr -d ' ')" \
+  '{
+    run_id: $run_id,
+    mode: $mode,
+    model: $model,
+    workers: length,
+    attempts: (map(.attempts)|add),
+    successes: (map(.successes)|add),
+    failures: (map(.failures)|add),
+    success_rate: (if (map(.attempts)|add) == 0 then 0 else ((map(.successes)|add) / (map(.attempts)|add)) end),
+    startup_timeout_hits: $startup_timeout_hits
+  }' "$RUN_DIR"/workers/*/status.json > "$RUN_DIR/summary.json"
+
+echo "== summary =="
+cat "$RUN_DIR/summary.json"
+
+rate="$(jq -r '.success_rate' "$RUN_DIR/summary.json")"
+if awk "BEGIN {exit !($rate >= 0.95)}"; then
+  echo "result=pass"
+  exit 0
+fi
+echo "result=fail success_rate=$rate"
+exit 1

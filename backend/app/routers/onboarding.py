@@ -29,7 +29,7 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 def build_agent_onboarding_manifest(base_url: str) -> dict:
-    integration_contract_version = "1.0.0"
+    integration_contract_version = "1.1.0"
     resolved_base_url = _normalize_base_url(base_url)
     default_base_urls = _dedupe(
         [
@@ -39,6 +39,19 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
         ]
     )
     mcp_env = {
+        "MC_MCP_MODE": "shim",
+        "MC_DAEMON_HOST": "127.0.0.1",
+        "MC_DAEMON_PORT": "8765",
+        "MC_FAIL_OPEN_ON_LIST": "1",
+        "MC_BASE_URL": resolved_base_url,
+        "MC_BASE_URLS": ",".join(default_base_urls),
+        "MC_TOKEN": "${MC_TOKEN}",
+        "MC_STARTUP_PREFLIGHT": "none",
+        "MC_HTTP_TIMEOUT_SEC": "20",
+        "MC_HTTP_RETRIES": "2",
+        "MC_HTTP_RETRY_BACKOFF_MS": "250",
+    }
+    legacy_mcp_env = {
         "MC_BASE_URL": resolved_base_url,
         "MC_BASE_URLS": ",".join(default_base_urls),
         "MC_TOKEN": "${MC_TOKEN}",
@@ -76,6 +89,11 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
             "command": "missioncontrol-mcp",
             "env": mcp_env,
         },
+        "legacy_mcp_server": {
+            "name": "missioncontrol",
+            "command": "missioncontrol-mcp",
+            "env": legacy_mcp_env,
+        },
         "agent_configs": {
             "claude_code": {
                 "missioncontrol": {
@@ -111,10 +129,11 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
         },
         "notes": [
             "Set MC_TOKEN in your shell before launching agent tools.",
+            "Run mc daemon before launching agents so MCP shim traffic stays on the Rust control plane.",
             "Set the activation endpoint to your MissionControl instance before copying configs.",
             "Public distribution repo: https://github.com/missioncontrol-ai/mc-integration",
             "Use missioncontrol-explorer for inline terminal tree views.",
-            "MCP transport can be used directly via missioncontrol-mcp bridge.",
+            "missioncontrol-mcp is configured in shim mode by default; use legacy_mcp_server for direct mode only.",
         ],
     }
 

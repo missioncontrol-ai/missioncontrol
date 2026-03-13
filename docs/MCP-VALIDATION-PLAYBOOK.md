@@ -12,6 +12,41 @@ This playbook runs a live lifecycle validation against MissionControl using MCP 
 - Load/commit/release kluster workspace (MCP)
 - Cleanup attempt (delete kluster/mission)
 
+## Pressure Harness (multi-agent)
+
+For concurrent pressure tests against the Rust `mc daemon` shim path, use:
+
+`scripts/mc-pressure-test.sh`
+
+Defaults:
+
+- mode: `agent`
+- workers: `10`
+- duration: `600` seconds
+- model: `gpt-5.1-codex-mini`
+
+Required env:
+
+- `MC_BASE_URL`
+- `MC_TOKEN`
+- local shim must be reachable at `MC_DAEMON_HOST:MC_DAEMON_PORT` (defaults `127.0.0.1:8765`)
+
+Example:
+
+```bash
+export MC_BASE_URL=http://localhost:8008
+export MC_TOKEN="<token>"
+MC_PRESSURE_MODE=agent MC_PRESSURE_WORKERS=10 MC_PRESSURE_DURATION_SEC=600 \
+scripts/mc-pressure-test.sh
+```
+
+Deterministic baseline mode (no Codex workers):
+
+```bash
+MC_PRESSURE_MODE=playbook MC_PRESSURE_WORKERS=10 MC_PRESSURE_DURATION_SEC=600 \
+scripts/mc-pressure-test.sh
+```
+
 ## Script
 
 `scripts/mcp-validation-playbook.sh`
