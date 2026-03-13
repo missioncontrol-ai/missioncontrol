@@ -21,7 +21,7 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
   let selectedNode: any = null;
   let policy: PolicySummary | null = null;
   let policyEvents: any[] = [];
-  let onboardingEndpoint = 'https://mc-dev.merlinlabs.cloud';
+  let onboardingEndpoint = 'https://mc.missioncontrolai.app';
   let onboardingManifest = '';
   let manifestUrl = '';
   let statusMessage = '';

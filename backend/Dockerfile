@@ -13,7 +13,7 @@ ENV PYTHONUNBUFFERED=1 \
     MC_OBJECT_STORAGE_ACCESS_SECRET=
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates curl \
     && groupadd --gid 3000 missioncontrol \
     && useradd --uid 3000 --gid 3000 --create-home --shell /usr/sbin/nologin missioncontrol \
     && rm -rf /var/lib/apt/lists/*

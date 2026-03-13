@@ -219,15 +219,16 @@ for i in $(seq 1 "$WORKERS"); do
 done
 wait
 
-startup_timeout_hits="$(rg -n -e "MCP startup incomplete" -e "timed out after" "$RUN_DIR" -g '*.stderr' 2>/dev/null | wc -l | tr -d ' ')"
-auth_config_hits="$(rg -n -e "MC_TOKEN is required" -e "Forbidden" -e "Unauthorized" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null | wc -l | tr -d ' ')"
-rate_limit_hits="$(rg -n -e " 429" -e "error: 429" -e "URL returned error: 429" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null | wc -l | tr -d ' ')"
-ownership_acl_hits="$(rg -n -e "owner required" -e "contributor or owner required" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null | wc -l | tr -d ' ')"
-shim_transport_hits="$(rg -n -e "MCP startup incomplete" -e "timed out after" -e "unexpected status code" -e "Connection refused" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null | wc -l | tr -d ' ')"
-api_5xx_hits="$(rg -n -e "HTTP 5[0-9][0-9]" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null | wc -l | tr -d ' ')"
-scenario_assertion_hits="$(rg -n -e "scenario_assertion" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null | wc -l | tr -d ' ')"
+startup_timeout_hits="$({ rg -n -e "MCP startup incomplete" -e "timed out after" "$RUN_DIR" -g '*.stderr' 2>/dev/null || true; } | wc -l | tr -d ' ')"
+auth_config_hits="$({ rg -n -e "MC_TOKEN is required" -e "Forbidden" -e "Unauthorized" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
+rate_limit_hits="$({ rg -n -e " 429" -e "error: 429" -e "URL returned error: 429" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
+ownership_acl_hits="$({ rg -n -e "owner required" -e "contributor or owner required" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
+shim_transport_hits="$({ rg -n -e "MCP startup incomplete" -e "timed out after" -e "unexpected status code" -e "Connection refused" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
+api_5xx_hits="$({ rg -n -e "HTTP 5[0-9][0-9]" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
+scenario_assertion_hits="$({ rg -n -e "scenario_assertion" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 playbook_results_file="$RUN_DIR/playbook-results.jsonl"
-rg -Noh 'PLAYBOOK_RESULT_JSON=\K.*' "$RUN_DIR/workers" -g '*.log' > "$playbook_results_file" || true
+{ rg --no-heading -n "PLAYBOOK_RESULT_JSON=" "$RUN_DIR/workers" -g '*.log' 2>/dev/null || true; } \
+  | sed 's/^.*PLAYBOOK_RESULT_JSON=//' > "$playbook_results_file"
 
 jq -s \
   --arg report_version "$REPORT_VERSION" \
@@ -278,12 +279,12 @@ jq -s \
     },
     scenario: {
       file: $scenario_file,
-      playbook_results: ($playbook_results[0] // [])
+      playbook_results: ($playbook_results // [])
     },
     end_state: {
-      playbook_results_count: (($playbook_results[0] // []) | length),
-      all_cleanup_succeeded: (($playbook_results[0] // []) | all(.cleanup.kluster_deleted == true and .cleanup.mission_deleted == true)),
-      task_counts_match: (($playbook_results[0] // []) | all(.actual_task_count >= .expected_task_count))
+      playbook_results_count: (($playbook_results // []) | length),
+      all_cleanup_succeeded: (($playbook_results // []) | all(.cleanup.kluster_deleted == true and .cleanup.mission_deleted == true)),
+      task_counts_match: (($playbook_results // []) | all(.actual_task_count >= .expected_task_count))
     }
   }' "$RUN_DIR"/workers/*/status.json > "$RUN_DIR/summary.json"
 
@@ -295,6 +296,9 @@ if [[ "$(jq -r '.end_state.task_counts_match' "$RUN_DIR/summary.json")" != "true
   pass=false
 fi
 if [[ "$MODE" == "playbook" ]] && [[ "$(jq -r '.end_state.all_cleanup_succeeded' "$RUN_DIR/summary.json")" != "true" ]]; then
+  pass=false
+fi
+if [[ "$MODE" == "playbook" ]] && [[ "$(jq -r '.end_state.playbook_results_count' "$RUN_DIR/summary.json")" -eq 0 ]]; then
   pass=false
 fi
 jq --argjson pass "$pass" '. + {pass:$pass}' "$RUN_DIR/summary.json" > "$RUN_DIR/summary.tmp.json"
