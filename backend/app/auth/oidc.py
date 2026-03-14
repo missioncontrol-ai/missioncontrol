@@ -30,20 +30,24 @@ class OidcValidator:
         jwks_url: str | None = None,
         metadata_ttl_seconds: int = 3600,
     ):
-        self.issuer_url = issuer_url.rstrip("/")
+        self.issuer_url = issuer_url.strip()
         self.audience = audience
         self._explicit_jwks_url = jwks_url
         self._metadata_ttl_seconds = metadata_ttl_seconds
         self._metadata_expiry = 0.0
         self._cached_jwks_url: str | None = jwks_url
-        self._jwk_client: PyJWKClient | None = PyJWKClient(jwks_url) if jwks_url else None
+        self._http_headers = {"User-Agent": "MissionControl-OIDC/1.0 (+https://missioncontrolai.app)"}
+        self._jwk_client: PyJWKClient | None = (
+            PyJWKClient(jwks_url, headers=self._http_headers) if jwks_url else None
+        )
 
     def _openid_config_url(self) -> str:
-        return urljoin(f"{self.issuer_url}/", ".well-known/openid-configuration")
+        return urljoin(f"{self.issuer_url.rstrip('/')}/", ".well-known/openid-configuration")
 
     def _load_openid_config(self) -> dict:
         url = self._openid_config_url()
-        with request.urlopen(url, timeout=10) as response:
+        req = request.Request(url, headers=self._http_headers)
+        with request.urlopen(req, timeout=10) as response:
             payload = response.read().decode("utf-8")
             return json.loads(payload)
 
@@ -67,19 +71,34 @@ class OidcValidator:
     def _get_jwk_client(self) -> PyJWKClient:
         jwks_url = self._get_jwks_url()
         if self._jwk_client is None or self._jwk_client.uri != jwks_url:
-            self._jwk_client = PyJWKClient(jwks_url)
+            self._jwk_client = PyJWKClient(jwks_url, headers=self._http_headers)
         return self._jwk_client
 
     def validate_token(self, token: str) -> OidcPrincipal:
+        issuer_candidates = [self.issuer_url]
+        if self.issuer_url.endswith("/"):
+            issuer_candidates.append(self.issuer_url.rstrip("/"))
+        else:
+            issuer_candidates.append(f"{self.issuer_url}/")
+        issuer_candidates = [item for item in issuer_candidates if item]
+        last_exc: Exception | None = None
         try:
             signing_key = self._get_jwk_client().get_signing_key_from_jwt(token)
-            claims = jwt.decode(
-                token,
-                signing_key.key,
-                algorithms=["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"],
-                audience=self.audience,
-                issuer=self.issuer_url,
-            )
+            claims = None
+            for issuer in issuer_candidates:
+                try:
+                    claims = jwt.decode(
+                        token,
+                        signing_key.key,
+                        algorithms=["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"],
+                        audience=self.audience,
+                        issuer=issuer,
+                    )
+                    break
+                except InvalidTokenError as exc:
+                    last_exc = exc
+            if claims is None:
+                raise OidcValidationError("oidc_validation_failed", str(last_exc or "OIDC token validation failed"))
         except OidcValidationError:
             raise
         except InvalidTokenError as exc:

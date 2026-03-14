@@ -2,7 +2,7 @@
 set -euo pipefail
 
 MC_BASE_URL="${MC_BASE_URL:-https://missioncontrol.hartley-neon.ts.net}"
-MC_TOKEN="${MC_TOKEN:-Change-Now-Socrates-Plato-Aristotle-Aurelius}"
+MC_TOKEN="${MC_TOKEN:-TopSecret}"
 MC_PIPX_SPEC="${MC_PIPX_SPEC:-git+ssh://git@github.com/missioncontrol-ai/missioncontrol.git#subdirectory=distribution/missioncontrol-mcp}"
 
 if ! command -v python3 >/dev/null 2>&1; then

@@ -14,11 +14,27 @@ OIDC_REQUIRED=false
 MC_TOKEN=<static-token-for-mcp>
 OIDC_ISSUER_URL=https://<authentik-host>/application/o/<provider-slug>/
 OIDC_AUDIENCE=<oidc-client-id>
+OIDC_CLIENT_ID=<oidc-client-id>
+OIDC_CLIENT_SECRET=<optional-for-confidential-clients>
+OIDC_REDIRECT_URI=https://<mc-host>/auth/oidc/callback
+OIDC_SCOPES=openid profile email
 MC_ADMIN_SUBJECTS=<comma-separated-subjects>
 MC_ADMIN_EMAILS=<comma-separated-emails>
 # optional
 # OIDC_JWKS_URL=https://<authentik-host>/application/o/<provider-slug>/jwks/
 ```
+
+## Browser login flow (production)
+
+MissionControl web login uses backend PKCE flow:
+
+1. Browser sends user to `GET /auth/oidc/start`.
+2. MissionControl redirects to IdP authorize endpoint with PKCE challenge.
+3. IdP returns to `GET /auth/oidc/callback`.
+4. MissionControl exchanges auth code, validates token, and issues one-time grant.
+5. Browser calls `POST /auth/oidc/exchange` to receive `mcs_*` session token.
+
+The web UI should treat OIDC as primary and static token login as testing fallback.
 
 Modes:
 - `AUTH_MODE=token`: static bearer token only.

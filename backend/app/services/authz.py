@@ -112,6 +112,8 @@ def assert_mission_reader_or_admin(*, session: Session, request: Request | None,
         raise HTTPException(status_code=404, detail="Mission not found")
     if is_platform_admin(request):
         return mission
+    if str(mission.visibility or "").strip().lower() == "public":
+        return mission
     identities = normalized_principal_identities(request)
     if not identities:
         raise HTTPException(status_code=403, detail="Forbidden: mission viewer, contributor, or owner required")
@@ -131,11 +133,14 @@ def assert_mission_reader_or_admin(*, session: Session, request: Request | None,
 def readable_mission_ids_for_request(*, session: Session, request: Request | None) -> set[str]:
     if is_platform_admin(request):
         return {mission_id for mission_id in session.exec(select(Mission.id)).all() if mission_id}
+    readable_ids: set[str] = {
+        mission_id
+        for mission_id in session.exec(select(Mission.id).where(Mission.visibility.ilike("public"))).all()
+        if mission_id
+    }
     identities = normalized_principal_identities(request)
     if not identities:
-        return set()
-
-    readable_ids: set[str] = set()
+        return readable_ids
     role_rows = session.exec(
         select(MissionRoleMembership)
         .where(MissionRoleMembership.subject.in_(list(identities)))

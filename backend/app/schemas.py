@@ -606,3 +606,52 @@ class UserProfileRead(BaseModel):
 
 class UserProfileDownloadRead(UserProfileRead):
     tarball_b64: str
+
+
+class AiSessionCreate(BaseModel):
+    title: str = ""
+
+
+class AiTurnCreate(BaseModel):
+    message: str
+
+
+class AiTurnRead(BaseModel):
+    id: int
+    role: str
+    content: dict
+    created_at: datetime
+
+
+class AiEventRead(BaseModel):
+    id: int
+    turn_id: Optional[int] = None
+    event_type: str
+    payload: dict
+    created_at: datetime
+
+
+class AiPendingActionRead(BaseModel):
+    id: str
+    tool: str
+    args: dict
+    reason: str
+    status: str
+    requested_by: str
+    approved_by: str
+    rejected_by: str
+    rejection_note: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AiSessionRead(BaseModel):
+    id: str
+    owner_subject: str
+    title: str
+    status: str
+    turns: List[AiTurnRead] = Field(default_factory=list)
+    events: List[AiEventRead] = Field(default_factory=list)
+    pending_actions: List[AiPendingActionRead] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime

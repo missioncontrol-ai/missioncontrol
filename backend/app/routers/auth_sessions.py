@@ -41,6 +41,33 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def issue_session_token(*, subject: str, user_agent: str = "", ttl_hours: int | None = None) -> "SessionResponse":
+    ttl = max(1, min(_MAX_TTL_HOURS, int(ttl_hours or _ttl_hours())))
+    token = _make_token()
+    token_hash = _hash_token(token)
+    expires_at = datetime.utcnow() + timedelta(hours=ttl)
+    session_row = UserSession(
+        subject=subject,
+        token_hash=token_hash,
+        token_prefix=token[:12],
+        expires_at=expires_at,
+        user_agent=(user_agent or "")[:512],
+    )
+    with get_session() as db:
+        db.add(session_row)
+        db.commit()
+        db.refresh(session_row)
+        session_id = session_row.id
+
+    return SessionResponse(
+        token=token,
+        subject=subject,
+        expires_at=expires_at,
+        session_id=session_id,
+        ttl_hours=ttl,
+    )
+
+
 class SessionCreateRequest(BaseModel):
     ttl_hours: int = _DEFAULT_TTL_HOURS
 
@@ -64,31 +91,10 @@ class MeResponse(BaseModel):
 @router.post("/auth/sessions", response_model=SessionResponse)
 def create_session(payload: SessionCreateRequest, request: Request):
     subject = actor_subject_from_request(request)
-    ttl = max(1, min(_MAX_TTL_HOURS, payload.ttl_hours or _ttl_hours()))
-    token = _make_token()
-    token_hash = _hash_token(token)
-    expires_at = datetime.utcnow() + timedelta(hours=ttl)
-    user_agent = request.headers.get("user-agent", "")[:512]
-
-    session_row = UserSession(
+    return issue_session_token(
         subject=subject,
-        token_hash=token_hash,
-        token_prefix=token[:12],
-        expires_at=expires_at,
-        user_agent=user_agent,
-    )
-    with get_session() as db:
-        db.add(session_row)
-        db.commit()
-        db.refresh(session_row)
-        session_id = session_row.id
-
-    return SessionResponse(
-        token=token,
-        subject=subject,
-        expires_at=expires_at,
-        session_id=session_id,
-        ttl_hours=ttl,
+        user_agent=request.headers.get("user-agent", ""),
+        ttl_hours=payload.ttl_hours,
     )
 
 

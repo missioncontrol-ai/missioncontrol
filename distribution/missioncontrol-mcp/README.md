@@ -194,7 +194,7 @@ Use this server command in your MCP client config:
     "command": "missioncontrol-mcp",
     "env": {
       "MC_BASE_URL": "https://mc.example.com",
-      "MC_TOKEN": "Change-Now-Socrates-Plato-Aristotle-Aurelius",
+      "MC_TOKEN": "TopSecret",
       "MC_AGENT_ID": "1",
       "MQTT_HOST": "mosquitto.missioncontrol.svc.cluster.local",
       "MQTT_PORT": "1883",

@@ -81,6 +81,11 @@ mc [--base-url URL] [--token TOKEN] [--agent-id ID] [--allow-insecure] \
 - `mc ops mission --action commit --lease-id <id> --change-set '[{...}]' [--validation-mode <mode>]`
 - `mc ops mission --action release --lease-id <id> [--reason text]`
 
+### Evolve loop
+- `mc evolve seed --spec <file>` — POST `/evolve/missions`
+- `mc evolve run --mission <id> [--agent <name>]` — POST `/evolve/missions/{id}/run`
+- `mc evolve status --mission <id>` — GET `/evolve/missions/{id}/status`
+
 ### Maintenance & backups
 - `mc maintenance doctor [--matrix-endpoint /events/stream] [--matrix-sample-seconds 5] [--repair]`
 - `mc maintenance backup [--target postgres|rustfs|all] [--reason <note>]`
@@ -93,6 +98,11 @@ mc [--base-url URL] [--token TOKEN] [--agent-id ID] [--allow-insecure] \
 
 ### Self-update
 - `mc update self-update [--manifest-url URL]`
+
+### Session auth
+- `mc login [--ttl-hours N] [--print-token]` — exchange current credentials for a revocable session token
+- `mc whoami` — show current identity from server (`/auth/me`)
+- `mc logout [--local-only]` — revoke current session token and clear local session file
 
 ### Doctor & daemon
 - `mc doctor [--matrix-endpoint /events/stream] [--matrix-sample-seconds 5] [--repair]` — runs the health, tools, and matrix checks described in `[docs/REAL-TIME.md](../docs/REAL-TIME.md)` and prints a JSON report; `--repair` ensures local directories + agent_id metadata are available for future runs.

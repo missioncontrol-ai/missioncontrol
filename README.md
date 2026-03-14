@@ -31,9 +31,9 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 └──────────────────────────────┬───────────────────────────────┘
                                │
                ┌───────────────▼─────────────────┐
-               │               mc               │
+               │               mc                │
                │     MCP stdio bridge · Rust     │
-               │        cargo install mc          │
+               │        cargo install mc         │
                │  tools/list · tools/call · CLI  │
                └───────────────┬─────────────────┘
                                │  HTTP
@@ -70,12 +70,33 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 | Docker full stack (default) | `bash scripts/dev-up.sh` |
 | Install mc CLI | `bash scripts/install-mc.sh` (pre-built binary or source build) |
 | Philosophy & vision | [MISSIONCONTROL_PHILOSOPHY.md](MISSIONCONTROL_PHILOSOPHY.md) |
-| API reference | `/docs` (Swagger UI, when running locally) |
-| Web UI (SvelteKit) | `web/README.md` (dev server, build, SvelteKit dashboard features, OIDC login) |
+| API reference | `/api/docs` (Swagger UI, when running locally) |
+| Web UI (SvelteKit) | `web/README.md` (AI Console + dashboard tabs, dev server, build, OIDC login) |
+| AI Console protocol | `docs/AI-CONSOLE.md` |
+| Evolve loop docs | `docs/EVOLVE.md` |
+
+## Fastest Start (3 Commands)
+
+```bash
+bash scripts/dev-up.sh
+bash scripts/install-mc.sh
+MC_TOKEN="TopSecret" mc doctor
+```
+
+Then open:
+- API docs: `http://localhost:8008/api/docs`
+- UI: `http://localhost:8008/ui/`
+
+## Evolve (Self-Improvement Loop)
+
+`mc evolve` currently supports seeding evolve missions and recording/inspecting run metadata.
+For the exact current behavior and limitations, see [`docs/EVOLVE.md`](docs/EVOLVE.md).
 
 ## Web UI (SvelteKit)
 
-The `web/` directory is now a standalone SvelteKit 2 application that powers the matrix telemetry dashboard, explorer tree, onboarding manifest builder, and governance mini-console (see [`docs/REAL-TIME.md`](docs/REAL-TIME.md) for the SSE contracts it consumes). For local experimentation run `cd web && npm install && npm run dev -- --host 0.0.0.0 --port 5173`. Production (or API-bundled) usage is handled by `npm run build`, which emits static files into `web/build`; the FastAPI backend mounts that directory at `/ui/`, so you can open `http://localhost:8008/ui/` once the API is running. The UI supports both legacy `MC_TOKEN` persistence and OIDC login, and it relies on `$lib/telemetry.ts` to mirror the rate-limit aware matrix feed.
+The `web/` directory is a standalone SvelteKit 2 application with an AI-first console landing view (chat-first transcript + prompt composer), while preserving matrix/explorer/onboarding/governance tabs. Dark mode is the default theme, with a top-right moon/sun toggle. Production login is OIDC-first via backend PKCE flow (`/auth/oidc/start` and `/auth/oidc/exchange`), while token login remains for testing. For local experimentation run `cd web && npm install && npm run dev -- --host 0.0.0.0 --port 5173`. Production (or API-bundled) usage is handled by `npm run build`, which emits static files into `web/build`; the FastAPI backend mounts that directory at `/ui/`.
+
+AI console behavior and event contracts are documented in [`docs/AI-CONSOLE.md`](docs/AI-CONSOLE.md).
 
 ---
 
@@ -92,7 +113,7 @@ bash scripts/dev-up.sh
 2. Smoke test:
 
 ```bash
-curl -H "Authorization: Bearer Change-Now-Socrates-Plato-Aristotle-Aurelius" http://localhost:8008/
+curl -H "Authorization: Bearer TopSecret" http://localhost:8008/
 ```
 
 or run automated full-profile smoke checks:
@@ -144,25 +165,7 @@ MC_STACK_PROFILE=quickstart bash scripts/dev-down.sh
 
 ## Docker Compose (recommended)
 
-Run the full compose stack to get a production-ish deployment on a single host:
-
-1. Start the stack (Postgres + pgvector + MQTT + RustFS):
-
-```bash
-bash scripts/dev-up.sh
-```
-
-2. Verify the API is responsive (the default token is shipped with the compose stack):
-
-```bash
-curl -H "Authorization: Bearer Change-Now-Socrates-Plato-Aristotle-Aurelius" http://localhost:8008/
-```
-
-3. Shutdown:
-
-```bash
-bash scripts/dev-down.sh
-```
+Use the `Docker Dev (Recommended)` flow above for local compose startup, smoke checks, and shutdown.
 
 ## Quickstart (Python)
 
@@ -172,15 +175,15 @@ bash scripts/dev-down.sh
 cp .env.example .env
 ```
 
-Set OIDC env vars in `.env` for preferred auth mode, or set `MC_TOKEN` for static-token fallback mode.
+Set OIDC env vars in `.env` for production login flow, and keep `MC_TOKEN` only as testing fallback.
 MQTT settings are also available for agent messaging (see `.env.example`).
 
 1. Install backend deps:
 
-```powershell
-cd C:\code\taskman\backend
+```bash
+cd backend
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -192,7 +195,7 @@ Load env vars first (bash/zsh):
 set -a; source .env; set +a
 ```
 
-```powershell
+```bash
 uvicorn app.main:app --reload
 ```
 
@@ -233,6 +236,10 @@ After building the front-end (`cd web && npm run build`) the backend serves `/ui
 - `GET /me/profiles` + `POST /me/profiles`
 - `GET /me/profiles/{name}` + `PUT /me/profiles/{name}` + `PATCH /me/profiles/{name}` + `DELETE /me/profiles/{name}`
 - `GET /me/profiles/{name}/download` + `POST /me/profiles/{name}/activate`
+- `POST /evolve/missions` + `POST /evolve/missions/{id}/run` + `GET /evolve/missions/{id}/status`
+- `POST /ai/sessions` + `GET /ai/sessions` + `GET /ai/sessions/{id}` + `POST /ai/sessions/{id}/turns`
+- `POST /ai/sessions/{id}/actions/{action_id}/approve` + `POST /ai/sessions/{id}/actions/{action_id}/reject`
+- `GET /ai/sessions/{id}/stream`
 
 All API responses include an `x-request-id` header for correlation and tracing.
 Set `MC_LOG_EXPORT_PATH=/abs/path/missioncontrol.jsonl` to export structured events as JSON lines.

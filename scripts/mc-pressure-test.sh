@@ -9,7 +9,7 @@ WORKERS="${MC_PRESSURE_WORKERS:-5}"
 DURATION_SEC="${MC_PRESSURE_DURATION_SEC:-600}"
 MODEL="${MC_PRESSURE_MODEL:-gpt-5.1-codex-mini}"
 BASE_URL="${MC_BASE_URL:-http://localhost:8008}"
-MCP_CMD="${MC_PRESSURE_MCP_COMMAND:-missioncontrol-mcp}"
+MCP_CMD="${MC_PRESSURE_MCP_COMMAND:-$ROOT_DIR/scripts/missioncontrol-mcp-local.sh}"
 SHIM_HOST="${MC_DAEMON_HOST:-127.0.0.1}"
 SHIM_PORT="${MC_DAEMON_PORT:-8765}"
 STACK_PROFILE="${MC_STACK_PROFILE:-full}"
@@ -26,6 +26,7 @@ AGENT_STARTUP_TIMEOUT_SEC="${MC_PRESSURE_AGENT_STARTUP_TIMEOUT_SEC:-120}"
 AGENT_TOOL_TIMEOUT_SEC="${MC_PRESSURE_AGENT_TOOL_TIMEOUT_SEC:-120}"
 AGENT_ITER_SLEEP_MS="${MC_PRESSURE_AGENT_ITER_SLEEP_MS:-500}"
 AGENT_EXEC_TIMEOUT_SEC="${MC_PRESSURE_AGENT_EXEC_TIMEOUT_SEC:-300}"
+AGENT_DRIVER="${MC_PRESSURE_AGENT_DRIVER:-daemon}" # daemon | codex
 DIAGNOSTIC_SAMPLE_LIMIT="${MC_PRESSURE_DIAGNOSTIC_SAMPLE_LIMIT:-5}"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -41,11 +42,11 @@ if [[ -z "${MC_TOKEN:-}" ]]; then
   exit 2
 fi
 
-if [[ "$MODE" == "agent" ]] && ! command -v codex >/dev/null 2>&1; then
+if [[ "$MODE" == "agent" && "$AGENT_DRIVER" == "codex" ]] && ! command -v codex >/dev/null 2>&1; then
   echo "codex is required for MC_PRESSURE_MODE=agent" >&2
   exit 1
 fi
-if [[ "$MODE" == "agent" ]] && ! command -v timeout >/dev/null 2>&1; then
+if [[ "$MODE" == "agent" && "$AGENT_DRIVER" == "codex" ]] && ! command -v timeout >/dev/null 2>&1; then
   echo "timeout is required for MC_PRESSURE_MODE=agent" >&2
   exit 1
 fi
@@ -152,8 +153,8 @@ run_agent_worker() {
       cat <<EOF
 You are pressure-test worker ${worker_id} run ${RUN_ID} attempt ${attempts}.
 Use the missioncontrol MCP server.
-1) Validate MCP connectivity by querying missioncontrol MCP resources/templates.
-2) If missioncontrol MCP connects successfully, return RESULT: ok even when no resources are exposed.
+1) Validate MCP connectivity by invoking one direct MissionControl read tool call (\`list_missions\`).
+2) If the MissionControl tool call succeeds, return RESULT: ok even when it returns empty data.
 3) If write/read resources are available, execute one write action and one read action.
 4) End with exactly one line: RESULT: ok | RESULT: fail
 EOF
@@ -161,25 +162,43 @@ EOF
 
     local iter_start_ms
     iter_start_ms="$(date +%s%3N)"
-    codex_args=(exec --json --skip-git-repo-check -C "$ROOT_DIR" -m "$MODEL")
-    if [[ "$UNSANDBOXED" == "1" ]]; then
-      codex_args+=(--dangerously-bypass-approvals-and-sandbox)
-    else
-      codex_args+=(--sandbox workspace-write)
-    fi
-    if timeout "${AGENT_EXEC_TIMEOUT_SEC}" codex "${codex_args[@]}" \
-      -c "mcp_servers.missioncontrol.command=\"$MCP_CMD\"" \
-      -c "mcp_servers.missioncontrol.startup_timeout_sec=${AGENT_STARTUP_TIMEOUT_SEC}" \
-      -c "mcp_servers.missioncontrol.tool_timeout_sec=${AGENT_TOOL_TIMEOUT_SEC}" \
-      -c "mcp_servers.missioncontrol.env={MC_MCP_MODE=\"shim\",MC_DAEMON_HOST=\"$SHIM_HOST\",MC_DAEMON_PORT=\"$SHIM_PORT\",MC_FAIL_OPEN_ON_LIST=\"1\",MC_STARTUP_PREFLIGHT=\"none\",MC_BASE_URL=\"$BASE_URL\",MC_TOKEN=\"${worker_token}\"}" \
-      -o "$iter_msg" "$prompt" >"$iter_log" 2>"$worker_dir/iter-${attempts}.stderr"; then
-      if rg -q "RESULT: ok" "$iter_msg"; then
+    if [[ "$AGENT_DRIVER" == "daemon" ]]; then
+      local out_file="$worker_dir/iter-${attempts}.log"
+      local http_code
+      http_code="$(curl -sS -o "$out_file" -w "%{http_code}" \
+        -H "Authorization: Bearer ${worker_token}" \
+        -H "Content-Type: application/json" \
+        -X POST "$BASE_URL/mcp/call" \
+        -d '{"tool":"list_missions","args":{}}' || true)"
+      if [[ "$http_code" == "200" ]] && jq -e '.ok == true' "$out_file" >/dev/null 2>&1; then
+        echo "RESULT: ok" >"$iter_msg"
         successes=$((successes + 1))
+      else
+        echo "RESULT: fail" >"$iter_msg"
+        failures=$((failures + 1))
+      fi
+      echo "{\"driver\":\"daemon\",\"http_code\":\"$http_code\"}" >"$iter_log"
+    else
+      codex_args=(exec --json --skip-git-repo-check -C "$ROOT_DIR" -m "$MODEL")
+      if [[ "$UNSANDBOXED" == "1" ]]; then
+        codex_args+=(--dangerously-bypass-approvals-and-sandbox)
+      else
+        codex_args+=(--sandbox workspace-write)
+      fi
+      if timeout "${AGENT_EXEC_TIMEOUT_SEC}" codex "${codex_args[@]}" \
+        -c "mcp_servers.missioncontrol.command=\"$MCP_CMD\"" \
+        -c "mcp_servers.missioncontrol.startup_timeout_sec=${AGENT_STARTUP_TIMEOUT_SEC}" \
+        -c "mcp_servers.missioncontrol.tool_timeout_sec=${AGENT_TOOL_TIMEOUT_SEC}" \
+        -c "mcp_servers.missioncontrol.env={MC_MCP_MODE=\"shim\",MC_DAEMON_HOST=\"$SHIM_HOST\",MC_DAEMON_PORT=\"$SHIM_PORT\",MC_FAIL_OPEN_ON_LIST=\"1\",MC_STARTUP_PREFLIGHT=\"none\",MC_BASE_URL=\"$BASE_URL\",MC_TOKEN=\"${worker_token}\",MISSIONCONTROL_BASE_URL=\"$BASE_URL\",MISSIONCONTROL_TOKEN=\"${worker_token}\",MISSIONCONTROL_STARTUP_PREFLIGHT=\"none\",MISSIONCONTROL_FAIL_OPEN_ON_LIST=\"1\"}" \
+        -o "$iter_msg" "$prompt" >"$iter_log" 2>"$worker_dir/iter-${attempts}.stderr"; then
+        if rg -q "RESULT: ok" "$iter_msg"; then
+          successes=$((successes + 1))
+        else
+          failures=$((failures + 1))
+        fi
       else
         failures=$((failures + 1))
       fi
-    else
-      failures=$((failures + 1))
     fi
     echo $(( $(date +%s%3N) - iter_start_ms )) >> "$worker_dir/latencies.txt"
     sleep "$(awk "BEGIN{printf \"%.3f\", ${AGENT_ITER_SLEEP_MS}/1000}")"
@@ -289,9 +308,9 @@ wait
 all_latencies_json="$(cat "$RUN_DIR"/workers/*/latencies.txt 2>/dev/null \
   | jq -Rs 'split("\n") | map(select(length > 0) | tonumber) | sort' || echo "[]")"
 latency_count=$(echo "$all_latencies_json" | jq 'length')
-latency_p50=$(echo "$all_latencies_json" | jq 'if length > 0 then .[floor(length * 0.50)] else 0 end')
-latency_p95=$(echo "$all_latencies_json" | jq 'if length > 0 then .[floor(length * 0.95)] else 0 end')
-latency_p99=$(echo "$all_latencies_json" | jq 'if length > 0 then .[floor(length * 0.99)] else 0 end')
+latency_p50=$(echo "$all_latencies_json" | jq 'if length > 0 then .[(((length * 0.50)|tostring|split(".")[0])|tonumber)] else 0 end')
+latency_p95=$(echo "$all_latencies_json" | jq 'if length > 0 then .[(((length * 0.95)|tostring|split(".")[0])|tonumber)] else 0 end')
+latency_p99=$(echo "$all_latencies_json" | jq 'if length > 0 then .[(((length * 0.99)|tostring|split(".")[0])|tonumber)] else 0 end')
 
 startup_timeout_hits="$({ rg -n -e "MCP startup incomplete" -e "timed out after" "$RUN_DIR" -g '*.stderr' -g '*.txt' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 auth_config_hits="$({ rg -n -e "MC_TOKEN is required" -e "Forbidden" -e "Unauthorized" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"

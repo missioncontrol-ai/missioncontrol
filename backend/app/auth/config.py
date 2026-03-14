@@ -26,6 +26,10 @@ class AuthSettings:
     oidc_issuer_url: str | None
     oidc_audience: str | None
     oidc_jwks_url: str | None
+    oidc_client_id: str | None
+    oidc_client_secret: str | None
+    oidc_redirect_uri: str | None
+    oidc_scopes: str
     oidc_required: bool
 
     def token_enabled(self) -> bool:
@@ -70,6 +74,10 @@ def load_auth_settings() -> AuthSettings:
         oidc_issuer_url=os.getenv("OIDC_ISSUER_URL"),
         oidc_audience=os.getenv("OIDC_AUDIENCE"),
         oidc_jwks_url=os.getenv("OIDC_JWKS_URL"),
+        oidc_client_id=_env_first("OIDC_CLIENT_ID", "OIDC_AUDIENCE"),
+        oidc_client_secret=_env_first("OIDC_CLIENT_SECRET"),
+        oidc_redirect_uri=_env_first("OIDC_REDIRECT_URI"),
+        oidc_scopes=_env_first("OIDC_SCOPES") or "openid profile email",
         oidc_required=_as_bool(os.getenv("OIDC_REQUIRED"), default=False),
     )
     settings.validate_startup()

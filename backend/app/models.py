@@ -395,3 +395,84 @@ class UserSession(SQLModel, table=True):
     # Optional: user-agent string from the client that created the session
     user_agent: str = Field(default="")
     revoked: bool = Field(default=False, index=True)
+
+
+class EvolveMission(SQLModel, table=True):
+    mission_id: str = Field(primary_key=True, index=True)
+    owner_subject: str = Field(index=True)
+    status: str = Field(default="seeded", index=True)
+    spec_json: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class EvolveRun(SQLModel, table=True):
+    run_id: str = Field(primary_key=True, index=True)
+    mission_id: str = Field(index=True)
+    owner_subject: str = Field(index=True)
+    agent: str = Field(default="claude", index=True)
+    status: str = Field(default="launched", index=True)
+    started_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class AiSession(SQLModel, table=True):
+    id: Optional[str] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    title: str = ""
+    status: str = Field(default="active", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class AiTurn(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: str = Field(index=True)
+    role: str = Field(index=True)  # user|assistant|tool
+    content_json: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class AiEvent(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: str = Field(index=True)
+    turn_id: Optional[int] = Field(default=None, index=True)
+    event_type: str = Field(index=True)
+    payload_json: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class AiPendingAction(SQLModel, table=True):
+    id: Optional[str] = Field(default=None, primary_key=True)
+    session_id: str = Field(index=True)
+    turn_id: int = Field(index=True)
+    tool: str = Field(index=True)
+    args_json: str = ""
+    reason: str = ""
+    status: str = Field(default="pending", index=True)  # pending|approved|rejected|executed
+    requested_by: str = ""
+    approved_by: str = ""
+    rejected_by: str = ""
+    rejection_note: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class OidcAuthRequest(SQLModel, table=True):
+    id: Optional[str] = Field(default=None, primary_key=True)
+    state: str = Field(index=True, unique=True)
+    code_verifier: str = ""
+    nonce: str = ""
+    redirect_path: str = "/ui/"
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    expires_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    used_at: Optional[datetime] = None
+
+
+class OidcLoginGrant(SQLModel, table=True):
+    id: Optional[str] = Field(default=None, primary_key=True)
+    auth_request_id: str = Field(index=True)
+    subject: str = Field(index=True)
+    email: str = Field(default="", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    expires_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    used_at: Optional[datetime] = None

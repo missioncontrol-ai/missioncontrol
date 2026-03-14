@@ -1,27 +1,43 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { authStore, loginWithToken, logout, startOidcLogin, token } from '$lib/auth';
+  import { onMount, onDestroy, tick } from 'svelte';
+  import { authStore, loginWithToken, token, startOidcLogin } from '$lib/auth';
   import {
-    matrixEvents,
-    matrixStatus,
-    startMatrixStream,
-    stopMatrixStream
-  } from '$lib/telemetry';
-import {
-  fetchTree,
-  fetchPolicy,
-  fetchGovernanceEvents
-} from '$lib/api';
-import type { ExplorerTree, PolicySummary } from '$lib/api';
+    fetchTree,
+    fetchPolicy,
+    fetchGovernanceEvents,
+    createAiSession,
+    listAiSessions,
+    getAiSession,
+    sendAiTurn,
+    approveAiAction,
+    rejectAiAction,
+    exchangeOidcGrant,
+    type AiSession,
+    type AiEvent,
+    type AiTurn,
+    type ExplorerTree,
+    type PolicySummary
+  } from '$lib/api';
+  import { matrixEvents, matrixStatus, startMatrixStream, stopMatrixStream } from '$lib/telemetry';
   import { derived, get } from 'svelte/store';
 
+  type UiEntry = {
+    key: string;
+    kind: 'user' | 'assistant' | 'event';
+    title: string;
+    body: string;
+    eventType?: string;
+    payload?: Record<string, any>;
+    createdAt: string;
+  };
+
   let initialToken = '';
-  let selectedTab: 'matrix' | 'explorer' | 'onboarding' | 'governance' = 'matrix';
+  let selectedTab: 'ai' | 'matrix' | 'explorer' | 'onboarding' | 'governance' = 'ai';
   let tree: ExplorerTree = {};
   let selectedNode: any = null;
   let policy: PolicySummary | null = null;
   let policyEvents: any[] = [];
-  let onboardingEndpoint = 'https://mc.missioncontrolai.app';
+  let onboardingEndpoint = '';
   let onboardingManifest = '';
   let manifestUrl = '';
   let statusMessage = '';
@@ -30,31 +46,213 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
   let searchInput = '';
   let lastRefreshed = '';
 
-  const hasEvents = derived(matrixEvents, ($events) => $events.length > 0);
+  let aiSessions: AiSession[] = [];
+  let activeSession: AiSession | null = null;
+  let aiInput = '';
+  let aiBusy = false;
+  let aiError = '';
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let lastEventId = 0;
+  let refreshInFlight = false;
+  let terminalEl: HTMLDivElement | null = null;
+  let pinToBottom = true;
+  let showEventDebug = false;
+
   const lastEvent = derived(matrixEvents, ($events) => ($events.length ? $events[0] : null));
+  const eventChunks = derived(matrixEvents, ($events) =>
+    $events.map((event) => ({
+      label: event.type ?? 'matrix',
+      status: event.status,
+      detail: event.payload,
+      time: new Date(event.receivedAt).toLocaleTimeString()
+    }))
+  );
 
   function handleToken() {
     if (!initialToken.trim()) {
-      statusMessage = 'Enter a MissionControl token or use OIDC login.';
+      showToast('Enter a MissionControl token or use OIDC login.');
       return;
     }
     loginWithToken(initialToken.trim());
   }
 
   function handleOidc() {
-    startOidcLogin();
+    startOidcLogin(window.location.pathname);
   }
 
   function showToast(msg: string) {
     statusMessage = msg;
     toastVisible = true;
     if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toastVisible = false; }, 4000);
+    toastTimer = setTimeout(() => {
+      toastVisible = false;
+    }, 4000);
+  }
+
+  function summarizeEvent(event: AiEvent): { title: string; body: string } {
+    const payload = event.payload ?? {};
+    if (event.event_type === 'tool_call') return { title: 'Tool call', body: `${payload.tool ?? 'unknown'} ${JSON.stringify(payload.args ?? {})}` };
+    if (event.event_type === 'tool_result') {
+      const ok = Boolean(payload.result?.ok);
+      if (ok) return { title: 'Tool result', body: `${payload.tool ?? 'tool'} completed` };
+      return {
+        title: 'Tool issue',
+        body: `I could not complete ${payload.tool ?? 'that tool'} this time. Expand details for the technical error.`
+      };
+    }
+    if (event.event_type === 'approval_required') return { title: 'Approval required', body: `${payload.tool ?? 'action'} is waiting for approval` };
+    if (event.event_type === 'approval_outcome') return { title: 'Approval outcome', body: `${payload.action_id ?? 'action'} ${payload.status ?? ''}` };
+    if (event.event_type === 'view_rendered') return { title: 'View prepared', body: `${payload.view?.title ?? 'Custom view'} ready` };
+    if (event.event_type === 'planner_result') return { title: 'Planner result', body: payload.assistant_text ?? 'Plan generated' };
+    if (event.event_type === 'session_started') return { title: 'Session started', body: payload.title ?? 'AI session' };
+    return { title: event.event_type, body: 'Event captured' };
+  }
+
+  function buildTranscript(session: AiSession | null): UiEntry[] {
+    if (!session) return [];
+    const entries: UiEntry[] = [];
+    for (const t of session.turns ?? []) {
+      const text = String((t.content ?? {}).text ?? '').trim() || JSON.stringify(t.content ?? {});
+      entries.push({
+        key: `turn-${t.id}`,
+        kind: t.role === 'assistant' ? 'assistant' : 'user',
+        title: t.role === 'assistant' ? 'MissionControl' : 'You',
+        body: text,
+        payload: t.content,
+        createdAt: t.created_at
+      });
+    }
+    for (const e of session.events ?? []) {
+      if (e.event_type === 'user_message') continue;
+      if (!showEventDebug && (e.event_type === 'planner_result' || e.event_type === 'session_started')) continue;
+      const s = summarizeEvent(e);
+      entries.push({
+        key: `event-${e.id}`,
+        kind: 'event',
+        title: s.title,
+        body: s.body,
+        eventType: e.event_type,
+        payload: e.payload,
+        createdAt: e.created_at
+      });
+    }
+    return entries.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }
+
+  async function maybeScrollToBottom(force = false) {
+    await tick();
+    if (!terminalEl) return;
+    if (force || pinToBottom) {
+      terminalEl.scrollTop = terminalEl.scrollHeight;
+    }
+  }
+
+  function onTranscriptScroll() {
+    if (!terminalEl) return;
+    const delta = terminalEl.scrollHeight - terminalEl.scrollTop - terminalEl.clientHeight;
+    pinToBottom = delta < 48;
+  }
+
+  async function initAi() {
+    try {
+      aiSessions = await listAiSessions(get(token) || undefined);
+      activeSession = aiSessions[0] ?? null;
+      if (!activeSession) {
+        activeSession = await createAiSession(get(token) || undefined, 'AI Console Session');
+      }
+      activeSession = await getAiSession(activeSession.id, get(token) || undefined, 0);
+      lastEventId = activeSession.events.length ? Math.max(...activeSession.events.map((e) => e.id ?? 0)) : 0;
+      aiError = '';
+      await maybeScrollToBottom(true);
+    } catch (err) {
+      aiError = err instanceof Error ? err.message : 'Failed to initialize AI session';
+    }
+  }
+
+  async function refreshActiveSession() {
+    if (!activeSession || refreshInFlight) return;
+    refreshInFlight = true;
+    try {
+      const session = await getAiSession(activeSession.id, get(token) || undefined, lastEventId);
+      const mergedEvents = [...(activeSession.events ?? []), ...(session.events ?? [])]
+        .filter((value, index, array) => array.findIndex((item) => item.id === value.id) === index)
+        .sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
+      if (session.events.length > 0) {
+        lastEventId = Math.max(lastEventId, ...session.events.map((e) => e.id ?? 0));
+      }
+      activeSession = {
+        ...session,
+        events: mergedEvents
+      };
+      aiError = '';
+      await maybeScrollToBottom();
+    } catch (err) {
+      aiError = err instanceof Error ? err.message : 'Session refresh failed';
+    } finally {
+      refreshInFlight = false;
+    }
+  }
+
+  async function newAiSession() {
+    try {
+      const session = await createAiSession(get(token) || undefined, 'AI Console Session');
+      activeSession = session;
+      aiSessions = [session, ...aiSessions];
+      lastEventId = 0;
+      pinToBottom = true;
+      await maybeScrollToBottom(true);
+    } catch (err) {
+      aiError = err instanceof Error ? err.message : 'Failed to create AI session';
+    }
+  }
+
+  async function sendAiMessage() {
+    const message = aiInput.trim();
+    if (!message || !activeSession || aiBusy) return;
+    aiBusy = true;
+    pinToBottom = true;
+    try {
+      activeSession = await sendAiTurn(activeSession.id, message, get(token) || undefined);
+      aiInput = '';
+      lastEventId = activeSession.events.length ? Math.max(...activeSession.events.map((e) => e.id ?? 0)) : 0;
+      aiError = '';
+      await maybeScrollToBottom(true);
+    } catch (err) {
+      aiError = err instanceof Error ? err.message : 'Send failed';
+    } finally {
+      aiBusy = false;
+    }
+  }
+
+  async function approve(actionId: string) {
+    if (!activeSession) return;
+    aiBusy = true;
+    try {
+      activeSession = await approveAiAction(activeSession.id, actionId, get(token) || undefined);
+      await maybeScrollToBottom(true);
+    } catch (err) {
+      aiError = err instanceof Error ? err.message : 'Approval failed';
+    } finally {
+      aiBusy = false;
+    }
+  }
+
+  async function reject(actionId: string) {
+    if (!activeSession) return;
+    aiBusy = true;
+    try {
+      activeSession = await rejectAiAction(activeSession.id, actionId, get(token) || undefined);
+      await maybeScrollToBottom(true);
+    } catch (err) {
+      aiError = err instanceof Error ? err.message : 'Reject failed';
+    } finally {
+      aiBusy = false;
+    }
   }
 
   async function refreshTree() {
     try {
-      const data = await fetchTree(get(token));
+      const data = await fetchTree(get(token) || undefined);
       tree = data;
       lastRefreshed = new Date().toLocaleTimeString();
     } catch (err) {
@@ -63,133 +261,199 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
   }
 
   async function refreshPolicy() {
-    policy = null;
-    const data = await fetchPolicy(get(token));
-    policy = data;
+    policy = await fetchPolicy(get(token) || undefined);
   }
 
   async function refreshPolicyEvents() {
-    policyEvents = await fetchGovernanceEvents(get(token));
+    policyEvents = await fetchGovernanceEvents(get(token) || undefined);
+  }
+
+  function defaultOnboardingEndpoint() {
+    if (typeof window === 'undefined') return 'https://mc.missioncontrolai.app';
+    return window.location.origin;
+  }
+
+  async function syncOnboardingEndpoint() {
+    const localManifestUrl = `${defaultOnboardingEndpoint().replace(/\/$/, '')}/agent-onboarding.json`;
+    try {
+      const res = await fetch(localManifestUrl);
+      if (!res.ok) return;
+      const manifest = await res.json();
+      onboardingEndpoint = String(manifest?.generated_for_base_url || manifest?.endpoints?.ui || '').replace(/\/ui\/$/, '');
+    } catch {
+      // Ignore and keep fallback endpoint.
+    }
   }
 
   async function loadManifest() {
-    manifestUrl = `${onboardingEndpoint.replace(/\/$/, '')}/agent-onboarding.json`;
-    onboardingManifest = JSON.stringify(
-      {
-        endpoint: onboardingEndpoint,
-        token: get(token),
-        generatedAt: new Date().toISOString()
-      },
-      null,
-      2
-    );
-  }
-
-  function selectTab(tab: typeof selectedTab) {
-    selectedTab = tab;
+    const normalized = (onboardingEndpoint || defaultOnboardingEndpoint()).replace(/\/$/, '');
+    manifestUrl = `${normalized}/agent-onboarding.json`;
+    try {
+      const res = await fetch(manifestUrl);
+      if (!res.ok) throw new Error(`Manifest fetch failed (${res.status})`);
+      const manifest = await res.json();
+      onboardingManifest = JSON.stringify(manifest, null, 2);
+    } catch (err) {
+      onboardingManifest = '';
+      showToast(err instanceof Error ? err.message : 'Failed to load onboarding manifest');
+    }
   }
 
   onMount(() => {
-    const unsubscribe = authStore.subscribe(($auth) => {
+    onboardingEndpoint = defaultOnboardingEndpoint();
+    syncOnboardingEndpoint().finally(() => loadManifest());
+
+    const params = new URLSearchParams(window.location.search);
+    const grant = params.get('oidc_grant');
+    if (grant) {
+      exchangeOidcGrant(grant)
+        .then((res) => {
+          loginWithToken(res.token);
+          params.delete('oidc_grant');
+          const query = params.toString();
+          window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+        })
+        .catch((err) => {
+          showToast(err instanceof Error ? err.message : 'OIDC login failed');
+        });
+    }
+
+    const unsubscribe = authStore.subscribe(async ($auth) => {
       if ($auth.loggedIn) {
         startMatrixStream($auth.token ?? undefined);
-        refreshTree();
-        refreshPolicy();
-        refreshPolicyEvents();
+        await Promise.all([refreshTree(), refreshPolicy(), refreshPolicyEvents(), initAi()]);
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(refreshActiveSession, 2500);
       } else {
         stopMatrixStream();
+        if (pollTimer) clearInterval(pollTimer);
       }
     });
     return () => {
       unsubscribe();
       stopMatrixStream();
+      if (pollTimer) clearInterval(pollTimer);
     };
+  });
+
+  onDestroy(() => {
+    if (toastTimer) clearTimeout(toastTimer);
+    if (pollTimer) clearInterval(pollTimer);
   });
 
   $: filteredMissions = (tree.missions ?? []).filter(
     (m: any) => !searchInput || m.name?.toLowerCase().includes(searchInput.toLowerCase())
   );
-
-  const eventChunks = derived(matrixEvents, ($events) =>
-    $events.map((event) => ({
-      label: event.type ?? 'matrix',
-      mission: event.mission_id,
-      status: event.status,
-      detail: event.payload,
-      time: new Date(event.receivedAt).toLocaleTimeString()
-    }))
-  );
+  $: transcript = buildTranscript(activeSession);
+  $: pendingActions = (activeSession?.pending_actions ?? []).filter((a) => a.status === 'pending');
 </script>
-
-<style>
-  .main-shell {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    padding: 1rem 2rem 2rem;
-  }
-  .toast {
-    position: fixed;
-    bottom: 1.5rem;
-    right: 1.5rem;
-    background: var(--color-error, #c0392b);
-    color: #fff;
-    padding: 0.75rem 1.25rem;
-    border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-    font-size: 0.9rem;
-    z-index: 9999;
-    animation: slide-in 0.2s ease;
-  }
-  @keyframes slide-in {
-    from { transform: translateY(1rem); opacity: 0; }
-    to   { transform: translateY(0);    opacity: 1; }
-  }
-</style>
 
 {#if $authStore.loggedIn}
   <div class="main-shell">
     <section class="tabs">
-      <button class={`tab ${selectedTab === 'matrix' ? 'active' : ''}`} on:click={() => selectTab('matrix')}>Matrix</button>
-      <button class={`tab ${selectedTab === 'explorer' ? 'active' : ''}`} on:click={() => selectTab('explorer')}>Explorer</button>
-      <button class={`tab ${selectedTab === 'onboarding' ? 'active' : ''}`} on:click={() => selectTab('onboarding')}>Onboarding</button>
-      <button class={`tab ${selectedTab === 'governance' ? 'active' : ''}`} on:click={() => selectTab('governance')}>Governance</button>
+      <button class={`tab ${selectedTab === 'ai' ? 'active' : ''}`} on:click={() => (selectedTab = 'ai')}>AI Console</button>
+      <button class={`tab ${selectedTab === 'matrix' ? 'active' : ''}`} on:click={() => (selectedTab = 'matrix')}>Matrix</button>
+      <button class={`tab ${selectedTab === 'explorer' ? 'active' : ''}`} on:click={() => (selectedTab = 'explorer')}>Explorer</button>
+      <button class={`tab ${selectedTab === 'onboarding' ? 'active' : ''}`} on:click={() => (selectedTab = 'onboarding')}>Onboarding</button>
+      <button class={`tab ${selectedTab === 'governance' ? 'active' : ''}`} on:click={() => (selectedTab = 'governance')}>Governance</button>
     </section>
+
+    {#if selectedTab === 'ai'}
+      <div class="glass-panel ai-shell">
+        <div class="ai-header">
+          <div>
+            <h3>MissionControl AI Console</h3>
+            <p class="muted">AI-first workspace. Reads auto-run, writes require approval.</p>
+          </div>
+          <div class="onboarding-actions">
+            <button class="ghost" on:click={() => (showEventDebug = !showEventDebug)}>
+              {showEventDebug ? 'Hide Debug Events' : 'Show Debug Events'}
+            </button>
+            <button class="ghost" on:click={newAiSession}>New Session</button>
+          </div>
+        </div>
+
+        <div class="terminal-window" bind:this={terminalEl} on:scroll={onTranscriptScroll}>
+          {#if transcript.length}
+            {#each transcript as entry (entry.key)}
+              <div class={`event-pill ${entry.kind === 'assistant' ? 'assistant-msg' : entry.kind === 'user' ? 'user-msg' : 'event-msg'}`}>
+                <small>{entry.title} • {new Date(entry.createdAt).toLocaleTimeString()}</small>
+                <p>{entry.body}</p>
+                {#if entry.kind === 'event' && entry.payload && (showEventDebug || entry.eventType === 'tool_result')}
+                  <details>
+                    <summary>Details</summary>
+                    <pre>{JSON.stringify(entry.payload, null, 2)}</pre>
+                  </details>
+                {/if}
+              </div>
+            {/each}
+          {:else}
+            <p class="muted">No events yet. Ask AI to list missions, inspect tasks, or explain capabilities.</p>
+          {/if}
+        </div>
+
+        {#if !pinToBottom}
+          <div class="jump-row">
+            <button class="ghost" on:click={() => { pinToBottom = true; maybeScrollToBottom(true); }}>Jump to latest</button>
+          </div>
+        {/if}
+
+        {#if pendingActions.length}
+          <section class="grid" style="margin-top: 0.25rem;">
+            {#each pendingActions as action}
+              <article class="glass-panel">
+                <strong>Approval Required</strong>
+                <p class="muted">Tool: {action.tool}</p>
+                <p class="muted">Reason: {action.reason || 'No reason provided'}</p>
+                <details>
+                  <summary>Arguments</summary>
+                  <pre>{JSON.stringify(action.args, null, 2)}</pre>
+                </details>
+                <div class="onboarding-actions">
+                  <button class="primary" on:click={() => approve(action.id)} disabled={aiBusy}>Approve</button>
+                  <button class="ghost" on:click={() => reject(action.id)} disabled={aiBusy}>Reject</button>
+                </div>
+              </article>
+            {/each}
+          </section>
+        {/if}
+
+        <div class="composer">
+          <textarea
+            bind:value={aiInput}
+            rows="3"
+            placeholder="Ask MissionControl AI..."
+            on:keydown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendAiMessage();
+              }
+            }}
+          ></textarea>
+          <button class="primary" on:click={sendAiMessage} disabled={aiBusy || !aiInput.trim()}>
+            {aiBusy ? 'Running...' : 'Send'}
+          </button>
+        </div>
+        {#if aiError}
+          <p class="error">{aiError}</p>
+        {/if}
+      </div>
+    {/if}
 
     {#if selectedTab === 'matrix'}
       <div class="glass-panel">
         <div class="grid">
           <div>
-            <div class="status-chip">
-              Matrix stream { $matrixStatus.connected ? 'live' : 'offline' }
-            </div>
+            <div class="status-chip">Matrix stream { $matrixStatus.connected ? 'live' : 'offline' }</div>
             <p class="muted">Rate limit: { $matrixStatus.rateLimit?.remaining ?? '—' } / { $matrixStatus.rateLimit?.limit ?? '—' }</p>
           </div>
-          <div class="status-chip">
-            Last event: {#if $lastEvent}{$lastEvent.time}{:else}waiting...{/if}
-          </div>
-        </div>
-        <div class="matrix-grid">
-          {#each $matrixEvents.slice(0, 4) as event (event.receivedAt)}
-            <article class="glass-panel event-pill">
-              <strong>{event.type ?? 'matrix'}</strong>
-              <p>{event.payload?.title ?? 'update'}</p>
-              <div class="status-chip">
-                {event.status ?? 'status unknown'}
-                {#if event.rate_limit}
-                  · resets {new Date(event.rate_limit.reset_at).toLocaleTimeString()}
-                {/if}
-              </div>
-            </article>
-          {:else}
-            <p>No events yet.</p>
-          {/each}
+          <div class="status-chip">Last event: {#if $lastEvent}{$lastEvent.time}{:else}waiting...{/if}</div>
         </div>
         <div class="matrix-timeline">
           {#each $eventChunks as chunk}
             <div class="event-pill">
               <small>{chunk.time}</small>
-              <p>{chunk.label} — {chunk.status ?? 'pending'} </p>
+              <p>{chunk.label} - {chunk.status ?? 'pending'}</p>
               <p class="muted">{chunk.detail?.summary ?? JSON.stringify(chunk.detail)}</p>
             </div>
           {/each}
@@ -205,26 +469,16 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
             <button class="ghost" on:click={refreshTree}>Refresh</button>
             {#if lastRefreshed}<small class="muted">Updated {lastRefreshed}</small>{/if}
           </div>
-          <input
-            bind:value={searchInput}
-            placeholder="Filter missions..."
-            style="max-width:220px"
-          />
+          <input bind:value={searchInput} placeholder="Filter missions..." style="max-width:220px" />
         </div>
         <div class="grid">
           <section class="glass-panel">
             <h4>Missions {filteredMissions.length > 0 ? `(${filteredMissions.length})` : ''}</h4>
             <ul>
               {#each filteredMissions as mission}
-                <li>
-                  <button class="ghost" on:click={() => (selectedNode = mission)}>
-                    {mission.name}
-                  </button>
-                </li>
+                <li><button class="ghost" on:click={() => (selectedNode = mission)}>{mission.name}</button></li>
               {:else}
-                <li class="muted">
-                  {searchInput ? `No missions match "${searchInput}"` : 'No missions yet — create one with mc launch'}
-                </li>
+                <li class="muted">No missions yet.</li>
               {/each}
             </ul>
           </section>
@@ -239,23 +493,14 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
     {#if selectedTab === 'onboarding'}
       <div class="glass-panel">
         <h3>Agent Onboarding</h3>
-        <label>
-          Endpoint
-          <input bind:value={onboardingEndpoint} placeholder="https://mc.example.com" />
-        </label>
+        <label>Endpoint<input bind:value={onboardingEndpoint} placeholder="https://mc.example.com" /></label>
         <div class="onboarding-actions">
           <button class="ghost" on:click={loadManifest}>Regenerate Manifest</button>
           <button class="ghost" on:click={() => navigator.clipboard.writeText(onboardingManifest || '')}>Copy</button>
         </div>
         <div class="grid">
-          <section class="glass-panel">
-            <h4>Manifest URL</h4>
-            <code>{manifestUrl || 'fetch to generate'}</code>
-          </section>
-          <section class="glass-panel">
-            <h4>Manifest Preview</h4>
-            <pre>{onboardingManifest || 'No manifest yet.'}</pre>
-          </section>
+          <section class="glass-panel"><h4>Manifest URL</h4><code>{manifestUrl || 'fetch to generate'}</code></section>
+          <section class="glass-panel"><h4>Manifest Preview</h4><pre>{onboardingManifest || 'No manifest yet.'}</pre></section>
         </div>
       </div>
     {/if}
@@ -263,26 +508,17 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
     {#if selectedTab === 'governance'}
       <div class="glass-panel">
         <div class="grid">
-          <section class="glass-panel">
-            <h4>Active Policy</h4>
-            <pre>{policy ? JSON.stringify(policy, null, 2) : 'Loading...'}</pre>
-          </section>
+          <section class="glass-panel"><h4>Active Policy</h4><pre>{policy ? JSON.stringify(policy, null, 2) : 'Loading...'}</pre></section>
           <section class="glass-panel">
             <h4>Policy Events</h4>
             <ul>
               {#each policyEvents as evt}
-                <li class="muted">
-                  [{evt.level}] {evt.message}
-                </li>
+                <li class="muted">[{evt.level}] {evt.message}</li>
               {:else}
                 <li>No events yet.</li>
               {/each}
             </ul>
           </section>
-        </div>
-        <div class="onboarding-actions">
-          <button class="ghost" on:click={refreshPolicy}>Refresh Policy</button>
-          <button class="ghost" on:click={refreshPolicyEvents}>Refresh Events</button>
         </div>
       </div>
     {/if}
@@ -296,17 +532,14 @@ import type { ExplorerTree, PolicySummary } from '$lib/api';
     <div class="login-card">
       <div class="status-chip">MissionControl Secure</div>
       <h1>Team Console</h1>
-      <label>
-        Access Token
-        <input bind:value={initialToken} type="password" placeholder="MC_TOKEN" />
-      </label>
+      <p class="muted" style="margin:0;">OIDC is the production login path. Token login is for testing.</p>
       <div class="login-actions">
-        <button class="primary" on:click={handleToken}>Continue with token</button>
-        <button class="ghost" on:click={handleOidc}>Sign in via OIDC</button>
+        <button class="primary" on:click={handleOidc}>Sign in via OIDC</button>
       </div>
-      <p class="muted">
-        The new interface now supports OIDC login (token passthrough) plus legacy tokens for quick testing.
-      </p>
+      <label>Testing Token<input bind:value={initialToken} type="password" placeholder="MC_TOKEN" /></label>
+      <div class="login-actions">
+        <button class="ghost" on:click={handleToken}>Continue with token</button>
+      </div>
     </div>
   </section>
 {/if}

@@ -1,18 +1,20 @@
 # Evolve — MissionControl Self-Improvement Loop
 
-`mc evolve` is the mechanism by which MissionControl uses its own agent infrastructure to improve itself. An evolve mission is a pre-configured mission where the codebase context is injected, a backlog of improvement tasks is seeded, and agents autonomously implement them.
+`mc evolve` seeds and tracks a self-improvement backlog in MissionControl.
+Today it is a thin mission/run tracker: it stores the evolve spec, records run launches,
+and returns run status metadata.
 
 ## Quick Start
 
 ```bash
 # 1. Seed a mission with a task backlog
-mc evolve seed --spec docs/evolve-seed-spec.json
+mc evolve seed --spec docs/examples/evolve-seed-spec.json
 # → outputs mission_id: evolve-abc12345
 
-# 2. Launch an agent against the mission
+# 2. Record a run launch for that mission
 mc evolve run --mission evolve-abc12345 --agent claude
 
-# 3. Check progress
+# 3. Inspect mission/run status metadata
 mc evolve status --mission evolve-abc12345
 ```
 
@@ -52,14 +54,21 @@ The spec file is JSON:
 | Command | Description |
 |---------|-------------|
 | `mc evolve seed --spec <file>` | Seed an evolve mission from a JSON spec. Outputs `mission_id`. |
-| `mc evolve run --mission <id> [--agent <name>]` | Launch an agent (default: claude) against the evolve mission. |
-| `mc evolve status --mission <id>` | Show current status, run count, and task progress. |
+| `mc evolve run --mission <id> [--agent <name>]` | Record a launched run entry (default: claude) for a seeded mission. |
+| `mc evolve status --mission <id>` | Show mission status, task count from the seeded spec, and recorded runs. |
 
-## How It Works
+## Current Behavior
 
-1. **seed** — creates a mission record in the backend with your task backlog and agent system prompt injected as context.
-2. **run** — calls `mc launch <agent>` (or the backend `/evolve/missions/<id>/run` endpoint) with the evolve mission's context pre-loaded. The agent picks tasks from the backlog, implements them, and reports back.
-3. **status** — polls the backend for progress: which tasks are complete, which agent ran them, and any scores or artifacts produced.
+1. **seed** — stores a new evolve mission record in backend memory and returns a generated `mission_id`.
+2. **run** — appends a run record (`run_id`, `agent`, `started_at`, `status=launched`) to the mission.
+3. **status** — returns mission metadata (`status`, `task_count`, `run_count`, and run records).
+
+## Current Limitations
+
+- Storage is in-memory only (process-local); data resets on restart.
+- Mission records are not yet persisted to the DB.
+- Task completion scoring is not computed automatically.
+- Run launch does not yet orchestrate/stream a real agent execution loop by itself.
 
 ## Agent Roles
 
@@ -72,10 +81,9 @@ The spec file is JSON:
 
 ## Guardrails
 
-- Evolve missions are scoped to `owner_subject` — agents cannot touch other users' data.
-- The injected system prompt is append-only; it cannot override safety policies.
-- All agent outputs are committed to mission artifacts for audit.
-- A `scoring_criteria` block in the spec defines what constitutes a passing run (tests, build, diff size).
+- Existing MissionControl auth middleware still applies to evolve endpoints.
+- Mission records are scoped to the authenticated principal (`subject`).
+- The evolve spec is stored as provided and echoed via status metadata.
 
 ## Backend API
 
@@ -85,9 +93,9 @@ The spec file is JSON:
 | `/evolve/missions/{id}/run` | POST | Launch agent run |
 | `/evolve/missions/{id}/status` | GET | Get mission progress |
 
-## Roadmap
+## Planned Next Steps
 
-- [ ] Persist evolve missions to the database (currently in-memory)
+- [ ] Add retention/cleanup policies for older evolve missions and runs
 - [ ] Score runs automatically (parse test results, build status from artifacts)
 - [ ] `mc evolve watch` — stream agent output in real time
 - [ ] Leaderboard: which agent completed the most tasks with the highest scores

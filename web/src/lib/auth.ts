@@ -35,7 +35,15 @@ export function logout() {
 }
 
 export function startOidcLogin(redirect = window?.location?.href) {
-  const url = `/oidc/authorize?redirect=${encodeURIComponent(redirect)}`;
+  const path = (() => {
+    try {
+      const parsed = new URL(redirect, window.location.origin);
+      return `${parsed.pathname}${parsed.search}`;
+    } catch {
+      return '/ui/';
+    }
+  })();
+  const url = `/auth/oidc/start?redirect=${encodeURIComponent(path || '/ui/')}`;
   window.location.assign(url);
 }
 

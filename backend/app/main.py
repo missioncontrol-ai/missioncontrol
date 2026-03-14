@@ -16,6 +16,7 @@ from app.auth import OidcValidationError, OidcValidator, load_auth_settings
 from app.db import init_db
 from app.db import get_session
 from app.routers import auth_sessions
+from app.routers import oidc_web
 from app.services.authz import assert_platform_admin
 from app.services.log_export import emit_structured_log, recent_logs
 from app.services.telemetry import telemetry
@@ -47,6 +48,7 @@ from app.routers import (
     ops,
     profiles,
     evolve,
+    ai,
 )
 
 app = FastAPI(
@@ -72,6 +74,7 @@ AUTH_EXEMPT_PREFIXES = (
     "/api/docs",
     "/api/redoc",
     "/ui",
+    "/auth/oidc",
 )
 AUTH_EXEMPT_WEBHOOK_PATHS = {
     "/integrations/slack/events",
@@ -534,7 +537,9 @@ app.include_router(google_chat_integrations.router)
 app.include_router(teams_integrations.router)
 app.include_router(profiles.router)
 app.include_router(evolve.router)
+app.include_router(ai.router)
 app.include_router(auth_sessions.router)
+app.include_router(oidc_web.router)
 
 
 def _web_dir() -> Path | None:

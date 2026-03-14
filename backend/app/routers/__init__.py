@@ -20,6 +20,7 @@ from . import (
     teams_integrations,
     chat_integrations,
     ops,
+    oidc_web,
 )
 
 __all__ = [
@@ -44,4 +45,5 @@ __all__ = [
     "teams_integrations",
     "chat_integrations",
     "ops",
+    "oidc_web",
 ]

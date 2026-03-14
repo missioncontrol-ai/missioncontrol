@@ -1,6 +1,6 @@
 # MissionControl Web UI (SvelteKit)
 
-The front-end lives in `web/`. It is a SvelteKit 2 application that drives the newer telemetry dashboard, explorer tree, onboarding manifest builder, and governance surfaces from the missioncontrol API.
+The front-end lives in `web/`. It is a SvelteKit 2 application with an AI-first console landing experience plus secondary dashboard tabs (matrix telemetry, explorer, onboarding, governance).
 
 ## Development
 
@@ -10,7 +10,7 @@ npm install
 npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
-`npm run dev` starts the SvelteKit dev server (default port 5173). The UI uses the token stored in `localStorage` or the built-in OIDC helper; it fetches matrix events from `/events/stream` and the explorer/governance endpoints described in [docs/REAL-TIME.md](../docs/REAL-TIME.md).
+`npm run dev` starts the SvelteKit dev server (default port 5173). The UI uses MissionControl session tokens (`mcs_*`) stored in `localStorage`. Production sign-in uses backend OIDC browser flow (`/auth/oidc/start` -> callback -> `/auth/oidc/exchange`), while static token login remains available for testing.
 
 ## Building for production
 
@@ -23,9 +23,11 @@ npm run build
 
 ## Features
 
+- **AI Console (default)** — chat-first transcript + composer, natural-language planning, compact tool/event cards, and approval cards for write actions.
 - **Matrix timeline** — SSE-driven feed shows approvals, inbox events, and the rate-limit status described in [`docs/REAL-TIME.md`](../docs/REAL-TIME.md).
 - **Explorer panel** — mission/kluster tree plus detail view, leveraging `/explorer/tree` and `/explorer/node/{type}/{id}`.
 - **Onboarding** — generate manifest endpoints, bootstrap commands, and config snippets for agent swarms and `mc doctor`.
 - **Governance** — view active policy, inspect policy events, and refresh drafts without leaving the UI.
 
-All runtime details (OIDC, token gating, SSE, MQTT) are wired through `$lib/auth.ts`, `$lib/telemetry.ts`, and `$lib/api.ts`. See those modules for extension points if you want to add more dashboards or panels.
+Theme defaults to dark mode, with a top-right moon/sun toggle.
+See [`docs/AI-CONSOLE.md`](../docs/AI-CONSOLE.md) for event schema, planner settings, and API details.
