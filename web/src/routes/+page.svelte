@@ -30,9 +30,12 @@
     payload?: Record<string, any>;
     createdAt: string;
   };
+  type TabName = 'ai' | 'matrix' | 'explorer' | 'onboarding' | 'governance';
+  const TAB_STORAGE_KEY = 'mc.ui.selected_tab';
+  const TAB_NAMES: TabName[] = ['ai', 'matrix', 'explorer', 'onboarding', 'governance'];
 
   let initialToken = '';
-  let selectedTab: 'ai' | 'matrix' | 'explorer' | 'onboarding' | 'governance' = 'ai';
+  let selectedTab: TabName = 'ai';
   let tree: ExplorerTree = {};
   let selectedNode: any = null;
   let policy: PolicySummary | null = null;
@@ -78,6 +81,17 @@
 
   function handleOidc() {
     startOidcLogin(window.location.pathname);
+  }
+
+  function isTabName(value: string | null): value is TabName {
+    return value !== null && TAB_NAMES.includes(value as TabName);
+  }
+
+  function setSelectedTab(tab: TabName) {
+    selectedTab = tab;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(TAB_STORAGE_KEY, tab);
+    }
   }
 
   function showToast(msg: string) {
@@ -300,6 +314,11 @@
   }
 
   onMount(() => {
+    const savedTab = window.localStorage.getItem(TAB_STORAGE_KEY);
+    if (isTabName(savedTab)) {
+      selectedTab = savedTab;
+    }
+
     onboardingEndpoint = defaultOnboardingEndpoint();
     syncOnboardingEndpoint().finally(() => loadManifest());
 
@@ -351,11 +370,11 @@
 {#if $authStore.loggedIn}
   <div class="main-shell">
     <section class="tabs">
-      <button class={`tab ${selectedTab === 'ai' ? 'active' : ''}`} on:click={() => (selectedTab = 'ai')}>AI Console</button>
-      <button class={`tab ${selectedTab === 'matrix' ? 'active' : ''}`} on:click={() => (selectedTab = 'matrix')}>Matrix</button>
-      <button class={`tab ${selectedTab === 'explorer' ? 'active' : ''}`} on:click={() => (selectedTab = 'explorer')}>Explorer</button>
-      <button class={`tab ${selectedTab === 'onboarding' ? 'active' : ''}`} on:click={() => (selectedTab = 'onboarding')}>Onboarding</button>
-      <button class={`tab ${selectedTab === 'governance' ? 'active' : ''}`} on:click={() => (selectedTab = 'governance')}>Governance</button>
+      <button class={`tab ${selectedTab === 'ai' ? 'active' : ''}`} on:click={() => setSelectedTab('ai')}>AI Console</button>
+      <button class={`tab ${selectedTab === 'matrix' ? 'active' : ''}`} on:click={() => setSelectedTab('matrix')}>Matrix</button>
+      <button class={`tab ${selectedTab === 'explorer' ? 'active' : ''}`} on:click={() => setSelectedTab('explorer')}>Explorer</button>
+      <button class={`tab ${selectedTab === 'onboarding' ? 'active' : ''}`} on:click={() => setSelectedTab('onboarding')}>Onboarding</button>
+      <button class={`tab ${selectedTab === 'governance' ? 'active' : ''}`} on:click={() => setSelectedTab('governance')}>Governance</button>
     </section>
 
     {#if selectedTab === 'ai'}
