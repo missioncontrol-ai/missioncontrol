@@ -102,20 +102,15 @@ pub async fn run(args: &ServeMcpArgs, client: &MissionControlClient) -> Result<(
     let mut stdout = tokio::io::stdout();
 
     loop {
-        // 1. Read Content-Length header line(s).
-        let content_length = match read_content_length(&mut reader).await {
-            Ok(Some(n)) => n,
+        // 1. Read either JSONL body or Content-Length framed body.
+        let raw = match read_next_message(&mut reader).await {
+            Ok(Some(body)) => body,
             Ok(None) => break, // EOF — host closed the pipe
             Err(e) => {
-                tracing::warn!("mcp_server: failed to read header: {}", e);
+                tracing::warn!("mcp_server: failed to read message: {}", e);
                 break;
             }
         };
-
-        // 2. Read the exact body bytes.
-        let mut body = vec![0u8; content_length];
-        reader.read_exact(&mut body).await.context("read body")?;
-        let raw = String::from_utf8_lossy(&body);
         if debug {
             eprintln!("mc serve <-- {}", raw);
         }
@@ -291,18 +286,59 @@ async fn fetch_tools(
 
 // ── I/O helpers ───────────────────────────────────────────────────────────────
 
-/// Read MCP/LSP Content-Length headers until the blank separator line.
-/// Returns `None` on EOF, `Some(n)` with the declared body size.
-async fn read_content_length(
+/// Read one MCP message from stdin.
+///
+/// Supports:
+/// - Content-Length framed messages (LSP style)
+/// - newline-delimited JSON messages (JSONL style)
+async fn read_next_message(
     reader: &mut BufReader<tokio::io::Stdin>,
-) -> Result<Option<usize>> {
-    let mut content_length: Option<usize> = None;
-    loop {
-        let mut line = String::new();
-        let n = reader.read_line(&mut line).await?;
+) -> Result<Option<String>> {
+    let first = loop {
+        let mut first_line = String::new();
+        let n = reader.read_line(&mut first_line).await?;
         if n == 0 {
-            return Ok(None); // EOF
+            return Ok(None);
         }
+        let first = first_line.trim().to_string();
+        if first.is_empty() {
+            continue;
+        }
+        break first;
+    };
+
+    if first.starts_with('{') {
+        return Ok(Some(first));
+    }
+
+    // Otherwise treat as Content-Length header block.
+    let content_length = read_content_length_with_first_line(reader, first).await?;
+    let mut body = vec![0u8; content_length];
+    reader.read_exact(&mut body).await.context("read body")?;
+    Ok(Some(String::from_utf8_lossy(&body).to_string()))
+}
+
+async fn read_content_length_with_first_line(
+    reader: &mut BufReader<tokio::io::Stdin>,
+    first_line: String,
+) -> Result<usize> {
+    let mut content_length: Option<usize> = None;
+    let mut pending_first = if first_line.is_empty() {
+        None
+    } else {
+        Some(first_line)
+    };
+    loop {
+        let line = if let Some(first) = pending_first.take() {
+            first
+        } else {
+            let mut line = String::new();
+            let n = reader.read_line(&mut line).await?;
+            if n == 0 {
+                anyhow::bail!("unexpected EOF while reading Content-Length headers");
+            }
+            line
+        };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             // Blank line separates headers from body.
@@ -319,9 +355,7 @@ async fn read_content_length(
         }
         // Other headers (Content-Type etc.) are ignored.
     }
-    content_length
-        .map(Some)
-        .ok_or_else(|| anyhow::anyhow!("missing Content-Length header"))
+    content_length.ok_or_else(|| anyhow::anyhow!("missing Content-Length header"))
 }
 
 fn error_response(id: Value, code: i64, message: &str) -> Value {
