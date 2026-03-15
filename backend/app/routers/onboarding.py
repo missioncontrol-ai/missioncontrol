@@ -39,17 +39,8 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
         ]
     )
     mcp_env = {
-        "MC_MCP_MODE": "shim",
-        "MC_DAEMON_HOST": "127.0.0.1",
-        "MC_DAEMON_PORT": "8765",
-        "MC_FAIL_OPEN_ON_LIST": "1",
         "MC_BASE_URL": resolved_base_url,
-        "MC_BASE_URLS": ",".join(default_base_urls),
         "MC_TOKEN": "${MC_TOKEN}",
-        "MC_STARTUP_PREFLIGHT": "none",
-        "MC_HTTP_TIMEOUT_SEC": "20",
-        "MC_HTTP_RETRIES": "2",
-        "MC_HTTP_RETRY_BACKOFF_MS": "250",
     }
     legacy_mcp_env = {
         "MC_BASE_URL": resolved_base_url,
@@ -90,7 +81,8 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
         },
         "mcp_server": {
             "name": "missioncontrol",
-            "command": "missioncontrol-mcp",
+            "command": "mc",
+            "args": ["serve"],
             "env": mcp_env,
         },
         "legacy_mcp_server": {

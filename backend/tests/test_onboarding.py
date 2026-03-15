@@ -12,18 +12,16 @@ class OnboardingManifestTests(unittest.TestCase):
             manifest["mcp_server"]["env"]["MC_BASE_URL"],
             "https://mc.example.com",
         )
+        self.assertEqual(manifest["mcp_server"]["command"], "mc")
+        self.assertEqual(manifest["mcp_server"]["args"], ["serve"])
         self.assertEqual(
-            manifest["mcp_server"]["env"]["MC_BASE_URLS"],
+            manifest["legacy_mcp_server"]["env"]["MC_BASE_URLS"],
             "https://mc.example.com,https://missioncontrol.internal.example,http://localhost:8008",
         )
-        self.assertEqual(manifest["mcp_server"]["command"], "missioncontrol-mcp")
-        self.assertEqual(manifest["mcp_server"]["env"]["MC_MCP_MODE"], "shim")
-        self.assertEqual(manifest["mcp_server"]["env"]["MC_FAIL_OPEN_ON_LIST"], "1")
-        self.assertEqual(manifest["mcp_server"]["env"]["MC_STARTUP_PREFLIGHT"], "none")
         self.assertEqual(manifest["legacy_mcp_server"]["command"], "missioncontrol-mcp")
         self.assertEqual(manifest["legacy_mcp_server"]["env"]["MC_STARTUP_PREFLIGHT"], "health")
         self.assertEqual(manifest["mcp_defaults"]["startup_timeout_sec"], 45)
-        self.assertIn("MC_BASE_URLS", manifest["mcp_server"]["env"])
+        self.assertIn("MC_BASE_URL", manifest["mcp_server"]["env"])
         self.assertIn("mc-integration", manifest["bootstrap"]["remote_script"])
         self.assertIn("config_generator_script", manifest["automation"])
         self.assertIn("claude_code", manifest["agent_configs"])

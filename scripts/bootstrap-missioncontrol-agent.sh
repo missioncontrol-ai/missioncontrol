@@ -3,29 +3,11 @@ set -euo pipefail
 
 MC_BASE_URL="${MC_BASE_URL:-https://missioncontrol.hartley-neon.ts.net}"
 MC_TOKEN="${MC_TOKEN:-TopSecret}"
-MC_PIPX_SPEC="${MC_PIPX_SPEC:-git+ssh://git@github.com/missioncontrol-ai/missioncontrol.git#subdirectory=distribution/missioncontrol-mcp}"
-
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required" >&2
-  exit 1
-fi
-
-if ! command -v pipx >/dev/null 2>&1; then
-  echo "pipx not found; installing with pip --user"
-  python3 -m pip install --user pipx
-  python3 -m pipx ensurepath
-  export PATH="$HOME/.local/bin:$PATH"
-fi
-
-echo "Installing missioncontrol-mcp via pipx..."
-pipx install --force "$MC_PIPX_SPEC"
-
-if ! command -v missioncontrol-mcp >/dev/null 2>&1; then
-  export PATH="$HOME/.local/bin:$PATH"
-fi
-
-if ! command -v missioncontrol-mcp >/dev/null 2>&1; then
-  echo "missioncontrol-mcp not found on PATH after install" >&2
+echo "Installing mc CLI..."
+bash "$(dirname "$0")/install-mc.sh"
+export PATH="$HOME/.local/bin:$PATH"
+if ! command -v mc >/dev/null 2>&1; then
+  echo "mc not found on PATH after install" >&2
   exit 1
 fi
 
@@ -52,7 +34,8 @@ echo "2) MCP config snippet:"
 cat <<EOC
 {
   "missioncontrol": {
-    "command": "missioncontrol-mcp",
+    "command": "mc",
+    "args": ["serve"],
     "env": {
       "MC_BASE_URL": "$MC_BASE_URL",
       "MC_TOKEN": "$MC_TOKEN"

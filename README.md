@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/MissionControl-Repo.clean.png" alt="MissionControl" width="100%">
+  <img src="assets/MissionControl-Repo-Main.png" alt="MissionControl" width="100%">
 </p>
 
 # Mission Control - Strategic Enterprise AI Orchestration
@@ -284,8 +284,8 @@ Pass `-- <args>` to forward arguments to the agent binary.
 For manual setup, session token details, Codex swarm workflows, and skill sync: see [`docs/AGENT-INSTALL.md`](docs/AGENT-INSTALL.md).
 
 - **Rust CLI (`mc`) first:** see `integrations/mc/README.md` for installation, daemon, governance, tooling, sync, and matrix telemetry commands; the CLI mirrors the HTTP/MCP surface described elsewhere in this README and is the recommended interface for most OSS users.
-- **`missioncontrol-mcp` bridge compatibility:** the Python bridge remains available under `distribution/missioncontrol-mcp` for environments that need MCP stdio; client shims, skill sync helpers, and the `missioncontrol-explorer` CLI live there.
-- **Agent configs & doctor:** use `scripts/generate-agent-config.sh` to emit MCP onboarding manifests and run `missioncontrol-mcp doctor` or `mc doctor` to validate connectivity before handing configs to Codex/Claude/Gemini.
+- **`missioncontrol-mcp` bridge compatibility (legacy):** the Python bridge remains available under `distribution/missioncontrol-mcp` for compatibility-only environments; new installs should use `mc serve`.
+- **Agent configs & doctor:** use `scripts/generate-agent-config.sh` to emit MCP onboarding manifests and run `mc doctor` (preferred) to validate connectivity before handing configs to Codex/Claude/Gemini.
 - **Codex multi-session swarms:** follow `docs/CODEX-SWARM-WORKFLOW.md` for first-class collaborative runs without nested `codex exec`.
 - **Auth modes:** API accepts `token`, `oidc`, or `dual` via `AUTH_MODE`. `mc login` issues server-side session tokens (`mcs_*`) that work across all auth modes, are revocable, and never need to be written to agent config files.
 

@@ -11,6 +11,8 @@ pub struct MissionControlClient {
     http: Client,
     base_url: Url,
     token: Option<String>,
+    agent_id: Option<String>,
+    runtime_session_id: Option<String>,
 }
 
 impl MissionControlClient {
@@ -24,6 +26,8 @@ impl MissionControlClient {
             http: builder.build()?,
             base_url: config.base_url.clone(),
             token: config.token.clone(),
+            agent_id: config.agent_context.agent_id.clone(),
+            runtime_session_id: config.agent_context.runtime_session_id.clone(),
         })
     }
 
@@ -37,15 +41,29 @@ impl MissionControlClient {
             http,
             base_url: Url::parse(base_url).context("invalid base URL")?,
             token: if token.is_empty() { None } else { Some(token.to_string()) },
+            agent_id: None,
+            runtime_session_id: None,
         })
     }
 
     fn apply_auth(&self, builder: RequestBuilder) -> RequestBuilder {
-        if let Some(token) = &self.token {
+        let mut request = if let Some(token) = &self.token {
             builder.bearer_auth(token)
         } else {
             builder
+        };
+        if let Some(agent_id) = &self.agent_id {
+            if !agent_id.trim().is_empty() {
+                request = request.header("x-mc-agent-id", agent_id);
+            }
         }
+        if let Some(runtime_session_id) = &self.runtime_session_id {
+            if !runtime_session_id.trim().is_empty() {
+                request = request.header("x-mc-runtime-session-id", runtime_session_id);
+                request = request.header("x-mc-instance-id", runtime_session_id);
+            }
+        }
+        request
     }
 
     pub fn request_builder(&self, method: Method, path: &str) -> Result<RequestBuilder> {
@@ -71,6 +89,20 @@ impl MissionControlClient {
 
     pub async fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
         let resp = self.request_builder(Method::POST, path)?;
+        let resp = resp
+            .json(body)
+            .send()
+            .await
+            .context("request failed")?
+            .error_for_status()
+            .context("unexpected status code")?;
+        resp.json::<Value>()
+            .await
+            .context("unable to parse json response")
+    }
+
+    pub async fn put_json(&self, path: &str, body: &Value) -> Result<Value> {
+        let resp = self.request_builder(Method::PUT, path)?;
         let resp = resp
             .json(body)
             .send()

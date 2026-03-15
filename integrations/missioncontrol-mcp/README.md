@@ -1,4 +1,12 @@
-# missioncontrol-mcp
+# missioncontrol-mcp (Legacy/Deprecated)
+
+> Deprecated in favor of the Rust-native `mc serve` MCP server.
+>
+> New installs should use `mc` and configure agents with:
+> - command: `mc`
+> - args: `["serve"]`
+>
+> This package remains only for short-term compatibility during cutover.
 
 MCP stdio bridge so Codex/Claude can use MissionControl tools as first-class MCP tools.
 

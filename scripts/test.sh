@@ -16,10 +16,14 @@ echo "[test] backend unittest suite"
   "${VENV_PYTHON}" -m unittest discover -s tests -p "test_*.py"
 )
 
-echo "[test] missioncontrol-mcp unittest suite"
-(
-  cd "${ROOT_DIR}/distribution/missioncontrol-mcp"
-  PYTHONPATH=src "${VENV_PYTHON}" -m unittest discover -s tests -p "test_*.py"
-)
+if [[ "${MC_PY_BRIDGE_LEGACY:-0}" == "1" ]]; then
+  echo "[test] missioncontrol-mcp unittest suite (legacy)"
+  (
+    cd "${ROOT_DIR}/distribution/missioncontrol-mcp"
+    PYTHONPATH=src "${VENV_PYTHON}" -m unittest discover -s tests -p "test_*.py"
+  )
+else
+  echo "[test] skipping legacy missioncontrol-mcp suite (set MC_PY_BRIDGE_LEGACY=1 to enable)"
+fi
 
 echo "[test] completed"

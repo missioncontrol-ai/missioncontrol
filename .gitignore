@@ -148,6 +148,7 @@ age-key.txt
 *~
 .*.swp
 .*.swo
+.nfs*
 
 # Windows
 Thumbs.db

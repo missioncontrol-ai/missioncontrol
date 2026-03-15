@@ -10,8 +10,11 @@ use crate::{
     update,
 };
 use anyhow::{Context, Result};
+use base64::Engine;
 use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{json, Value};
+use std::fs;
+use std::path::PathBuf;
 use url::form_urlencoded;
 
 /// Top-level CLI entrypoints for the mc binary.
@@ -64,6 +67,9 @@ pub enum McCommand {
     Whoami(auth::WhoamiArgs),
     /// Start an MCP server (stdio JSON-RPC 2.0) for LLM runtime connections.
     Serve(mcp_server::ServeMcpArgs),
+    /// Manage MissionControl user profiles.
+    #[command(subcommand)]
+    Profile(ProfileCommand),
 }
 
 #[derive(Subcommand, Debug)]
@@ -137,6 +143,62 @@ pub enum SyncCommand {
     Status(SyncStatusArgs),
     /// Promote a skill sync snapshot to Mission Control’s ledger.
     Promote(SyncPromoteArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ProfileCommand {
+    /// List current user's profiles.
+    List {
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+    /// Show profile metadata by name.
+    Show {
+        #[arg(long)]
+        name: String,
+    },
+    /// Activate profile as default.
+    Activate {
+        #[arg(long)]
+        name: String,
+    },
+    /// Download profile bundle to a local file.
+    Download {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Publish/replace a profile bundle in MissionControl.
+    Publish {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        manifest_file: Option<PathBuf>,
+        #[arg(long)]
+        activate: bool,
+    },
+    /// Pull profile bundle from MissionControl into local profile cache.
+    Pull {
+        #[arg(long)]
+        name: String,
+    },
+    /// Pin a local profile to a specific remote sha256.
+    Pin {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        sha256: String,
+    },
+    /// Show remote/local pin status for a profile.
+    Status {
+        #[arg(long)]
+        name: String,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -310,6 +372,7 @@ pub async fn run(
         McCommand::Logout(args) => auth::logout(args, &client).await,
         McCommand::Whoami(_) => auth::whoami(&client).await,
         McCommand::Serve(args) => mcp_server::run(&args, &client).await,
+        McCommand::Profile(cmd) => handle_profile(cmd, client).await,
     }
 }
 
@@ -393,6 +456,159 @@ async fn handle_sync(command: SyncCommand, client: MissionControlClient) -> Resu
             body["drift_details"] = drift_details;
             let response = client.post_json("/skills/sync/ack", &body).await?;
             print_json(&response);
+        }
+    }
+    Ok(())
+}
+
+async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -> Result<()> {
+    match command {
+        ProfileCommand::List { limit } => {
+            let path = format!("/me/profiles?limit={}", limit);
+            let response = client.get_json(&path).await?;
+            print_json(&response);
+        }
+        ProfileCommand::Show { name } => {
+            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
+            let path = format!("/me/profiles/{}", encoded);
+            let response = client.get_json(&path).await?;
+            print_json(&response);
+        }
+        ProfileCommand::Activate { name } => {
+            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
+            let path = format!("/me/profiles/{}/activate", encoded);
+            let response = client.post_json(&path, &json!({})).await?;
+            print_json(&response);
+        }
+        ProfileCommand::Download { name, out } => {
+            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
+            let path = format!("/me/profiles/{}/download", encoded);
+            let response = client.get_json(&path).await?;
+            let tarball = response
+                .get("tarball_b64")
+                .and_then(|v| v.as_str())
+                .context("profile download response missing tarball_b64")?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(tarball)
+                .context("tarball_b64 is not valid base64")?;
+            let out_path = out.unwrap_or_else(|| PathBuf::from(format!("{}.profile.tar", name)));
+            std::fs::write(&out_path, bytes)
+                .with_context(|| format!("failed to write {}", out_path.display()))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "ok": true,
+                    "profile": name,
+                    "out": out_path.display().to_string()
+                }))
+                .unwrap_or_else(|_| "{\"ok\":true}".to_string())
+            );
+        }
+        ProfileCommand::Publish {
+            name,
+            bundle,
+            description,
+            manifest_file,
+            activate,
+        } => {
+            let bundle_bytes = fs::read(&bundle)
+                .with_context(|| format!("failed to read bundle {}", bundle.display()))?;
+            let tarball_b64 = base64::engine::general_purpose::STANDARD.encode(bundle_bytes);
+            let manifest = if let Some(path) = manifest_file {
+                let raw = fs::read_to_string(&path)
+                    .with_context(|| format!("failed to read manifest {}", path.display()))?;
+                serde_json::from_str::<Value>(&raw).context("manifest file must be valid JSON")?
+            } else {
+                json!([])
+            };
+            let manifest = if manifest.is_array() { manifest } else { json!([manifest]) };
+            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
+            let path = format!("/me/profiles/{}", encoded);
+            let body = json!({
+                "name": name,
+                "description": description.unwrap_or_default(),
+                "is_default": activate,
+                "manifest": manifest,
+                "tarball_b64": tarball_b64
+            });
+            let response = client.put_json(&path, &body).await?;
+            print_json(&response);
+        }
+        ProfileCommand::Pull { name } => {
+            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
+            let path = format!("/me/profiles/{}/download", encoded);
+            let response = client.get_json(&path).await?;
+            let tarball = response
+                .get("tarball_b64")
+                .and_then(|v| v.as_str())
+                .context("profile download response missing tarball_b64")?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(tarball)
+                .context("tarball_b64 is not valid base64")?;
+            let sha = response
+                .get("sha256")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let profile_root = crate::config::mc_home_dir().join("profiles").join(&name);
+            let bundles = profile_root.join("bundles");
+            fs::create_dir_all(&bundles)?;
+            let tar_path = bundles.join(format!("{}.tar", sha));
+            fs::write(&tar_path, bytes)?;
+            let state = json!({
+                "profile": name,
+                "last_pulled_sha256": sha,
+                "bundle_path": tar_path.display().to_string(),
+                "pulled_at": chrono::Utc::now().to_rfc3339(),
+            });
+            fs::write(
+                profile_root.join("state.json"),
+                serde_json::to_string_pretty(&state)?,
+            )?;
+            print_json(&json!({
+                "ok": true,
+                "profile": name,
+                "last_pulled_sha256": sha,
+                "bundle_path": tar_path.display().to_string()
+            }));
+        }
+        ProfileCommand::Pin { name, sha256 } => {
+            let profile_root = crate::config::mc_home_dir().join("profiles").join(&name);
+            fs::create_dir_all(&profile_root)?;
+            let pin = json!({
+                "profile": name,
+                "pinned_sha256": sha256,
+                "pinned_at": chrono::Utc::now().to_rfc3339(),
+            });
+            fs::write(
+                profile_root.join("pin.json"),
+                serde_json::to_string_pretty(&pin)?,
+            )?;
+            print_json(&json!({"ok": true, "profile": name, "pinned_sha256": sha256}));
+        }
+        ProfileCommand::Status { name } => {
+            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
+            let path = format!("/me/profiles/{}", encoded);
+            let remote = client.get_json(&path).await?;
+            let remote_sha = remote.get("sha256").cloned().unwrap_or(Value::Null);
+            let profile_root = crate::config::mc_home_dir().join("profiles").join(&name);
+            let local_pin_path = profile_root.join("pin.json");
+            let local_state_path = profile_root.join("state.json");
+            let local_pin = if local_pin_path.exists() {
+                serde_json::from_str::<Value>(&fs::read_to_string(&local_pin_path)?).unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            };
+            let local_state = if local_state_path.exists() {
+                serde_json::from_str::<Value>(&fs::read_to_string(&local_state_path)?).unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            };
+            print_json(&json!({
+                "profile": name,
+                "remote_sha256": remote_sha,
+                "local_pin": local_pin,
+                "local_state": local_state
+            }));
         }
     }
     Ok(())

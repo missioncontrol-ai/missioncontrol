@@ -662,6 +662,10 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
     request.state.request_id = request_id
     request.state.mcp_tool = tool
     response.headers["x-request-id"] = request_id
+    header_agent_id = str(request.headers.get("x-mc-agent-id") or request.headers.get("x-agent-id") or "")
+    header_runtime_session_id = str(
+        request.headers.get("x-mc-runtime-session-id") or request.headers.get("x-mc-instance-id") or ""
+    )
 
     with get_session() as session:
         approval_context = extract_approval_context(
@@ -1009,8 +1013,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             except HTTPException as exc:
                 return MCPResponse(ok=False, error=exc.detail)
             lease_seconds = int(args.get("lease_seconds") or 900)
-            workspace_label = str(args.get("workspace_label") or "")
-            agent_id = str(args.get("agent_id") or "")
+            workspace_label = str(args.get("workspace_label") or header_runtime_session_id or "")
+            agent_id = str(args.get("agent_id") or header_agent_id or "")
             lease, snapshot = create_workspace_lease(
                 session=session,
                 mission_id=kluster.mission_id,
@@ -2172,7 +2176,7 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
         if tool == "get_skill_sync_status":
             mission_id = str(args.get("mission_id") or "")
             kluster_id = str(args.get("kluster_id") or "")
-            agent_id = str(args.get("agent_id") or "")
+            agent_id = str(args.get("agent_id") or header_agent_id or "")
             if not mission_id:
                 return MCPResponse(ok=False, error="mission_id is required")
             try:
@@ -2230,7 +2234,7 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
         if tool == "ack_skill_sync":
             mission_id = str(args.get("mission_id") or "")
             kluster_id = str(args.get("kluster_id") or "")
-            agent_id = str(args.get("agent_id") or "")
+            agent_id = str(args.get("agent_id") or header_agent_id or "")
             if not mission_id:
                 return MCPResponse(ok=False, error="mission_id is required")
             try:

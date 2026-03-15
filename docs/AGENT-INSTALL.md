@@ -142,10 +142,10 @@ mc launch claude --no-embed-token
 
 Use this path when you need explicit control over config or are integrating into CI.
 
-### 1) Install Bridge
+### 1) Install Rust CLI
 
 ```bash
-pipx install "git+ssh://git@github.com/missioncontrol-ai/missioncontrol.git#subdirectory=distribution/missioncontrol-mcp"
+bash scripts/install-mc.sh
 ```
 
 ### 2) Set MissionControl Endpoint
@@ -182,14 +182,10 @@ Default shim-mode config (works for Claude Code, Gemini CLI, and others supporti
 ```json
 {
   "missioncontrol": {
-    "command": "missioncontrol-mcp",
+    "command": "mc",
+    "args": ["serve"],
     "env": {
-      "MC_MCP_MODE": "shim",
-      "MC_DAEMON_HOST": "127.0.0.1",
-      "MC_DAEMON_PORT": "8765",
-      "MC_FAIL_OPEN_ON_LIST": "1",
       "MC_BASE_URL": "https://mc.example.com",
-      "MC_STARTUP_PREFLIGHT": "none",
       "MC_TOKEN": "<your-token>"
     }
   }
@@ -200,10 +196,11 @@ Codex TOML format (`~/.codex/config.toml`):
 
 ```toml
 [mcp_servers.missioncontrol]
-command = "missioncontrol-mcp"
+command = "mc"
+args = ["serve"]
 startup_timeout_sec = 45
 tool_timeout_sec = 60
-env = { MC_MCP_MODE = "shim", MC_DAEMON_HOST = "127.0.0.1", MC_DAEMON_PORT = "8765", MC_FAIL_OPEN_ON_LIST = "1", MC_STARTUP_PREFLIGHT = "none", MC_BASE_URL = "https://mc.example.com", MC_TOKEN = "<your-token>" }
+env = { MC_BASE_URL = "https://mc.example.com", MC_TOKEN = "<your-token>" }
 ```
 
 Gemini CLI (`~/.gemini/settings.json`):
@@ -212,13 +209,9 @@ Gemini CLI (`~/.gemini/settings.json`):
 {
   "mcpServers": {
     "missioncontrol": {
-      "command": "missioncontrol-mcp",
+      "command": "mc",
+      "args": ["serve"],
       "env": {
-        "MC_MCP_MODE": "shim",
-        "MC_DAEMON_HOST": "127.0.0.1",
-        "MC_DAEMON_PORT": "8765",
-        "MC_FAIL_OPEN_ON_LIST": "1",
-        "MC_STARTUP_PREFLIGHT": "none",
         "MC_BASE_URL": "https://mc.example.com",
         "MC_TOKEN": "<your-token>"
       }
@@ -248,7 +241,7 @@ For first-class Codex multi-session collaboration (without nested `codex exec`),
 Resolve and materialize effective skills for an active mission/kluster:
 
 ```bash
-missioncontrol-mcp sync --mission-id <mission-id> --kluster-id <optional-kluster-id>
+mc sync status --mission-id <mission-id> --kluster-id <optional-kluster-id>
 ```
 
 ---

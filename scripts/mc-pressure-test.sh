@@ -9,7 +9,7 @@ WORKERS="${MC_PRESSURE_WORKERS:-5}"
 DURATION_SEC="${MC_PRESSURE_DURATION_SEC:-600}"
 MODEL="${MC_PRESSURE_MODEL:-gpt-5.1-codex-mini}"
 BASE_URL="${MC_BASE_URL:-http://localhost:8008}"
-MCP_CMD="${MC_PRESSURE_MCP_COMMAND:-$ROOT_DIR/scripts/missioncontrol-mcp-local.sh}"
+MCP_CMD="${MC_PRESSURE_MCP_COMMAND:-mc}"
 SHIM_HOST="${MC_DAEMON_HOST:-127.0.0.1}"
 SHIM_PORT="${MC_DAEMON_PORT:-8765}"
 STACK_PROFILE="${MC_STACK_PROFILE:-full}"
@@ -187,6 +187,7 @@ EOF
       fi
       if timeout "${AGENT_EXEC_TIMEOUT_SEC}" codex "${codex_args[@]}" \
         -c "mcp_servers.missioncontrol.command=\"$MCP_CMD\"" \
+        -c "mcp_servers.missioncontrol.args=[\"serve\"]" \
         -c "mcp_servers.missioncontrol.startup_timeout_sec=${AGENT_STARTUP_TIMEOUT_SEC}" \
         -c "mcp_servers.missioncontrol.tool_timeout_sec=${AGENT_TOOL_TIMEOUT_SEC}" \
         -c "mcp_servers.missioncontrol.env={MC_MCP_MODE=\"shim\",MC_DAEMON_HOST=\"$SHIM_HOST\",MC_DAEMON_PORT=\"$SHIM_PORT\",MC_FAIL_OPEN_ON_LIST=\"1\",MC_STARTUP_PREFLIGHT=\"none\",MC_BASE_URL=\"$BASE_URL\",MC_TOKEN=\"${worker_token}\",MISSIONCONTROL_BASE_URL=\"$BASE_URL\",MISSIONCONTROL_TOKEN=\"${worker_token}\",MISSIONCONTROL_STARTUP_PREFLIGHT=\"none\",MISSIONCONTROL_FAIL_OPEN_ON_LIST=\"1\"}" \

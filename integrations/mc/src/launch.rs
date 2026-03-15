@@ -27,17 +27,20 @@ use crate::{
 };
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, ValueEnum};
+use serde::{Deserialize, Serialize};
+use std::fs;
 use std::{
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
+use uuid::Uuid;
 
 // ── CLI args ────────────────────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
 pub struct LaunchArgs {
-    /// Agent to launch: codex, claude, gemini, openclaw, nanoclaw
-    agent: AgentKind,
+    /// Agent to launch: codex, claude, gemini, openclaw, nanoclaw, resume
+    agent: Option<AgentKind>,
 
     /// No-op (daemon is no longer started by mc launch; kept for backwards compat)
     #[arg(long)]
@@ -50,6 +53,22 @@ pub struct LaunchArgs {
     /// Skip config generation (use existing ~/.missioncontrol/config/)
     #[arg(long)]
     skip_config_gen: bool,
+
+    /// Profile name (research, dev, security, etc). Defaults to active/default profile.
+    #[arg(long)]
+    profile: Option<String>,
+
+    /// Resume the most recent launch session for the selected agent/profile.
+    #[arg(long)]
+    resume: bool,
+
+    /// Resume a specific runtime session id.
+    #[arg(long)]
+    session_id: Option<String>,
+
+    /// Force starting a new runtime session (default when not resuming).
+    #[arg(long)]
+    new_session: bool,
 
     /// Do not embed MC_TOKEN in the written agent config.
     ///
@@ -71,6 +90,7 @@ enum AgentKind {
     Gemini,
     Openclaw,
     Nanoclaw,
+    Resume,
 }
 
 impl AgentKind {
@@ -81,6 +101,7 @@ impl AgentKind {
             AgentKind::Gemini => Box::new(GeminiDriver),
             AgentKind::Openclaw => Box::new(OpenClawDriver),
             AgentKind::Nanoclaw => Box::new(NanoClawDriver),
+            AgentKind::Resume => Box::new(CodexDriver),
         }
     }
 
@@ -91,8 +112,18 @@ impl AgentKind {
             AgentKind::Gemini => "gemini",
             AgentKind::Openclaw => "openclaw",
             AgentKind::Nanoclaw => "nanoclaw",
+            AgentKind::Resume => "resume",
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LaunchSessionRecord {
+    runtime_session_id: String,
+    agent: String,
+    profile: String,
+    instance_home: String,
+    created_at: String,
 }
 
 // ── AgentDriver trait ────────────────────────────────────────────────────────
@@ -522,7 +553,77 @@ fn install_acp_config(name: &str, base_url: &str, token: &str, embed_token: bool
 // ── Orchestration ─────────────────────────────────────────────────────────────
 
 pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McConfig) -> Result<()> {
-    let driver = args.agent.driver();
+    let mut selected_agent = resolve_agent_choice(args.agent.clone())?;
+    let want_resume = !args.new_session
+        && (args.resume
+        || args.session_id.is_some()
+        || matches!(args.agent, Some(AgentKind::Resume)));
+    let base_mc_home = mc_home_dir();
+    fs::create_dir_all(&base_mc_home)?;
+
+    let profile_name = resolve_profile_name(
+        &args.profile,
+        if matches!(selected_agent, AgentKind::Resume) {
+            None
+        } else {
+            Some(selected_agent.config_key())
+        },
+        client,
+    )
+    .await
+    .unwrap_or_else(|_| "default".to_string());
+
+    let resumed = if want_resume {
+        find_resume_session(&base_mc_home, args.session_id.as_deref(), &profile_name)?
+    } else {
+        None
+    };
+    if let Some(record) = &resumed {
+        if let Ok(kind) = parse_agent_kind(&record.agent) {
+            selected_agent = kind;
+            mc_info!(
+                "resuming runtime session {} ({})",
+                record.runtime_session_id,
+                record.agent
+            );
+        }
+    }
+
+    let runtime_session_id = resumed
+        .as_ref()
+        .map(|r| r.runtime_session_id.clone())
+        .unwrap_or_else(|| format!("rs_{}", Uuid::new_v4().simple()));
+    let instance_home = base_mc_home.join("instances").join(&runtime_session_id);
+    let profile_home = base_mc_home
+        .join("profiles")
+        .join(selected_agent.config_key())
+        .join(&profile_name);
+    fs::create_dir_all(&instance_home)?;
+    fs::create_dir_all(&profile_home)?;
+
+    let agent_home = instance_home.join("home");
+    fs::create_dir_all(&agent_home)?;
+    let instance_mc_home = instance_home.join("mc");
+    fs::create_dir_all(&instance_mc_home)?;
+    persist_runtime_context(
+        &instance_home,
+        &runtime_session_id,
+        selected_agent.config_key(),
+        &profile_name,
+        &profile_home,
+    )?;
+    upsert_launch_session(
+        &base_mc_home,
+        LaunchSessionRecord {
+            runtime_session_id: runtime_session_id.clone(),
+            agent: selected_agent.config_key().to_string(),
+            profile: profile_name.clone(),
+            instance_home: instance_home.display().to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        },
+    )?;
+
+    let driver = selected_agent.driver();
 
     // 1. Verify binary is on PATH before doing anything else.
     check_binary(driver.as_ref())?;
@@ -530,7 +631,7 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     // Print brand banner after confirming the binary exists.
     ui::print_banner(
         config.base_url.as_str(),
-        args.agent.config_key(),
+        selected_agent.config_key(),
         env!("CARGO_PKG_VERSION"),
     );
 
@@ -599,22 +700,42 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     //      c) default                → embed
     let embed_token = resolve_embed_token(args.no_embed_token, &token);
 
-    let staging_dir = mc_home_dir().join("config");
+    let staging_dir = instance_mc_home.join("config");
     std::fs::create_dir_all(&staging_dir)?;
 
     // 6. Fetch agent config from onboarding manifest and write to staging dir.
     if !args.skip_config_gen {
-        fetch_and_stage_agent_config(effective_client, &args.agent, &staging_dir, &base_url, &token)
+        fetch_and_stage_agent_config(effective_client, &selected_agent, &staging_dir, &base_url, &token)
             .await?;
     }
 
     // 7. Install config from staging dir to the agent's canonical location.
+    std::env::set_var("HOME", &agent_home);
+    std::env::set_var("MC_HOME", &instance_mc_home);
+    std::env::set_var("MC_AGENT_PROFILE", &profile_name);
+    std::env::set_var("MC_RUNTIME_SESSION_ID", &runtime_session_id);
+    std::env::set_var("MC_INSTANCE_HOME", &instance_home);
+    if config.agent_context.agent_id.is_none() {
+        let generated_agent = format!(
+            "{}-{}",
+            selected_agent.config_key(),
+            Uuid::new_v4().simple()
+        );
+        std::env::set_var("MC_AGENT_ID", &generated_agent);
+    }
     driver.install_config(&staging_dir, &base_url, &token, embed_token)?;
 
     // 8. Exec the agent (replaces the current process on Unix).
     //    Always inject MC_TOKEN into the agent environment so the MCP shim can
     //    authenticate even when the token was NOT embedded in the config file.
-    exec_agent(driver.as_ref(), &args.agent_args, &token)
+    exec_agent(
+        driver.as_ref(),
+        &args.agent_args,
+        &token,
+        &runtime_session_id,
+        &instance_home,
+        &profile_name,
+    )
 }
 
 /// Determine whether to embed `MC_TOKEN` into the written agent config.
@@ -641,6 +762,154 @@ fn resolve_embed_token(no_embed_flag: bool, token: &str) -> bool {
         return false;
     }
     true
+}
+
+fn resolve_agent_choice(agent: Option<AgentKind>) -> Result<AgentKind> {
+    if let Some(kind) = agent {
+        if !matches!(kind, AgentKind::Resume) {
+            return Ok(kind);
+        }
+    }
+    eprint!("mc launch: choose agent [codex/claude/gemini/openclaw/nanoclaw] (default codex): ");
+    io::stderr().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    let trimmed = answer.trim().to_lowercase();
+    if trimmed.is_empty() {
+        return Ok(AgentKind::Codex);
+    }
+    parse_agent_kind(&trimmed)
+}
+
+fn parse_agent_kind(value: &str) -> Result<AgentKind> {
+    match value.trim().to_lowercase().as_str() {
+        "codex" => Ok(AgentKind::Codex),
+        "claude" => Ok(AgentKind::Claude),
+        "gemini" => Ok(AgentKind::Gemini),
+        "openclaw" => Ok(AgentKind::Openclaw),
+        "nanoclaw" => Ok(AgentKind::Nanoclaw),
+        _ => Err(anyhow!("unsupported agent '{}'", value)),
+    }
+}
+
+async fn resolve_profile_name(
+    requested: &Option<String>,
+    agent_key: Option<&str>,
+    client: &MissionControlClient,
+) -> Result<String> {
+    if let Some(profile) = requested {
+        return Ok(profile.trim().to_string());
+    }
+    let profiles = client.get_json("/me/profiles?limit=200").await?;
+    if let Some(items) = profiles.as_array() {
+        for item in items {
+            if item.get("is_default").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                    return Ok(name.to_string());
+                }
+            }
+        }
+    }
+    Ok(agent_key.unwrap_or("default").to_string())
+}
+
+fn session_index_path(base_mc_home: &Path) -> PathBuf {
+    base_mc_home.join("sessions").join("launch-index.jsonl")
+}
+
+fn read_launch_sessions(base_mc_home: &Path) -> Result<Vec<LaunchSessionRecord>> {
+    let path = session_index_path(base_mc_home);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(path)?;
+    let mut out = Vec::new();
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(record) = serde_json::from_str::<LaunchSessionRecord>(line) {
+            out.push(record);
+        }
+    }
+    Ok(out)
+}
+
+fn upsert_launch_session(base_mc_home: &Path, record: LaunchSessionRecord) -> Result<()> {
+    let mut sessions = read_launch_sessions(base_mc_home)?;
+    sessions.retain(|s| s.runtime_session_id != record.runtime_session_id);
+    sessions.push(record);
+    let sessions_dir = base_mc_home.join("sessions");
+    fs::create_dir_all(&sessions_dir)?;
+    let body = sessions
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(session_index_path(base_mc_home), format!("{}\n", body))?;
+    Ok(())
+}
+
+fn find_resume_session(
+    base_mc_home: &Path,
+    session_id: Option<&str>,
+    profile: &str,
+) -> Result<Option<LaunchSessionRecord>> {
+    let mut sessions = read_launch_sessions(base_mc_home)?;
+    sessions.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    if let Some(id) = session_id {
+        return Ok(sessions.into_iter().find(|s| s.runtime_session_id == id));
+    }
+    let mut candidates: Vec<LaunchSessionRecord> = sessions
+        .into_iter()
+        .filter(|s| s.profile == profile)
+        .collect();
+    candidates.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    candidates.reverse();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    if candidates.len() == 1 {
+        return Ok(candidates.into_iter().next());
+    }
+    eprintln!("mc launch resume: select session to resume");
+    for (idx, candidate) in candidates.iter().take(10).enumerate() {
+        eprintln!(
+            "  {}) {}  agent={}  created_at={}",
+            idx + 1,
+            candidate.runtime_session_id,
+            candidate.agent,
+            candidate.created_at
+        );
+    }
+    eprint!("choice [1]: ");
+    io::stderr().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    let picked = answer.trim().parse::<usize>().ok().filter(|n| *n > 0).unwrap_or(1);
+    let picked_idx = picked.saturating_sub(1).min(candidates.len().saturating_sub(1));
+    Ok(Some(candidates[picked_idx].clone()))
+}
+
+fn persist_runtime_context(
+    instance_home: &Path,
+    runtime_session_id: &str,
+    agent: &str,
+    profile: &str,
+    profile_home: &Path,
+) -> Result<()> {
+    let payload = serde_json::json!({
+        "runtime_session_id": runtime_session_id,
+        "agent": agent,
+        "profile": profile,
+        "profile_home": profile_home.display().to_string(),
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+    fs::write(
+        instance_home.join("runtime-context.json"),
+        serde_json::to_string_pretty(&payload)?,
+    )?;
+    Ok(())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -697,7 +966,14 @@ async fn fetch_and_stage_agent_config(
     Ok(())
 }
 
-fn exec_agent(driver: &dyn AgentDriver, extra_args: &[String], token: &str) -> Result<()> {
+fn exec_agent(
+    driver: &dyn AgentDriver,
+    extra_args: &[String],
+    token: &str,
+    runtime_session_id: &str,
+    instance_home: &Path,
+    profile_name: &str,
+) -> Result<()> {
     let binary_name = driver.binary().to_string();
     let mut cmd = driver.command(extra_args);
 
@@ -708,6 +984,9 @@ fn exec_agent(driver: &dyn AgentDriver, extra_args: &[String], token: &str) -> R
     if !token.is_empty() {
         cmd.env("MC_TOKEN", token);
     }
+    cmd.env("MC_RUNTIME_SESSION_ID", runtime_session_id);
+    cmd.env("MC_INSTANCE_HOME", instance_home);
+    cmd.env("MC_AGENT_PROFILE", profile_name);
 
     #[cfg(unix)]
     {
