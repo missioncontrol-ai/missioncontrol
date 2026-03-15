@@ -162,18 +162,35 @@ impl AgentDriver for CodexDriver {
             String::new()
         };
 
-        if existing.contains(CODEX_MC_MARKER) {
-            eprintln!("mc launch: codex MCP config already present (skipping)");
-            return Ok(());
+        // Detect existing missioncontrol section: either via our marker comment
+        // or the raw TOML key (handles configs written before the marker existed).
+        let has_marker = existing.contains(CODEX_MC_MARKER);
+        let has_key = existing.contains("[mcp_servers.missioncontrol]");
+
+        if has_marker || has_key {
+            // Prompt user to replace.
+            eprint!("mc launch: [mcp_servers.missioncontrol] already exists in {}. Replace? [y/N] ", config_path.display());
+            std::io::stderr().flush()?;
+            let mut answer = String::new();
+            std::io::stdin().read_line(&mut answer)?;
+            if !answer.trim().eq_ignore_ascii_case("y") {
+                eprintln!("mc launch: keeping existing codex MCP config");
+                return Ok(());
+            }
+            // Remove the existing section (and its marker comment if present).
+            let cleaned = remove_codex_mc_section(&existing);
+            std::fs::write(&config_path, &cleaned)?;
+            eprintln!("mc launch: removed existing missioncontrol section");
         }
 
         let stanza = render_codex_stanza(base_url, token, embed_token);
+        let current = std::fs::read_to_string(&config_path).unwrap_or_default();
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&config_path)?;
 
-        if !existing.is_empty() && !existing.ends_with('\n') {
+        if !current.is_empty() && !current.ends_with('\n') {
             writeln!(file)?;
         }
         writeln!(file)?;
@@ -203,6 +220,47 @@ fn render_codex_stanza(base_url: &str, token: &str, embed_token: bool) -> String
         rendered.replace(", MC_TOKEN = \"__TOKEN__\"", "")
     };
     format!("{}\n{}\n", CODEX_MC_MARKER, rendered)
+}
+
+/// Remove all lines belonging to the missioncontrol MCP section from a codex
+/// config.toml string. Handles both marker-prefixed stanzas (written by mc
+/// launch) and bare `[mcp_servers.missioncontrol]` sections written by hand or
+/// older tool versions.
+///
+/// The section is considered to end at the next `[` header or EOF.
+fn remove_codex_mc_section(content: &str) -> String {
+    let mut out = Vec::new();
+    let mut in_mc_section = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Start of our section: the marker comment or the TOML key itself.
+        if trimmed == CODEX_MC_MARKER || trimmed == "[mcp_servers.missioncontrol]" {
+            in_mc_section = true;
+            continue;
+        }
+
+        if in_mc_section {
+            // A new section header ends the missioncontrol section.
+            if trimmed.starts_with('[') {
+                in_mc_section = false;
+            } else {
+                continue; // drop lines inside the old section
+            }
+        }
+
+        out.push(line);
+    }
+
+    // Trim trailing blank lines left behind, then ensure single trailing newline.
+    let joined = out.join("\n");
+    let trimmed_end = joined.trim_end_matches('\n');
+    if trimmed_end.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", trimmed_end)
+    }
 }
 
 // ── ClaudeDriver ─────────────────────────────────────────────────────────────
