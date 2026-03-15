@@ -1,7 +1,7 @@
 # MC / Rust CLI
 
 The `mc` binary (previously known as the `missioncontrol-mcp` Python bridge) is the canonical Rust-native local agent gateway.
-It carries the agent context, governance headers, and SSE matrix telemetry in a single binary that can ship to laptops, Ruflo-style
+It carries the agent context, governance headers, and SSE matrix telemetry in a single binary that can ship to laptops, swarm-style
 queen hosts, or local planners that need an exceptional offline/online experience. `mc` speaks the same FastAPI surface as the
  Python bridge (tools, explorer, governance, sync) while adding the matrix/doctor/booster hardening documented in
  [`docs/REAL-TIME.md`](REAL-TIME.md).
@@ -13,7 +13,7 @@ queen hosts, or local planners that need an exceptional offline/online experienc
 - The compiled binary model improves enterprise operability: deterministic deploy artifacts, lower runtime dependency drift,
   and easier endpoint hardening for security teams.
 - The daemon command keeps a live `/events/stream` connection, features reconnection/backoff, and fans the stream out via
-  SSE/WebSocket so Ruflo-like swarms observe approvals/inbox events without polling.
+  SSE/WebSocket so swarm-style teams observe approvals/inbox events without polling.
 - The doctor command (built into the same binary) now doubles as the self-repair and diagnostics entry point for teams that
   need hardened local deployments.
 
@@ -71,7 +71,7 @@ When no `MC_AGENT_ID` is provided, `mc` looks for `~/.missioncontrol/agent_id` a
   change sets unchanged.
 
 ### Sync & approvals
-- `mc sync status|promote` retains the existing payload contracts for skill sync and drift metadata so Ruflo/OpenClaw can honor
+- `mc sync status|promote` retains the existing payload contracts for skill sync and drift metadata so OpenClaw and similar runtimes can honor
   the same ledger expectations.
 - Approval commands carry the same `mission_id`, `action`, `request_context`, and decision parameters as before.
 
@@ -80,13 +80,13 @@ When no `MC_AGENT_ID` is provided, `mc` looks for `~/.missioncontrol/agent_id` a
   matrix SSE feed discussed in [`docs/REAL-TIME.md`](REAL-TIME.md), emitting a structured JSON report with repair hints.
   `--repair` ensures local directories exist and persists an `agent_id` so future runs keep the same identity.
 - `mc daemon --matrix-endpoint /events/stream [--fanout-port <port>] [--mqtt-url mqtt://host:1884] [--mqtt-topic missioncontrol/inbox]`
-  keeps the SSE stream alive, fans it out to localhost, and can replay MQTT inbox updates so local ducks like Ruflo queens see one
+  keeps the SSE stream alive, fans it out to localhost, and can replay MQTT inbox updates so local controller processes see one
   unified stream.
 
-## Matrix telemetry & Ruflo continuity
+## Matrix telemetry and swarm continuity
 
 The daemon publishes every event described in [`docs/REAL-TIME.md`](REAL-TIME.md) (the `type`, `mission_id`, `kluster_id`, `agent_id`,
-`status`, `payload`, and rate-limit metadata). Ruflo-style swarms should run `mc daemon` on their planner/queen host and point dashboards
+`status`, `payload`, and rate-limit metadata). Swarm-style teams should run `mc daemon` on their planner host and point dashboards
 at `http://localhost:<fanout-port>/events`. The doc also explains reconnect/backoff, SSE fan-out rate-limiting, and MQTT relay
 expectations so both matrix telemetry and local governance stay in sync.
 
@@ -103,7 +103,7 @@ headers, TLS failures, and timeouts so dashboards know whether the daemon is hea
   diagnostics before any agent starts consuming LLMs.
 - `mc daemon` is now the canonical hot path for approvals, governance alerts, and matrix telemetry. Other local packages should call
   `mc daemon` (or connect to its fan-out SSE feed) to share the same governance plane that Mission Control enforces.
-- Capture additional local hooks (matrix schema consumers, booster wires, MQTT sync intents) here so auditors or Ruflo queens understand how
+- Capture additional local hooks (matrix schema consumers, booster wires, MQTT sync intents) here so auditors or local controllers understand how
   they integrate with Mission Control’s policy controls.
 
 ## Operational hardening

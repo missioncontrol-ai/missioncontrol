@@ -108,15 +108,15 @@ mc [--base-url URL] [--token TOKEN] [--agent-id ID] [--allow-insecure] \
 - `mc doctor [--matrix-endpoint /events/stream] [--matrix-sample-seconds 5] [--repair]` — runs the health, tools, and matrix checks described in `[docs/REAL-TIME.md](../docs/REAL-TIME.md)` and prints a JSON report; `--repair` ensures local directories + agent_id metadata are available for future runs.
 - `mc daemon --matrix-endpoint /events/stream [--fanout-port <port>] [--mqtt-url mqtt://host:1884] [--mqtt-topic missioncontrol/inbox] [--shim-host 127.0.0.1] [--shim-port 8765] [--tools-cache-ttl-sec 60] [--tools-stale-sec 600] [--shim-token <token>]` — keeps an SSE stream alive for the matrix/inbox feed; fan-out and MQTT options replay the telemetry to local dashboards, and the shim API exposes local `/v1/*` control endpoints for MCP shim clients.
 
-## Real-time matrix & Ruflo integration
+## Real-time matrix and swarm integration
 
 The daemon mode connects to `/events/stream` and prints the chunked telemetry that powers the inbox,
-approval, and matrix dashboards. When you pair local Ruflo-style swarms with Mission Control, run the
+approval, and matrix dashboards. When you pair local swarm-style workflows with Mission Control, run the
 `mc daemon` process alongside the swarm’s leader so that the governance plane (approvals, policy
 enforcement, skill sync metadata) stays in lockstep with the agent planners and vector memory.
 
 Run `mc daemon` with `--fanout-port <port>` to expose a local SSE server on `/events` for dashboards and
-Ruflo queens. The new [docs/REAL-TIME.md](../docs/REAL-TIME.md) describes the `/events/stream` schema,
+local controller processes. The new [docs/REAL-TIME.md](../docs/REAL-TIME.md) describes the `/events/stream` schema,
 rate-limit expectations, reconnect/backoff behavior, and how the daemon should honor ticker headers so the
 local fan-out does not exhaust the upstream MQ/NATS guardrails.
 

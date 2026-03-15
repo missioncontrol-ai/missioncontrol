@@ -1,7 +1,7 @@
 # Real-Time Matrix Telemetry
 
 Mission Control already emits a chunked SSE feed on `/events/stream` to describe inbox events, approvals, and governance signals.
-This document codifies that schema, the rate-limit semantics, and the responsibilities of the Rust `mc daemon` so Ruflo-style swarms can subscribe and react.
+This document codifies that schema, the rate-limit semantics, and the responsibilities of the Rust `mc daemon` so swarm-style workflows can subscribe and react.
 
 ## SSE schema
 
@@ -37,7 +37,7 @@ The optional `rate_limit` block mirrors upstream MQ/NATS guardrails so local dae
 ## Fan-out
 
 - `mc daemon` can optionally start a local SSE/WebSocket fan-out server (default bound to `localhost`) that replays every structured event.
-- Each local client (CLI, UI panel, Ruflo queen) opens `/events` and receives the same stream, eliminating expensive polling loops.
+- Each local client (CLI, UI panel, local controller) opens `/events` and receives the same stream, eliminating expensive polling loops.
 - Fan-out should respect the upstream rate limit by pausing retransmission when `remaining` hits zero and resuming after `reset_at` (or a small buffer) to avoid hitting the server’s throttles again.
 
 The local fan-out can present the same stream over SSE or WebSocket (with text frames). Dashboards should send a `X-Client-ID` header when connecting and honor the daemon’s pause signals—no retransmissions while `remaining` is zero—and resume only after the upstream `reset_at` timestamp plus a small cushion. When the fan-out notices that upstream disabled the matrix feed (status ≠ 200), it should notify clients via a `event: matrix-down` chunk so the UI can show a reconnection banner.
@@ -52,6 +52,6 @@ If an operator needs faster-than-LLM loops, supply `--booster-wasm` with a Wasm 
 
 ## Operational guidance
 
-- Document how to launch the daemon alongside Ruflo-style swarms: run `mc daemon --matrix-endpoint /events/stream --fanout-port 11234` on the planner host so scrapers or dashboards can read the local SSE feed.
+- Document how to launch the daemon alongside swarm-style workflows: run `mc daemon --matrix-endpoint /events/stream --fanout-port 11234` on the planner host so scrapers or dashboards can read the local SSE feed.
 - Mention TLS/rate-limit prerequisites (the daemon may need `MC_ALLOW_INSECURE` for dev proxies), document `MC_SCHEMA_PACK_FILE` so boosters share the same schema pack, and remind operators to keep `MC_TOKEN` or OIDC tokens rotate-ready.
 - Tie this doc back to the `mc` companion guide at [docs/MC-RUST.md](MC-RUST.md).

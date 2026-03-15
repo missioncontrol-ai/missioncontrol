@@ -41,7 +41,7 @@ pub struct DaemonArgs {
     #[arg(long, default_value = "missioncontrol/inbox")]
     pub mqtt_topic: String,
 
-    /// Optional port to host a local SSE fan-out server for dashboards or Ruflo queens.
+    /// Optional port to host a local SSE fan-out server for dashboards or local controllers.
     #[arg(long)]
     pub fanout_port: Option<u16>,
 
