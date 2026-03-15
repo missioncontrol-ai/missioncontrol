@@ -8,6 +8,9 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlmodel import select
 
+from app.ai_console.event_store import emit_event as _store_emit_event
+from app.ai_console.gateway import get_gateway
+from app.ai_console.registry import available_runtimes
 from app.db import get_session
 from app.models import AiEvent, AiPendingAction, AiSession, AiTurn
 from app.routers import mcp as mcp_router
@@ -17,11 +20,9 @@ from app.schemas import (
     AiTurnCreate,
 )
 from app.schemas import MCPCall
-from app.services.ai_planner import finalize_assistant_text, is_write_tool, plan_turn
-from app.services.ai_views import validate_view_spec
 from app.services.ids import new_hash_id
 
-router = APIRouter(prefix="/ai/sessions", tags=["ai"])
+router = APIRouter(prefix="/ai", tags=["ai"])
 
 
 def _subject(request: Request) -> str:
@@ -78,25 +79,41 @@ def _serialize_pending(row: AiPendingAction) -> dict:
     }
 
 
-def _emit_event(
-    *,
-    session,
-    session_id: str,
-    turn_id: int | None,
-    event_type: str,
-    payload: dict,
-) -> AiEvent:
-    event = AiEvent(
-        session_id=session_id,
-        turn_id=turn_id,
-        event_type=event_type,
-        payload_json=json.dumps(payload, separators=(",", ":"), default=str),
-        created_at=datetime.utcnow(),
-    )
-    session.add(event)
-    session.commit()
-    session.refresh(event)
-    return event
+def _serialize_session(*, db, row: AiSession, since_event_id: int = 0, include_turns: bool = True, limit: int = 200) -> dict:
+    safe_limit = max(1, min(limit, 500))
+    turns = []
+    if include_turns:
+        turns = db.exec(select(AiTurn).where(AiTurn.session_id == row.id).order_by(AiTurn.id.asc()).limit(safe_limit)).all()
+
+    events_stmt = select(AiEvent).where(AiEvent.session_id == row.id)
+    if since_event_id > 0:
+        events_stmt = events_stmt.where(AiEvent.id > since_event_id)
+    events = db.exec(events_stmt.order_by(AiEvent.id.asc()).limit(safe_limit)).all()
+
+    pending = db.exec(
+        select(AiPendingAction)
+        .where(AiPendingAction.session_id == row.id)
+        .where(AiPendingAction.status.in_(["pending", "approved"]))
+        .order_by(AiPendingAction.created_at.asc())
+        .limit(safe_limit)
+    ).all()
+
+    return {
+        "id": row.id,
+        "owner_subject": row.owner_subject,
+        "title": row.title,
+        "status": row.status,
+        "runtime_kind": row.runtime_kind,
+        "runtime_session_id": row.runtime_session_id,
+        "workspace_path": row.workspace_path,
+        "capability_snapshot": _decode_json(row.capability_snapshot_json),
+        "policy": _decode_json(row.policy_json),
+        "turns": [_serialize_turn(t) for t in turns],
+        "events": [_serialize_event(e) for e in events],
+        "pending_actions": [_serialize_pending(p) for p in pending],
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
 
 
 def _get_session_or_404(*, session, session_id: str, subject: str) -> AiSession:
@@ -106,48 +123,52 @@ def _get_session_or_404(*, session, session_id: str, subject: str) -> AiSession:
     return row
 
 
-@router.post("", response_model=AiSessionRead)
-def create_session(payload: AiSessionCreate, request: Request):
+# ── Capabilities ──────────────────────────────────────────────────────────────
+
+@router.get("/runtime-capabilities")
+def get_runtime_capabilities():
+    """List capability sets for all registered runtime adapters."""
+    caps = available_runtimes()
+    return [
+        {
+            "runtime_kind": c.runtime_kind.value,
+            "display_name": c.display_name,
+            "icon_slug": c.icon_slug,
+            "supports_streaming": c.supports_streaming,
+            "supports_file_workspace": c.supports_file_workspace,
+            "supports_tool_interception": c.supports_tool_interception,
+            "supports_skill_packs": c.supports_skill_packs,
+            "supports_session_resume": c.supports_session_resume,
+            "max_context_tokens": c.max_context_tokens,
+        }
+        for c in caps
+    ]
+
+
+# ── Session CRUD ──────────────────────────────────────────────────────────────
+
+@router.post("/sessions", response_model=AiSessionRead)
+async def create_session(payload: AiSessionCreate, request: Request):
     subject = _subject(request)
     session_id = f"ais_{new_hash_id()}"
-    now = datetime.utcnow()
     title = (payload.title or "").strip() or "AI Console Session"
+    runtime_kind = (payload.runtime_kind or "opencode").strip()
+    policy_dict = payload.policy or {}
+
+    gateway = get_gateway()
     with get_session() as db:
-        row = AiSession(
-            id=session_id,
-            owner_subject=subject,
+        row = await gateway.create_session(
+            db=db,
+            subject=subject,
+            session_id=session_id,
             title=title,
-            status="active",
-            created_at=now,
-            updated_at=now,
+            runtime_kind=runtime_kind,
+            policy_dict=policy_dict,
         )
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-        _emit_event(
-            session=db,
-            session_id=row.id,
-            turn_id=None,
-            event_type="session_started",
-            payload={"session_id": row.id, "title": row.title},
-        )
-        return {
-            "id": row.id,
-            "owner_subject": row.owner_subject,
-            "title": row.title,
-            "status": row.status,
-            "turns": [],
-            "events": [
-                _serialize_event(item)
-                for item in db.exec(select(AiEvent).where(AiEvent.session_id == row.id).order_by(AiEvent.id.asc())).all()
-            ],
-            "pending_actions": [],
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-        }
+        return _serialize_session(db=db, row=row, include_turns=False)
 
 
-@router.get("", response_model=list[AiSessionRead])
+@router.get("/sessions", response_model=list[AiSessionRead])
 def list_sessions(request: Request, limit: int = 20):
     subject = _subject(request)
     safe_limit = max(1, min(limit, 100))
@@ -158,63 +179,43 @@ def list_sessions(request: Request, limit: int = 20):
             .order_by(AiSession.updated_at.desc())
             .limit(safe_limit)
         ).all()
-        out = []
-        for row in sessions:
-            out.append(
-                {
-                    "id": row.id,
-                    "owner_subject": row.owner_subject,
-                    "title": row.title,
-                    "status": row.status,
-                    "turns": [],
-                    "events": [],
-                    "pending_actions": [],
-                    "created_at": row.created_at,
-                    "updated_at": row.updated_at,
-                }
-            )
-        return out
+        return [
+            {
+                "id": row.id,
+                "owner_subject": row.owner_subject,
+                "title": row.title,
+                "status": row.status,
+                "runtime_kind": row.runtime_kind,
+                "runtime_session_id": row.runtime_session_id,
+                "workspace_path": row.workspace_path,
+                "capability_snapshot": {},
+                "policy": {},
+                "turns": [],
+                "events": [],
+                "pending_actions": [],
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
+            for row in sessions
+        ]
 
 
-@router.get("/{session_id}", response_model=AiSessionRead)
+@router.get("/sessions/{session_id}", response_model=AiSessionRead)
 def get_ai_session(session_id: str, request: Request, since_event_id: int = 0, limit: int = 200):
     subject = _subject(request)
-    safe_limit = max(1, min(limit, 500))
     with get_session() as db:
         row = _get_session_or_404(session=db, session_id=session_id, subject=subject)
-        turns = db.exec(select(AiTurn).where(AiTurn.session_id == row.id).order_by(AiTurn.id.asc()).limit(safe_limit)).all()
-        events_stmt = select(AiEvent).where(AiEvent.session_id == row.id)
-        if since_event_id > 0:
-            events_stmt = events_stmt.where(AiEvent.id > since_event_id)
-        events = db.exec(events_stmt.order_by(AiEvent.id.asc()).limit(safe_limit)).all()
-        pending = db.exec(
-            select(AiPendingAction)
-            .where(AiPendingAction.session_id == row.id)
-            .where(AiPendingAction.status.in_(["pending", "approved"]))
-            .order_by(AiPendingAction.created_at.asc())
-            .limit(safe_limit)
-        ).all()
-
-        return {
-            "id": row.id,
-            "owner_subject": row.owner_subject,
-            "title": row.title,
-            "status": row.status,
-            "turns": [_serialize_turn(item) for item in turns],
-            "events": [_serialize_event(item) for item in events],
-            "pending_actions": [_serialize_pending(item) for item in pending],
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-        }
+        return _serialize_session(db=db, row=row, since_event_id=since_event_id, limit=limit)
 
 
-@router.post("/{session_id}/turns", response_model=AiSessionRead)
-def create_turn(session_id: str, payload: AiTurnCreate, request: Request):
+@router.post("/sessions/{session_id}/turns", response_model=AiSessionRead)
+async def create_turn(session_id: str, payload: AiTurnCreate, request: Request):
     subject = _subject(request)
     message = (payload.message or "").strip()
     if not message:
         raise HTTPException(status_code=422, detail="message is required")
 
+    gateway = get_gateway()
     with get_session() as db:
         row = _get_session_or_404(session=db, session_id=session_id, subject=subject)
 
@@ -227,119 +228,40 @@ def create_turn(session_id: str, payload: AiTurnCreate, request: Request):
         db.add(user_turn)
         db.commit()
         db.refresh(user_turn)
-        _emit_event(
-            session=db,
+
+        _store_emit_event(
+            db=db,
             session_id=row.id,
             turn_id=user_turn.id,
             event_type="user_message",
             payload={"text": message},
         )
 
-        plan = plan_turn(message=message)
-        _emit_event(
-            session=db,
-            session_id=row.id,
-            turn_id=user_turn.id,
-            event_type="planner_result",
-            payload={
-                "assistant_text": plan.assistant_text,
-                "tool_calls": [{"tool": c.tool, "args": c.args, "reason": c.reason} for c in plan.tool_calls],
-            },
-        )
-
-        executed_results: list[dict] = []
-        for call in plan.tool_calls:
-            _emit_event(
-                session=db,
-                session_id=row.id,
-                turn_id=user_turn.id,
-                event_type="tool_call",
-                payload={"tool": call.tool, "args": call.args, "reason": call.reason},
-            )
-            if is_write_tool(call.tool):
-                pending = AiPendingAction(
-                    id=f"aia_{new_hash_id()}",
-                    session_id=row.id,
-                    turn_id=user_turn.id,
-                    tool=call.tool,
-                    args_json=json.dumps(call.args, separators=(",", ":")),
-                    reason=call.reason,
-                    status="pending",
-                    requested_by=subject,
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow(),
-                )
-                db.add(pending)
-                db.commit()
-                db.refresh(pending)
-                _emit_event(
-                    session=db,
-                    session_id=row.id,
-                    turn_id=user_turn.id,
-                    event_type="approval_required",
-                    payload={
-                        "action_id": pending.id,
-                        "tool": pending.tool,
-                        "args": call.args,
-                        "reason": call.reason,
-                    },
-                )
-                continue
-
-            mcp_result = _call_mcp_tool(tool=call.tool, args=call.args, request=request)
-            executed_results.append({"tool": call.tool, "result": mcp_result})
-            _emit_event(
-                session=db,
-                session_id=row.id,
-                turn_id=user_turn.id,
-                event_type="tool_result",
-                payload={"tool": call.tool, "result": mcp_result},
-            )
-
-        if plan.view_spec is not None:
-            ok, err = validate_view_spec(plan.view_spec)
-            if ok:
-                _emit_event(
-                    session=db,
-                    session_id=row.id,
-                    turn_id=user_turn.id,
-                    event_type="view_rendered",
-                    payload={"view": plan.view_spec},
-                )
-            else:
-                _emit_event(
-                    session=db,
-                    session_id=row.id,
-                    turn_id=user_turn.id,
-                    event_type="view_rejected",
-                    payload={"error": err},
-                )
-
-        final_text = finalize_assistant_text(
+        await gateway.process_turn(
+            db=db,
+            session_row=row,
+            user_turn=user_turn,
             message=message,
-            draft_text=plan.assistant_text,
-            tool_results=executed_results,
+            subject=subject,
         )
 
-        assistant_turn = AiTurn(
-            session_id=row.id,
-            role="assistant",
-            content_json=json.dumps({"text": final_text}, separators=(",", ":")),
-            created_at=datetime.utcnow(),
-        )
-        db.add(assistant_turn)
         row.updated_at = datetime.utcnow()
         db.add(row)
         db.commit()
 
-    return get_ai_session(session_id=session_id, request=request)
-
-
-@router.post("/{session_id}/actions/{action_id}/approve", response_model=AiSessionRead)
-def approve_action(session_id: str, action_id: str, request: Request):
-    subject = _subject(request)
     with get_session() as db:
-        _get_session_or_404(session=db, session_id=session_id, subject=subject)
+        row = db.get(AiSession, session_id)
+        return _serialize_session(db=db, row=row)
+
+
+# ── Approval flow ─────────────────────────────────────────────────────────────
+
+@router.post("/sessions/{session_id}/actions/{action_id}/approve", response_model=AiSessionRead)
+async def approve_action(session_id: str, action_id: str, request: Request):
+    subject = _subject(request)
+    gateway = get_gateway()
+    with get_session() as db:
+        session_row = _get_session_or_404(session=db, session_id=session_id, subject=subject)
         action = db.get(AiPendingAction, action_id)
         if action is None or action.session_id != session_id:
             raise HTTPException(status_code=404, detail="AI action not found")
@@ -352,36 +274,54 @@ def approve_action(session_id: str, action_id: str, request: Request):
         db.add(action)
         db.commit()
 
-        _emit_event(
-            session=db,
+        _store_emit_event(
+            db=db,
             session_id=session_id,
             turn_id=action.turn_id,
             event_type="approval_outcome",
             payload={"action_id": action.id, "status": "approved"},
         )
 
-        args = _decode_json(action.args_json)
-        mcp_result = _call_mcp_tool(tool=action.tool, args=args, request=request)
-        action.status = "executed"
-        action.updated_at = datetime.utcnow()
-        db.add(action)
-        db.commit()
-        _emit_event(
-            session=db,
-            session_id=session_id,
-            turn_id=action.turn_id,
-            event_type="tool_result",
-            payload={"tool": action.tool, "result": mcp_result},
+        # Notify the runtime adapter (opencode will execute the tool on its side)
+        await gateway.approve_action(
+            db=db,
+            session_row=session_row,
+            action_row=action,
+            subject=subject,
         )
 
-    return get_ai_session(session_id=session_id, request=request)
+        # For sessions without a runtime (MC-native tool execution), run via MCP
+        if not session_row.runtime_session_id:
+            args = _decode_json(action.args_json)
+            mcp_result = _call_mcp_tool(tool=action.tool, args=args, request=request)
+            action.status = "executed"
+            action.updated_at = datetime.utcnow()
+            db.add(action)
+            db.commit()
+            _store_emit_event(
+                db=db,
+                session_id=session_id,
+                turn_id=action.turn_id,
+                event_type="tool_result",
+                payload={"tool": action.tool, "result": mcp_result},
+            )
+        else:
+            action.status = "executed"
+            action.updated_at = datetime.utcnow()
+            db.add(action)
+            db.commit()
 
-
-@router.post("/{session_id}/actions/{action_id}/reject", response_model=AiSessionRead)
-def reject_action(session_id: str, action_id: str, request: Request, note: str = ""):
-    subject = _subject(request)
     with get_session() as db:
-        _get_session_or_404(session=db, session_id=session_id, subject=subject)
+        row = db.get(AiSession, session_id)
+        return _serialize_session(db=db, row=row)
+
+
+@router.post("/sessions/{session_id}/actions/{action_id}/reject", response_model=AiSessionRead)
+async def reject_action(session_id: str, action_id: str, request: Request, note: str = ""):
+    subject = _subject(request)
+    gateway = get_gateway()
+    with get_session() as db:
+        session_row = _get_session_or_404(session=db, session_id=session_id, subject=subject)
         action = db.get(AiPendingAction, action_id)
         if action is None or action.session_id != session_id:
             raise HTTPException(status_code=404, detail="AI action not found")
@@ -395,21 +335,32 @@ def reject_action(session_id: str, action_id: str, request: Request, note: str =
         db.add(action)
         db.commit()
 
-        _emit_event(
-            session=db,
+        _store_emit_event(
+            db=db,
             session_id=session_id,
             turn_id=action.turn_id,
             event_type="approval_outcome",
             payload={"action_id": action.id, "status": "rejected", "note": note or ""},
         )
 
-    return get_ai_session(session_id=session_id, request=request)
+        await gateway.reject_action(
+            db=db,
+            session_row=session_row,
+            action_row=action,
+            subject=subject,
+            reason=note or "",
+        )
+
+    with get_session() as db:
+        row = db.get(AiSession, session_id)
+        return _serialize_session(db=db, row=row)
 
 
-@router.get("/{session_id}/stream")
+# ── SSE stream ────────────────────────────────────────────────────────────────
+
+@router.get("/sessions/{session_id}/stream")
 async def stream_events(session_id: str, request: Request, after_id: int = 0):
     subject = _subject(request)
-
     with get_session() as db:
         _get_session_or_404(session=db, session_id=session_id, subject=subject)
 
@@ -427,7 +378,7 @@ async def stream_events(session_id: str, request: Request, after_id: int = 0):
                 ).all()
                 for row in rows:
                     last = max(last, int(row.id or 0))
-                    payload = {
+                    data = {
                         "id": row.id,
                         "turn_id": row.turn_id,
                         "event_type": row.event_type,
@@ -436,11 +387,13 @@ async def stream_events(session_id: str, request: Request, after_id: int = 0):
                     }
                     yield f"id: {row.id}\n"
                     yield f"event: ai_event\n"
-                    yield f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+                    yield f"data: {json.dumps(data, separators=(',', ':'))}\n\n"
             await asyncio.sleep(0.8)
 
     return StreamingResponse(generator(), media_type="text/event-stream")
 
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _call_mcp_tool(*, tool: str, args: dict, request: Request) -> dict:
     response = Response()

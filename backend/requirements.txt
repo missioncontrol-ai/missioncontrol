@@ -11,3 +11,5 @@ PyJWT[crypto]
 paho-mqtt
 alembic
 boto3
+httpx
+apscheduler>=3.10

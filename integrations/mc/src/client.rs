@@ -2,6 +2,7 @@ use crate::config::McConfig;
 use anyhow::{Context, Result};
 use reqwest::{Client, Method, RequestBuilder};
 use serde_json::Value;
+use std::time::Duration;
 use url::Url;
 
 /// HTTP client that keeps auth headers, retries, and streaming helpers in one place.
@@ -23,6 +24,19 @@ impl MissionControlClient {
             http: builder.build()?,
             base_url: config.base_url.clone(),
             token: config.token.clone(),
+        })
+    }
+
+    /// Build a minimal client from a raw base URL + token, used during `mc login`
+    /// before a full McConfig is available.
+    pub fn new_with_token(base_url: &str, token: &str) -> Result<Self> {
+        let http = Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()?;
+        Ok(Self {
+            http,
+            base_url: Url::parse(base_url).context("invalid base URL")?,
+            token: if token.is_empty() { None } else { Some(token.to_string()) },
         })
     }
 

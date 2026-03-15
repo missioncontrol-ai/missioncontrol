@@ -1,5 +1,6 @@
 use crate::{agent_context::AgentContext, schema_pack::SchemaPack};
 use dirs::home_dir;
+use serde::{Deserialize, Serialize};
 use std::{env, fs, path::PathBuf, time::Duration};
 use thiserror::Error;
 use url::Url;
@@ -70,6 +71,45 @@ fn resolve_agent_id(arg: Option<String>) -> Option<String> {
 /// Called by `main.rs` when `MC_TOKEN` / `--token` is absent.
 pub fn load_session_token(base_url: &str) -> Option<String> {
     crate::auth::load_saved_session(base_url).map(|s| s.token)
+}
+
+// ── Persistent config file (~/.missioncontrol/config.json) ───────────────────
+
+/// User-level persistent settings. Written by `mc login`, read at startup.
+/// Sensitive values (tokens) are NOT stored here — those live in session.json (chmod 600).
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct SavedConfig {
+    /// The last MC_BASE_URL the user authenticated against.
+    pub base_url: Option<String>,
+}
+
+pub fn config_file_path() -> PathBuf {
+    mc_home_dir().join("config.json")
+}
+
+pub fn load_saved_config() -> SavedConfig {
+    let path = config_file_path();
+    let content = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return SavedConfig::default(),
+    };
+    serde_json::from_str(&content).unwrap_or_default()
+}
+
+pub fn save_config(cfg: &SavedConfig) -> std::io::Result<()> {
+    let path = config_file_path();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let json = serde_json::to_string_pretty(cfg).unwrap_or_default();
+    fs::write(&path, &json)?;
+    // config.json is not secret (no tokens), but still restrict to owner rw
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))?;
+    }
+    Ok(())
 }
 
 pub fn mc_home_dir() -> PathBuf {

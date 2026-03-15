@@ -161,6 +161,33 @@ def _migrate_schema() -> None:
             if "mime_type" not in artifact_columns:
                 conn.execute(text("ALTER TABLE artifact ADD COLUMN mime_type TEXT DEFAULT ''"))
 
+    # AI session runtime columns (added in migration 20260315_0010)
+    if "aisession" in tables:
+        aisession_columns = {c["name"] for c in inspect(engine).get_columns("aisession")}
+        with engine.begin() as conn:
+            if "runtime_kind" not in aisession_columns:
+                conn.execute(text("ALTER TABLE aisession ADD COLUMN runtime_kind TEXT NOT NULL DEFAULT 'opencode'"))
+            if "runtime_session_id" not in aisession_columns:
+                conn.execute(text("ALTER TABLE aisession ADD COLUMN runtime_session_id TEXT"))
+            if "workspace_path" not in aisession_columns:
+                conn.execute(text("ALTER TABLE aisession ADD COLUMN workspace_path TEXT"))
+            if "policy_json" not in aisession_columns:
+                conn.execute(text("ALTER TABLE aisession ADD COLUMN policy_json TEXT NOT NULL DEFAULT '{}'"))
+            if "capability_snapshot_json" not in aisession_columns:
+                conn.execute(text("ALTER TABLE aisession ADD COLUMN capability_snapshot_json TEXT NOT NULL DEFAULT '{}'"))
+
+    # OIDC CLI nonce columns (added in migration 20260315_0011)
+    if "oidcauthrequest" in tables:
+        cols = {c["name"] for c in inspect(engine).get_columns("oidcauthrequest")}
+        with engine.begin() as conn:
+            if "cli_nonce" not in cols:
+                conn.execute(text("ALTER TABLE oidcauthrequest ADD COLUMN cli_nonce TEXT"))
+    if "oidclogingrant" in tables:
+        cols = {c["name"] for c in inspect(engine).get_columns("oidclogingrant")}
+        with engine.begin() as conn:
+            if "cli_nonce" not in cols:
+                conn.execute(text("ALTER TABLE oidclogingrant ADD COLUMN cli_nonce TEXT"))
+
     _ensure_owner_constraints_postgres()
 
 

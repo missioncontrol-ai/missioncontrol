@@ -24,6 +24,8 @@ from app.services.mqtt import build_mqtt_service
 from app.services.object_storage import head_bucket, object_storage_enabled
 from app.services.schema_pack import load_schema_pack
 from app.services.governance import ensure_governance_policy_seed
+import app.ai_console.registry  # noqa: F401 — bootstraps adapter registry at import time
+
 from app.routers import (
     klusters,
     missions,
@@ -49,6 +51,7 @@ from app.routers import (
     profiles,
     evolve,
     ai,
+    scheduled_jobs,
 )
 
 app = FastAPI(
@@ -211,6 +214,8 @@ def on_startup():
     if mqtt_service is not None:
         mqtt_service.connect()
     app.state.mqtt = mqtt_service
+    from app.services.agent_scheduler import start_scheduler
+    start_scheduler()
 
 
 @app.on_event("shutdown")
@@ -218,6 +223,8 @@ def on_shutdown():
     mqtt_service = getattr(app.state, "mqtt", None)
     if mqtt_service is not None:
         mqtt_service.disconnect()
+    from app.services.agent_scheduler import stop_scheduler
+    stop_scheduler()
 
 
 @app.middleware("http")
@@ -538,6 +545,7 @@ app.include_router(teams_integrations.router)
 app.include_router(profiles.router)
 app.include_router(evolve.router)
 app.include_router(ai.router)
+app.include_router(scheduled_jobs.router)
 app.include_router(auth_sessions.router)
 app.include_router(oidc_web.router)
 

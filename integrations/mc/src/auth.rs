@@ -1,18 +1,33 @@
 //! `mc login` / `mc logout` / `mc whoami` — session token management.
 //!
 //! Session tokens (`mcs_*`) are issued by the MissionControl server and stored
-//! at `~/.missioncontrol/session.json`. They are:
+//! at `~/.missioncontrol/session.json` (chmod 600). They are:
 //!
 //! - Revocable server-side at any time
 //! - Never embedded in agent config files (mc launch uses env injection)
 //! - Auto-loaded by McConfig when MC_TOKEN is absent
 //! - Validated for expiry before use, with a clear renewal hint
+//!
+//! ## Interactive login flow
+//!
+//! `mc login` with no flags prompts the user for everything it needs:
+//!   1. MC_BASE_URL (skipped if already in env or ~/.missioncontrol/config.json)
+//!   2. Auth method: token or OIDC
+//!      - token: masked prompt → POST /auth/sessions → save session.json
+//!      - oidc:  GET /auth/oidc/cli-initiate → open browser → poll → exchange → save
 
-use crate::{client::MissionControlClient, config::mc_home_dir};
+use crate::{
+    client::MissionControlClient,
+    config::{load_saved_config, mc_home_dir, save_config},
+};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{
+    io::{self, Write},
+    path::PathBuf,
+    time::Duration,
+};
 
 /// Prefix all MissionControl session tokens use.
 pub const SESSION_TOKEN_PREFIX: &str = "mcs_";
@@ -25,9 +40,13 @@ pub struct LoginArgs {
     #[arg(long, default_value_t = 8)]
     pub ttl_hours: u64,
 
-    /// Print the session token to stdout (useful in scripts: export MC_TOKEN=$(mc login --print-token))
+    /// Print the session token to stdout after login (useful in scripts)
     #[arg(long)]
     pub print_token: bool,
+
+    /// Skip prompts: use MC_TOKEN env var directly (non-interactive)
+    #[arg(long)]
+    pub non_interactive: bool,
 }
 
 #[derive(Args, Debug)]
@@ -88,7 +107,7 @@ pub fn save_session(session: &SavedSession) -> Result<()> {
     }
     let json = serde_json::to_string_pretty(session)?;
     std::fs::write(&path, &json)?;
-    // Restrict permissions to owner-read-only
+    // Restrict permissions to owner read/write only — contains a live token
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -110,20 +129,202 @@ pub fn is_session_token(token: &str) -> bool {
     token.starts_with(SESSION_TOKEN_PREFIX)
 }
 
+// ── Interactive helpers ───────────────────────────────────────────────────────
+
+fn prompt(msg: &str) -> Result<String> {
+    eprint!("{}", msg);
+    io::stderr().flush()?;
+    let mut buf = String::new();
+    io::stdin().read_line(&mut buf)?;
+    Ok(buf.trim().to_string())
+}
+
+fn prompt_masked(msg: &str) -> Result<String> {
+    eprint!("{}", msg);
+    io::stderr().flush()?;
+    let value = rpassword::read_password().context("failed to read secret input")?;
+    Ok(value.trim().to_string())
+}
+
+/// Resolve base_url: env var → saved config → prompt user (and save answer).
+fn resolve_base_url(env_base_url: Option<&str>) -> Result<String> {
+    // 1. Explicit env / flag
+    if let Some(url) = env_base_url {
+        let url = url.trim_end_matches('/').to_string();
+        if !url.is_empty() {
+            return Ok(url);
+        }
+    }
+
+    // 2. Saved config
+    let cfg = load_saved_config();
+    if let Some(url) = cfg.base_url.as_deref() {
+        if !url.is_empty() {
+            eprintln!("mc login: using saved server URL: {}", url);
+            return Ok(url.trim_end_matches('/').to_string());
+        }
+    }
+
+    // 3. Interactive prompt
+    let input = prompt("  MissionControl server URL [http://localhost:8008]: ")?;
+    let url = if input.is_empty() {
+        "http://localhost:8008".to_string()
+    } else {
+        input.trim_end_matches('/').to_string()
+    };
+
+    // Persist for next time
+    let mut new_cfg = load_saved_config();
+    new_cfg.base_url = Some(url.clone());
+    if let Err(e) = save_config(&new_cfg) {
+        eprintln!("mc login: warning: could not save config: {}", e);
+    }
+
+    Ok(url)
+}
+
 // ── Command handlers ──────────────────────────────────────────────────────────
 
 pub async fn login(
     args: LoginArgs,
-    client: &MissionControlClient,
-    base_url: &str,
+    _client: &MissionControlClient,
+    current_base_url: &str,
 ) -> Result<()> {
-    let ttl = args.ttl_hours.clamp(1, 720);
-    let payload = serde_json::json!({ "ttl_hours": ttl });
-    let resp = client
-        .post_json("/auth/sessions", &payload)
-        .await
-        .context("failed to create session — check MC_TOKEN / OIDC credentials and MC_BASE_URL")?;
+    if args.non_interactive {
+        // Non-interactive: use MC_TOKEN env directly with the resolved URL
+        let token = std::env::var("MC_TOKEN")
+            .context("--non-interactive requires MC_TOKEN to be set")?;
+        let client = MissionControlClient::new_with_token(current_base_url, &token)
+            .context("could not build client")?;
+        let ttl = args.ttl_hours.clamp(1, 720);
+        let resp = client
+            .post_json("/auth/sessions", &serde_json::json!({ "ttl_hours": ttl }))
+            .await
+            .context("token rejected — verify MC_TOKEN and MC_BASE_URL")?;
+        return finish_session_login(resp, current_base_url, args.print_token);
+    }
 
+    eprintln!();
+    eprintln!("  MissionControl Login");
+    eprintln!("  ─────────────────────────────────────────");
+    eprintln!();
+
+    // Always let the user confirm/change the server URL
+    let base_url = resolve_base_url(Some(current_base_url))?;
+
+    // Auth method choice
+    eprintln!("  Auth method:");
+    eprintln!("    1) OIDC / SSO (open browser — default)");
+    eprintln!("    2) API token  (paste a long-lived token)");
+    eprintln!();
+    let choice = prompt("  Choice [1]: ")?;
+
+    match choice.trim() {
+        "2" | "token" => login_with_token(&base_url, args.ttl_hours, args.print_token).await,
+        _ => login_oidc(&base_url, args.print_token).await,
+    }
+}
+
+async fn login_with_token(base_url: &str, ttl_hours: u64, print_token: bool) -> Result<()> {
+    eprintln!();
+    let raw_token = prompt_masked("  API token: ")?;
+    if raw_token.is_empty() {
+        return Err(anyhow!("no token provided"));
+    }
+    eprintln!();
+
+    let ttl = ttl_hours.clamp(1, 720);
+    let client = MissionControlClient::new_with_token(base_url, &raw_token)
+        .context("could not build client with provided token")?;
+
+    let resp = client
+        .post_json("/auth/sessions", &serde_json::json!({ "ttl_hours": ttl }))
+        .await
+        .context("token rejected — verify the token and server URL")?;
+
+    finish_session_login(resp, base_url, print_token)
+}
+
+async fn login_oidc(base_url: &str, print_token: bool) -> Result<()> {
+    // Unauthenticated client — cli-initiate and cli-poll don't require a token
+    let anon_client = MissionControlClient::new_with_token(base_url, "")
+        .context("could not build client")?;
+    eprintln!();
+    eprintln!("  Starting OIDC login…");
+
+    // Call the CLI-specific initiate endpoint (no MC_TOKEN required)
+    let init: serde_json::Value = anon_client
+        .get_json("/auth/oidc/cli-initiate")
+        .await
+        .context("OIDC is not configured on this server (GET /auth/oidc/cli-initiate failed)")?;
+
+    let authorize_url = init["authorize_url"]
+        .as_str()
+        .ok_or_else(|| anyhow!("server returned no authorize_url"))?
+        .to_string();
+    let cli_nonce = init["cli_nonce"]
+        .as_str()
+        .ok_or_else(|| anyhow!("server returned no cli_nonce"))?
+        .to_string();
+
+    eprintln!();
+    eprintln!("  Opening your browser to complete authentication…");
+    eprintln!("  If the browser doesn't open, visit this URL manually:");
+    eprintln!();
+    eprintln!("    {}", authorize_url);
+    eprintln!();
+
+    // Best-effort browser launch
+    if let Err(e) = open::that(&authorize_url) {
+        eprintln!("  (could not open browser automatically: {})", e);
+    }
+
+    // Poll until the browser flow completes (up to 60 seconds before fallback).
+    eprintln!("  Waiting for browser authentication…");
+    let poll_url = format!("/auth/oidc/cli-poll/{}", cli_nonce);
+    let poll_deadline = std::time::Instant::now() + Duration::from_secs(60);
+
+    let grant_id = 'poll: {
+        while std::time::Instant::now() < poll_deadline {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            match anon_client.get_json(&poll_url).await {
+                Ok(resp) if resp["status"].as_str() == Some("ready") => {
+                    let gid = resp["grant_id"]
+                        .as_str()
+                        .ok_or_else(|| anyhow!("ready but no grant_id in poll response"))?
+                        .to_string();
+                    break 'poll gid;
+                }
+                _ => {} // pending or transient error — keep trying
+            }
+        }
+
+        // Poll timed out — fall back to paste-from-browser.
+        // The browser was redirected to /auth/oidc/cli-success?grant_id=... which shows the code.
+        eprintln!();
+        eprintln!("  Auto-detection timed out.");
+        eprintln!("  Your browser should show a page titled \"Authentication Complete\"");
+        eprintln!("  with a code. Copy it and paste it here.");
+        eprintln!();
+        let code = prompt("  Paste code: ")?;
+        code.trim().to_string()
+    };
+
+    if grant_id.is_empty() {
+        return Err(anyhow!("no code provided"));
+    }
+    eprintln!("  Browser authentication complete.");
+
+    // Exchange grant for a session token
+    let resp = anon_client
+        .post_json("/auth/oidc/exchange", &serde_json::json!({ "grant_id": grant_id }))
+        .await
+        .context("failed to exchange OIDC grant for session token")?;
+
+    finish_session_login(resp, base_url, print_token)
+}
+
+fn finish_session_login(resp: serde_json::Value, base_url: &str, print_token: bool) -> Result<()> {
     let token = resp["token"]
         .as_str()
         .ok_or_else(|| anyhow!("server response missing 'token' field"))?
@@ -141,17 +342,17 @@ pub async fn login(
     };
     save_session(&session).context("failed to write session file")?;
 
-    if args.print_token {
+    if print_token {
         println!("{}", token);
     } else {
-        eprintln!("mc login: session created for {}", subject);
-        eprintln!("mc login: token prefix: {}...", &token[..token.len().min(12)]);
-        eprintln!("mc login: expires: {}", expires_at);
-        eprintln!("mc login: saved to {}", session_file_path().display());
         eprintln!();
-        eprintln!("To use this session:");
-        eprintln!("  mc launch claude   # token injected automatically");
-        eprintln!("  mc whoami          # verify identity");
+        eprintln!("  Logged in as:  {}", subject);
+        eprintln!("  Token expires: {}", expires_at);
+        eprintln!("  Session saved: {}", session_file_path().display());
+        eprintln!();
+        eprintln!("  Run agents with:  mc launch claude");
+        eprintln!("  Check identity:   mc whoami");
+        eprintln!();
     }
 
     Ok(())
@@ -189,4 +390,33 @@ pub async fn whoami(client: &MissionControlClient) -> Result<()> {
 
     println!("{}", serde_json::to_string_pretty(&resp)?);
     Ok(())
+}
+
+// ── Public helper used by main.rs ─────────────────────────────────────────────
+
+/// Resolve MC_BASE_URL for the main CLI startup, incorporating saved config as fallback.
+/// Unlike the login flow, this does NOT prompt — it just returns the best available value.
+pub fn resolve_startup_base_url(flag_or_env: Option<String>, default: &str) -> String {
+    // If explicitly set (not the hardcoded default), trust it
+    if let Some(ref url) = flag_or_env {
+        let url = url.trim_end_matches('/');
+        if !url.is_empty() {
+            return url.to_string();
+        }
+    }
+
+    // Try saved config
+    let cfg = load_saved_config();
+    if let Some(url) = cfg.base_url.as_deref() {
+        if !url.is_empty() {
+            return url.trim_end_matches('/').to_string();
+        }
+    }
+
+    // Explicit flag/env if provided (even if it's the default)
+    if let Some(url) = flag_or_env {
+        return url.trim_end_matches('/').to_string();
+    }
+
+    default.trim_end_matches('/').to_string()
 }

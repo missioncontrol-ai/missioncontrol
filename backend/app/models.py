@@ -413,6 +413,7 @@ class EvolveRun(SQLModel, table=True):
     agent: str = Field(default="claude", index=True)
     status: str = Field(default="launched", index=True)
     started_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    ai_session_id: Optional[str] = Field(default=None, index=True)
 
 
 class AiSession(SQLModel, table=True):
@@ -420,6 +421,12 @@ class AiSession(SQLModel, table=True):
     owner_subject: str = Field(index=True)
     title: str = ""
     status: str = Field(default="active", index=True)
+    # Runtime layer fields (added in migration 20260315_0010)
+    runtime_kind: str = Field(default="opencode", index=True)
+    runtime_session_id: Optional[str] = Field(default=None)   # ID in the runtime service
+    workspace_path: Optional[str] = Field(default=None)
+    policy_json: str = Field(default="{}", sa_column=Column(Text))
+    capability_snapshot_json: str = Field(default="{}", sa_column=Column(Text))
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
@@ -463,6 +470,7 @@ class OidcAuthRequest(SQLModel, table=True):
     code_verifier: str = ""
     nonce: str = ""
     redirect_path: str = "/ui/"
+    cli_nonce: Optional[str] = Field(default=None, index=True)  # set for CLI login flows
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     expires_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     used_at: Optional[datetime] = None
@@ -473,6 +481,24 @@ class OidcLoginGrant(SQLModel, table=True):
     auth_request_id: str = Field(index=True)
     subject: str = Field(index=True)
     email: str = Field(default="", index=True)
+    cli_nonce: Optional[str] = Field(default=None, index=True)  # propagated from OidcAuthRequest
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     expires_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     used_at: Optional[datetime] = None
+
+
+class ScheduledAgentJob(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    name: str
+    description: str = ""
+    cron_expr: str                                    # "0 8 * * *" — standard cron
+    runtime_kind: str = "opencode"
+    initial_prompt: str = Field(sa_column=Column(Text))
+    system_context: Optional[str] = Field(default=None, sa_column=Column(Text))
+    policy_json: str = Field(default="{}", sa_column=Column(Text))
+    enabled: bool = True
+    last_run_at: Optional[datetime] = Field(default=None)
+    last_session_id: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)

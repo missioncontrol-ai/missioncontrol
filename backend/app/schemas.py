@@ -610,6 +610,8 @@ class UserProfileDownloadRead(UserProfileRead):
 
 class AiSessionCreate(BaseModel):
     title: str = ""
+    runtime_kind: str = "opencode"
+    policy: dict = Field(default_factory=dict)
 
 
 class AiTurnCreate(BaseModel):
@@ -650,6 +652,11 @@ class AiSessionRead(BaseModel):
     owner_subject: str
     title: str
     status: str
+    runtime_kind: str = "opencode"
+    runtime_session_id: Optional[str] = None
+    workspace_path: Optional[str] = None
+    capability_snapshot: dict = Field(default_factory=dict)
+    policy: dict = Field(default_factory=dict)
     turns: List[AiTurnRead] = Field(default_factory=list)
     events: List[AiEventRead] = Field(default_factory=list)
     pending_actions: List[AiPendingActionRead] = Field(default_factory=list)

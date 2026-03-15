@@ -80,6 +80,12 @@ export type AiSession = {
   owner_subject: string;
   title: string;
   status: string;
+  // Runtime layer fields (added in Phase 2)
+  runtime_kind?: string;
+  runtime_session_id?: string | null;
+  workspace_path?: string | null;
+  capability_snapshot?: Record<string, unknown>;
+  policy?: Record<string, unknown>;
   turns: AiTurn[];
   events: AiEvent[];
   pending_actions: AiPendingAction[];
@@ -87,11 +93,11 @@ export type AiSession = {
   updated_at: string;
 };
 
-export async function createAiSession(token?: string, title = '') {
+export async function createAiSession(token?: string, title = '', runtimeKind?: string, policy?: Record<string, unknown>) {
   const res = await fetch(`${API_BASE}/ai/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader(token) },
-    body: JSON.stringify({ title })
+    body: JSON.stringify({ title, runtime_kind: runtimeKind ?? 'opencode', policy: policy ?? {} })
   });
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as AiSession;
@@ -146,6 +152,155 @@ export async function rejectAiAction(sessionId: string, actionId: string, token?
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as AiSession;
 }
+
+// ── Evolve ────────────────────────────────────────────────────────────────────
+
+export type EvolveRun = {
+  run_id: string;
+  agent: string;
+  started_at: string;
+  status: string;
+  ai_session_id?: string | null;
+};
+
+export type EvolveMissionStatus = {
+  mission_id: string;
+  status: string;
+  created_at: string;
+  task_count: number;
+  run_count: number;
+  runs: EvolveRun[];
+};
+
+export async function seedEvolveMission(spec: Record<string, unknown>, token?: string) {
+  const res = await fetch(`${API_BASE}/evolve/missions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader(token) },
+    body: JSON.stringify({ spec })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function runEvolveMission(
+  missionId: string,
+  runtimeKind = 'opencode',
+  policy: Record<string, unknown> = {},
+  token?: string
+) {
+  const res = await fetch(`${API_BASE}/evolve/missions/${encodeURIComponent(missionId)}/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader(token) },
+    body: JSON.stringify({ runtime_kind: runtimeKind, policy })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getEvolveMissionStatus(missionId: string, token?: string) {
+  const res = await fetch(
+    `${API_BASE}/evolve/missions/${encodeURIComponent(missionId)}/status`,
+    { headers: authHeader(token) }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as EvolveMissionStatus;
+}
+
+// ── Scheduled Jobs ────────────────────────────────────────────────────────────
+
+export type ScheduledJob = {
+  id: number;
+  owner_subject: string;
+  name: string;
+  description: string;
+  cron_expr: string;
+  runtime_kind: string;
+  initial_prompt: string;
+  system_context?: string | null;
+  policy: Record<string, unknown>;
+  enabled: boolean;
+  last_run_at?: string | null;
+  last_session_id?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function listScheduledJobs(token?: string) {
+  const res = await fetch(`${API_BASE}/scheduled-jobs`, { headers: authHeader(token) });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as ScheduledJob[];
+}
+
+export async function createScheduledJob(
+  data: {
+    name: string;
+    cron_expr: string;
+    initial_prompt: string;
+    description?: string;
+    runtime_kind?: string;
+    system_context?: string;
+    policy?: Record<string, unknown>;
+    enabled?: boolean;
+  },
+  token?: string
+) {
+  const res = await fetch(`${API_BASE}/scheduled-jobs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader(token) },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as ScheduledJob;
+}
+
+export async function getScheduledJob(jobId: number, token?: string) {
+  const res = await fetch(`${API_BASE}/scheduled-jobs/${jobId}`, { headers: authHeader(token) });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as ScheduledJob;
+}
+
+export async function updateScheduledJob(
+  jobId: number,
+  data: Partial<{
+    name: string;
+    description: string;
+    cron_expr: string;
+    runtime_kind: string;
+    initial_prompt: string;
+    system_context: string;
+    policy: Record<string, unknown>;
+    enabled: boolean;
+  }>,
+  token?: string
+) {
+  const res = await fetch(`${API_BASE}/scheduled-jobs/${jobId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeader(token) },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as ScheduledJob;
+}
+
+export async function deleteScheduledJob(jobId: number, token?: string) {
+  const res = await fetch(`${API_BASE}/scheduled-jobs/${jobId}`, {
+    method: 'DELETE',
+    headers: authHeader(token)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function triggerScheduledJobNow(jobId: number, token?: string) {
+  const res = await fetch(`${API_BASE}/scheduled-jobs/${jobId}/run`, {
+    method: 'POST',
+    headers: authHeader(token)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── OIDC ──────────────────────────────────────────────────────────────────────
 
 export type OidcExchangeResponse = {
   token: string;

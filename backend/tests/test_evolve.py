@@ -38,19 +38,21 @@ class EvolveRouterTests(unittest.TestCase):
         run = asyncio.run(
             evolve_router.run_evolve_mission(
                 mission_id,
-                evolve_router.EvolveRunRequest(agent="codex"),
+                evolve_router.EvolveRunRequest(runtime_kind="opencode"),
                 owner,
             )
         )
         self.assertEqual(run["mission_id"], mission_id)
-        self.assertEqual(run["agent"], "codex")
-        self.assertEqual(run["status"], "launched")
+        self.assertEqual(run["agent"], "opencode")
+        self.assertEqual(run["status"], "running")
+        self.assertIn("ai_session_id", run)
 
         status = asyncio.run(evolve_router.get_evolve_status(mission_id, owner))
         self.assertEqual(status["mission_id"], mission_id)
         self.assertEqual(status["run_count"], 1)
         self.assertEqual(status["task_count"], 1)
-        self.assertEqual(status["runs"][0]["agent"], "codex")
+        self.assertEqual(status["runs"][0]["agent"], "opencode")
+        self.assertIn("ai_session_id", status["runs"][0])
 
     def test_cross_subject_access_returns_not_found(self):
         owner = _request("owner@example.com")
@@ -67,7 +69,7 @@ class EvolveRouterTests(unittest.TestCase):
             asyncio.run(
                 evolve_router.run_evolve_mission(
                     mission_id,
-                    evolve_router.EvolveRunRequest(agent="claude"),
+                    evolve_router.EvolveRunRequest(),
                     other,
                 )
             )
@@ -83,7 +85,7 @@ class EvolveRouterTests(unittest.TestCase):
             asyncio.run(
                 evolve_router.run_evolve_mission(
                     "evolve-missing",
-                    evolve_router.EvolveRunRequest(agent="claude"),
+                    evolve_router.EvolveRunRequest(),
                     owner,
                 )
             )

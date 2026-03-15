@@ -1,17 +1,25 @@
 use clap::Parser;
 use mc::{
-    booster::AgentBooster, client::MissionControlClient, commands::McCommand, config::McConfig,
+    auth::resolve_startup_base_url,
+    booster::AgentBooster,
+    client::MissionControlClient,
+    commands::McCommand,
+    config::McConfig,
 };
 use tracing::Level;
 use tracing_subscriber::{fmt, EnvFilter};
+
+const DEFAULT_BASE_URL: &str = "http://localhost:8008";
 
 /// Top-level CLI options that control the mc experience.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct CliOpts {
     /// Base URL pointing at an existing Mission Control deployment.
-    #[arg(long, env = "MC_BASE_URL", default_value = "http://localhost:8008")]
-    base_url: String,
+    /// If omitted, falls back to MC_BASE_URL env, then ~/.missioncontrol/config.json,
+    /// then http://localhost:8008.
+    #[arg(long, env = "MC_BASE_URL")]
+    base_url: Option<String>,
 
     /// Either MC_TOKEN or OIDC creds are used to authenticate against Mission Control.
     #[arg(long, env = "MC_TOKEN")]
@@ -49,10 +57,13 @@ async fn main() -> anyhow::Result<()> {
 
     let opts = CliOpts::parse();
 
+    // Resolve base_url: flag/env → ~/.missioncontrol/config.json → hardcoded default.
+    let base_url = resolve_startup_base_url(opts.base_url.clone(), DEFAULT_BASE_URL);
+
     // Resolve the effective token: CLI/env takes precedence; fall back to a
     // saved session token in ~/.missioncontrol/session.json.
     let token = opts.token.clone().or_else(|| {
-        let sess = mc::config::load_session_token(&opts.base_url);
+        let sess = mc::config::load_session_token(&base_url);
         if sess.is_some() {
             tracing::debug!("using session token from ~/.missioncontrol/session.json");
         }
@@ -60,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let config = McConfig::from_parts(
-        &opts.base_url,
+        &base_url,
         token,
         opts.agent_id.clone(),
         opts.timeout_secs,
