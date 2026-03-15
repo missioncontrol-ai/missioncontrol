@@ -21,7 +21,7 @@ class OnboardingManifestTests(unittest.TestCase):
         self.assertIn("config_generator_script", manifest["automation"])
         self.assertIn("claude_code", manifest["agent_configs"])
         self.assertIn("codex", manifest["agent_configs"])
-        self.assertIn("openclaw_nanoclaw", manifest["agent_configs"])
+        self.assertIn("openclaw_custom", manifest["agent_configs"])
         self.assertEqual(manifest["integration_contract_version"], "1.1.0")
 
     def test_manifest_normalizes_full_url(self):

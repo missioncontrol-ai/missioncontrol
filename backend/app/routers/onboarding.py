@@ -100,7 +100,7 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
                     "env": mc_serve_env,
                 },
             },
-            "openclaw_nanoclaw": {
+            "openclaw_custom": {
                 "missioncontrol": {
                     "command": "mc",
                     "args": ["serve"],

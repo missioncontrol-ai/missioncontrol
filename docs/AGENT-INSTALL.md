@@ -30,7 +30,7 @@ mc launch claude        # Claude Code
 mc launch codex         # OpenAI Codex CLI
 mc launch gemini        # Google Gemini CLI
 mc launch openclaw      # OpenClaw
-mc launch nanoclaw      # NanoClaw
+mc launch custom        # Custom ACP agent
 ```
 
 That's it. `mc launch` handles: auth preflight, config generation, and exec.
@@ -67,7 +67,7 @@ That's it. `mc launch` handles: auth preflight, config generation, and exec.
 | Codex | `~/.missioncontrol/instances/<runtime_session_id>/home/.codex/config.toml` |
 | Gemini CLI | `~/.missioncontrol/instances/<runtime_session_id>/home/.gemini/settings.json` |
 | OpenClaw | `~/.missioncontrol/instances/<runtime_session_id>/mc/config/openclaw.acp.json` |
-| NanoClaw | `~/.missioncontrol/instances/<runtime_session_id>/mc/config/nanoclaw.acp.json` |
+| Custom ACP agent | `~/.missioncontrol/instances/<runtime_session_id>/mc/config/custom.acp.json` |
 
 Use `--legacy-global-config` only when you explicitly need legacy global config writes.
 

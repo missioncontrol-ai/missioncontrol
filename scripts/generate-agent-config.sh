@@ -7,7 +7,7 @@ OUT_DIR="./generated-agent-config"
 
 usage() {
   cat <<EOF
-Usage: $0 [--base-url URL] [--agent all|codex|claude|openclaw|nanoclaw] [--out DIR]
+Usage: $0 [--base-url URL] [--agent all|codex|claude|openclaw|custom] [--out DIR]
 
 Examples:
   $0 --base-url http://localhost:8008 --agent all --out ./generated-agent-config
@@ -85,7 +85,7 @@ jq -r '
   + " }\n"
 ' "$TMP_MANIFEST" > "$OUT_DIR/codex.mcp.toml"
 
-# Claude/OpenClaw/NanoClaw consume JSON snippets.
+# Claude/OpenClaw/Custom consume JSON snippets.
 jq '{
   mcpServers: {
     missioncontrol: {
@@ -105,7 +105,7 @@ jq '{
   }
 }' "$TMP_MANIFEST" > "$OUT_DIR/openclaw.acp.json"
 
-cp "$OUT_DIR/openclaw.acp.json" "$OUT_DIR/nanoclaw.acp.json"
+cp "$OUT_DIR/openclaw.acp.json" "$OUT_DIR/custom.acp.json"
 
 write_agent_file() {
   local agent_name="$1"
@@ -119,8 +119,8 @@ case "$AGENT" in
   all)
     write_agent_file "codex" "codex" "codex.mcp.json"
     write_agent_file "claude" "claude_code" "claude-code.mcp.json"
-    write_agent_file "openclaw" "openclaw_nanoclaw" "openclaw.mcp.json"
-    write_agent_file "nanoclaw" "openclaw_nanoclaw" "nanoclaw.mcp.json"
+    write_agent_file "openclaw" "openclaw_custom" "openclaw.mcp.json"
+    write_agent_file "custom" "openclaw_custom" "custom.mcp.json"
     ;;
   codex)
     write_agent_file "codex" "codex" "codex.mcp.json"
@@ -129,14 +129,14 @@ case "$AGENT" in
     write_agent_file "claude" "claude_code" "claude-code.mcp.json"
     ;;
   openclaw)
-    write_agent_file "openclaw" "openclaw_nanoclaw" "openclaw.mcp.json"
+    write_agent_file "openclaw" "openclaw_custom" "openclaw.mcp.json"
     ;;
-  nanoclaw)
-    write_agent_file "nanoclaw" "openclaw_nanoclaw" "nanoclaw.mcp.json"
+  custom)
+    write_agent_file "custom" "openclaw_custom" "custom.mcp.json"
     ;;
   *)
     echo "Invalid --agent value: $AGENT" >&2
-    echo "Expected one of: all, codex, claude, openclaw, nanoclaw" >&2
+    echo "Expected one of: all, codex, claude, openclaw, custom" >&2
     exit 2
     ;;
 esac
@@ -145,5 +145,5 @@ echo "wrote $OUT_DIR/missioncontrol.mcp.json"
 echo "wrote $OUT_DIR/codex.mcp.toml"
 echo "wrote $OUT_DIR/claude.mcp.json"
 echo "wrote $OUT_DIR/openclaw.acp.json"
-echo "wrote $OUT_DIR/nanoclaw.acp.json"
+echo "wrote $OUT_DIR/custom.acp.json"
 echo "source manifest: $MANIFEST_URL"

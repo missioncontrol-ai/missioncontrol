@@ -39,7 +39,7 @@ cat >"$TEST_BIN/openclaw" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-cat >"$TEST_BIN/nanoclaw" <<'EOF'
+cat >"$TEST_BIN/custom" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
@@ -86,9 +86,9 @@ run_launch openclaw
 inst="$(latest_instance_dir)"
 assert_exists "$inst/mc/config/openclaw.acp.json"
 
-run_launch nanoclaw
+run_launch custom
 inst="$(latest_instance_dir)"
-assert_exists "$inst/mc/config/nanoclaw.acp.json"
+assert_exists "$inst/mc/config/custom.acp.json"
 
 echo "[launch-regression] legacy global config escape hatch"
 run_launch codex --legacy-global-config

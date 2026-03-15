@@ -39,7 +39,7 @@ use uuid::Uuid;
 
 #[derive(Args, Debug)]
 pub struct LaunchArgs {
-    /// Agent to launch: codex, claude, gemini, openclaw, nanoclaw, resume
+    /// Agent to launch: codex, claude, gemini, openclaw, custom, resume
     agent: Option<AgentKind>,
 
     /// No-op (daemon is no longer started by mc launch; kept for backwards compat)
@@ -98,7 +98,7 @@ enum AgentKind {
     Claude,
     Gemini,
     Openclaw,
-    Nanoclaw,
+    Custom,
     Resume,
 }
 
@@ -109,7 +109,7 @@ impl AgentKind {
             AgentKind::Claude => Box::new(ClaudeDriver),
             AgentKind::Gemini => Box::new(GeminiDriver),
             AgentKind::Openclaw => Box::new(OpenClawDriver),
-            AgentKind::Nanoclaw => Box::new(NanoClawDriver),
+            AgentKind::Custom => Box::new(CustomDriver),
             AgentKind::Resume => Box::new(CodexDriver),
         }
     }
@@ -120,7 +120,7 @@ impl AgentKind {
             AgentKind::Claude => "claude",
             AgentKind::Gemini => "gemini",
             AgentKind::Openclaw => "openclaw",
-            AgentKind::Nanoclaw => "nanoclaw",
+            AgentKind::Custom => "custom",
             AgentKind::Resume => "resume",
         }
     }
@@ -481,10 +481,10 @@ fn render_json_mcp_entry(
     full["mcpServers"]["missioncontrol"].clone()
 }
 
-// ── OpenClawDriver / NanoClawDriver ──────────────────────────────────────────
+// ── OpenClawDriver / CustomDriver ────────────────────────────────────────────
 
 struct OpenClawDriver;
-struct NanoClawDriver;
+struct CustomDriver;
 
 impl AgentDriver for OpenClawDriver {
     fn binary(&self) -> &str {
@@ -516,13 +516,13 @@ impl AgentDriver for OpenClawDriver {
     }
 }
 
-impl AgentDriver for NanoClawDriver {
+impl AgentDriver for CustomDriver {
     fn binary(&self) -> &str {
-        "nanoclaw"
+        "custom"
     }
 
     fn install_hint(&self) -> &str {
-        "See MissionControl docs for NanoClaw installation"
+        "See MissionControl docs for custom ACP-compatible agent installation"
     }
 
     fn install_config(
@@ -534,12 +534,12 @@ impl AgentDriver for NanoClawDriver {
         _target_home: &Path,
         target_mc_home: &Path,
     ) -> Result<()> {
-        install_acp_config("nanoclaw", base_url, token, embed_token, target_mc_home)
+        install_acp_config("custom", base_url, token, embed_token, target_mc_home)
     }
 
     fn command(&self, extra_args: &[String], target_mc_home: &Path) -> std::process::Command {
-        let config = target_mc_home.join("config").join("nanoclaw.acp.json");
-        let mut cmd = std::process::Command::new("nanoclaw");
+        let config = target_mc_home.join("config").join("custom.acp.json");
+        let mut cmd = std::process::Command::new("custom");
         cmd.arg("--acp-config").arg(config);
         cmd.args(extra_args);
         cmd
@@ -803,7 +803,7 @@ fn resolve_agent_choice(agent: Option<AgentKind>) -> Result<AgentKind> {
             return Ok(kind);
         }
     }
-    eprint!("mc launch: choose agent [codex/claude/gemini/openclaw/nanoclaw] (default codex): ");
+    eprint!("mc launch: choose agent [codex/claude/gemini/openclaw/custom] (default codex): ");
     io::stderr().flush()?;
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
@@ -820,7 +820,7 @@ fn parse_agent_kind(value: &str) -> Result<AgentKind> {
         "claude" => Ok(AgentKind::Claude),
         "gemini" => Ok(AgentKind::Gemini),
         "openclaw" => Ok(AgentKind::Openclaw),
-        "nanoclaw" => Ok(AgentKind::Nanoclaw),
+        "custom" | "nanoclaw" => Ok(AgentKind::Custom),
         _ => Err(anyhow!("unsupported agent '{}'", value)),
     }
 }
