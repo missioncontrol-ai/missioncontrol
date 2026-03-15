@@ -369,6 +369,7 @@ impl AgentDriver for ClaudeDriver {
             token,
             embed_token,
         );
+        let mc_entry = absolutize_mc_command(mc_entry);
 
         root.as_object_mut()
             .ok_or_else(|| anyhow!("~/.claude.json is not a JSON object"))?
@@ -433,6 +434,7 @@ impl AgentDriver for GeminiDriver {
             token,
             embed_token,
         );
+        let mc_entry = absolutize_mc_command(mc_entry);
 
         root.as_object_mut()
             .ok_or_else(|| anyhow!("~/.gemini/settings.json is not a JSON object"))?
@@ -482,6 +484,30 @@ fn render_json_mcp_entry(
         }
     }
     full["mcpServers"]["missioncontrol"].clone()
+}
+
+fn absolutize_mc_command(mut entry: serde_json::Value) -> serde_json::Value {
+    let cmd = entry
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if cmd != "mc" {
+        return entry;
+    }
+    let resolved = std::env::current_exe()
+        .ok()
+        .filter(|p| p.is_file())
+        .or_else(|| which_binary("mc").ok());
+    if let Some(path) = resolved {
+        if let Some(obj) = entry.as_object_mut() {
+            obj.insert(
+                "command".to_string(),
+                serde_json::Value::String(path.display().to_string()),
+            );
+        }
+    }
+    entry
 }
 
 // ── OpenClawDriver / CustomDriver ────────────────────────────────────────────
