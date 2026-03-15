@@ -399,12 +399,13 @@ async fn handle_init(args: InitArgs, client: MissionControlClient, config: &McCo
     if profile_name.is_empty() {
         anyhow::bail!("--profile cannot be empty");
     }
+    validate_init_base_url(config)?;
 
     let login_client_holder: Option<MissionControlClient> = if config.token.is_none() {
         if auth::load_saved_session(config.base_url.as_str()).is_none() {
             eprintln!("mc: no valid session found for {}", config.base_url.as_str());
             eprintln!("mc: running `mc login` to authenticate...");
-            auth::login(
+            if let Err(err) = auth::login(
                 auth::LoginArgs {
                     ttl_hours: 8,
                     print_token: false,
@@ -414,11 +415,16 @@ async fn handle_init(args: InitArgs, client: MissionControlClient, config: &McCo
                 config.base_url.as_str(),
             )
             .await
-            .context("login failed — cannot initialize profiles without authentication")?;
+            {
+                return bootstrap_local_profile(
+                    profile_name,
+                    Some(format!("login failed; continuing in local-only mode: {err}")),
+                );
+            }
         }
         let session_token = auth::load_saved_session(config.base_url.as_str())
             .map(|s| s.token)
-            .context("session not found after login — run `mc login` manually")?;
+            .ok_or_else(|| anyhow::anyhow!("session not found after login"))?;
         Some(
             MissionControlClient::new_with_token(config.base_url.as_str(), &session_token)
                 .context("failed to build client with session token")?,
@@ -428,7 +434,17 @@ async fn handle_init(args: InitArgs, client: MissionControlClient, config: &McCo
     };
     let effective_client: &MissionControlClient = login_client_holder.as_ref().unwrap_or(&client);
 
-    let listed = mcp_profile_call(effective_client, "list_profiles", json!({ "limit": 1 })).await?;
+    let listed = match mcp_profile_call(effective_client, "list_profiles", json!({ "limit": 1 })).await {
+        Ok(v) => v,
+        Err(err) => {
+            return bootstrap_local_profile(
+                profile_name,
+                Some(format!(
+                    "unable to reach Mission Control profile service; continuing in local-only mode: {err}"
+                )),
+            );
+        }
+    };
     let has_profiles = listed
         .get("profiles")
         .and_then(|v| v.as_array())
@@ -463,7 +479,7 @@ async fn handle_init(args: InitArgs, client: MissionControlClient, config: &McCo
     }
 
     let tarball_b64 = empty_profile_tarball_b64()?;
-    let published = mcp_profile_call(
+    let published = match mcp_profile_call(
         effective_client,
         "publish_profile",
         json!({
@@ -474,10 +490,21 @@ async fn handle_init(args: InitArgs, client: MissionControlClient, config: &McCo
             "tarball_b64": tarball_b64
         }),
     )
-    .await?;
+    .await {
+        Ok(v) => v,
+        Err(err) => {
+            return bootstrap_local_profile(
+                profile_name,
+                Some(format!(
+                    "failed to publish profile to Mission Control; continuing in local-only mode: {err}"
+                )),
+            );
+        }
+    };
     print_json(&json!({
         "ok": true,
         "created": true,
+        "synced": true,
         "profile": published.get("profile").cloned().unwrap_or(Value::Null),
     }));
     Ok(())
@@ -827,6 +854,55 @@ fn empty_profile_tarball_b64() -> Result<String> {
         builder.finish()?;
     }
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+fn validate_init_base_url(config: &McConfig) -> Result<()> {
+    let base = config.base_url.as_str();
+    let parsed = url::Url::parse(base).with_context(|| format!("invalid MC base URL: {base}"))?;
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        anyhow::bail!("MC base URL must use http/https, got '{}'", scheme);
+    }
+    if parsed.host_str().unwrap_or("").trim().is_empty() {
+        anyhow::bail!("MC base URL missing host: {}", base);
+    }
+    if std::env::var("MC_BASE_URL").is_err() && base == "http://localhost:8008" {
+        eprintln!(
+            "mc: warning: MC_BASE_URL is not set; using default {}",
+            base
+        );
+    }
+    Ok(())
+}
+
+fn bootstrap_local_profile(profile_name: &str, warning: Option<String>) -> Result<()> {
+    let profile_root = crate::config::mc_home_dir().join("profiles").join(profile_name);
+    fs::create_dir_all(&profile_root)?;
+    let payload = json!({
+        "profile": profile_name,
+        "mode": "local_only",
+        "synced": false,
+        "warning": warning.clone().unwrap_or_else(|| "local-only bootstrap".to_string()),
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+    fs::write(
+        profile_root.join("state.json"),
+        serde_json::to_string_pretty(&payload)?,
+    )?;
+    if let Some(w) = warning {
+        eprintln!("mc: warning: {}", w);
+        eprintln!(
+            "mc: warning: this profile is local-only and will not sync until Mission Control connectivity/auth is fixed"
+        );
+    }
+    print_json(&json!({
+        "ok": true,
+        "created": true,
+        "synced": false,
+        "profile": profile_name,
+        "mode": "local_only"
+    }));
+    Ok(())
 }
 
 async fn handle_workspace(
