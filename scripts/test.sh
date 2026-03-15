@@ -26,4 +26,14 @@ else
   echo "[test] skipping legacy missioncontrol-mcp suite (set MC_PY_BRIDGE_LEGACY=1 to enable)"
 fi
 
+if [[ "${MC_RUN_LAUNCH_REGRESSION:-0}" == "1" ]]; then
+  echo "[test] mc launch regression harness"
+  (
+    cd "${ROOT_DIR}"
+    bash scripts/launch-regression.sh
+  )
+else
+  echo "[test] skipping mc launch regression harness (set MC_RUN_LAUNCH_REGRESSION=1 to enable)"
+fi
+
 echo "[test] completed"
