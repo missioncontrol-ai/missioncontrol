@@ -33,6 +33,8 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
 };
+#[cfg(unix)]
+use std::os::unix::fs as unix_fs;
 use uuid::Uuid;
 
 // ── CLI args ────────────────────────────────────────────────────────────────
@@ -733,6 +735,12 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     let config_target_home = if args.legacy_global_config {
         dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?
     } else {
+        initialize_profile_overlay(
+            &selected_agent,
+            &agent_home,
+            &profile_home,
+            &dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?,
+        )?;
         agent_home.clone()
     };
     std::env::set_var("MC_HOME", &instance_mc_home);
@@ -812,6 +820,81 @@ fn resolve_agent_choice(agent: Option<AgentKind>) -> Result<AgentKind> {
         return Ok(AgentKind::Codex);
     }
     parse_agent_kind(&trimmed)
+}
+
+fn managed_config_relpaths(agent: &AgentKind) -> &'static [&'static str] {
+    match agent {
+        AgentKind::Codex => &[".codex/config.toml"],
+        AgentKind::Claude => &[".claude.json"],
+        AgentKind::Gemini => &[".gemini/settings.json"],
+        _ => &[],
+    }
+}
+
+fn initialize_profile_overlay(
+    agent: &AgentKind,
+    agent_home: &Path,
+    profile_home: &Path,
+    global_home: &Path,
+) -> Result<()> {
+    for rel in managed_config_relpaths(agent) {
+        let profile_path = profile_home.join(rel);
+        if !profile_path.exists() {
+            let global_path = global_home.join(rel);
+            if global_path.exists() {
+                if let Some(parent) = profile_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&global_path, &profile_path).with_context(|| {
+                    format!(
+                        "failed to seed profile config from {} to {}",
+                        global_path.display(),
+                        profile_path.display()
+                    )
+                })?;
+                mc_info!(
+                    "seeded profile config from global {}",
+                    global_path.display()
+                );
+            }
+        }
+
+        let instance_path = agent_home.join(rel);
+        if let Some(parent) = instance_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if instance_path.exists() {
+            let meta = fs::symlink_metadata(&instance_path)?;
+            if meta.file_type().is_symlink() || meta.is_file() {
+                fs::remove_file(&instance_path)?;
+            } else if meta.is_dir() {
+                fs::remove_dir_all(&instance_path)?;
+            }
+        }
+
+        if let Some(parent) = profile_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if !profile_path.exists() {
+            fs::write(&profile_path, "")?;
+        }
+
+        #[cfg(unix)]
+        {
+            unix_fs::symlink(&profile_path, &instance_path).with_context(|| {
+                format!(
+                    "failed to link instance config {} -> {}",
+                    instance_path.display(),
+                    profile_path.display()
+                )
+            })?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::copy(&profile_path, &instance_path)?;
+        }
+    }
+    Ok(())
 }
 
 fn parse_agent_kind(value: &str) -> Result<AgentKind> {
@@ -1162,5 +1245,36 @@ mod tests {
             .expect("install gemini config");
 
         assert!(target_home.join(".gemini/settings.json").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn overlay_seeds_profile_from_global_and_links_instance() {
+        let tmp = tempdir().expect("tempdir");
+        let global_home = tmp.path().join("global-home");
+        let profile_home = tmp.path().join("profile-home");
+        let agent_home = tmp.path().join("agent-home");
+        fs::create_dir_all(global_home.join(".claude")).expect("global home");
+        fs::create_dir_all(&profile_home).expect("profile home");
+        fs::create_dir_all(&agent_home).expect("agent home");
+
+        let global_cfg = global_home.join(".claude.json");
+        fs::write(&global_cfg, r#"{"theme":"dark"}"#).expect("write global config");
+
+        initialize_profile_overlay(&AgentKind::Claude, &agent_home, &profile_home, &global_home)
+            .expect("initialize profile overlay");
+
+        let profile_cfg = profile_home.join(".claude.json");
+        assert!(profile_cfg.exists(), "profile config should be seeded");
+        assert_eq!(
+            fs::read_to_string(&profile_cfg).expect("read profile"),
+            r#"{"theme":"dark"}"#
+        );
+
+        let instance_cfg = agent_home.join(".claude.json");
+        let meta = fs::symlink_metadata(&instance_cfg).expect("instance metadata");
+        assert!(meta.file_type().is_symlink(), "instance path should be symlink");
+        let target = fs::read_link(&instance_cfg).expect("read symlink");
+        assert_eq!(target, profile_cfg);
     }
 }
