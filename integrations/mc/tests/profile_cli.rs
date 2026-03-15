@@ -114,3 +114,63 @@ fn profile_pull_respects_pin_mismatch_from_mcp() {
     assert!(stderr.contains("profile_sha_mismatch"), "stderr={stderr}");
     mock.assert();
 }
+
+#[test]
+fn profile_status_calls_get_and_pin_tools() {
+    let server = MockServer::start();
+    let tmp = tempdir().expect("tmp");
+    let mc_home = tmp.path().join("mc-home");
+    let profile_dir = mc_home.join("profiles").join("research");
+    fs::create_dir_all(&profile_dir).expect("profile dir");
+    fs::write(
+        profile_dir.join("pin.json"),
+        r#"{"profile":"research","pinned_sha256":"remote-sha"}"#,
+    )
+    .expect("pin");
+
+    let get_mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/mcp/call")
+            .json_body(json!({
+                "tool":"get_profile",
+                "args":{"name":"research"}
+            }));
+        then.status(200).json_body(json!({
+            "ok": true,
+            "result": {"profile":{"name":"research","sha256":"remote-sha"}}
+        }));
+    });
+
+    let pin_mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/mcp/call")
+            .json_body(json!({
+                "tool":"pin_profile_version",
+                "args":{"name":"research","sha256":"remote-sha"}
+            }));
+        then.status(200).json_body(json!({
+            "ok": true,
+            "result": {
+                "name":"research",
+                "pinned_sha256":"remote-sha",
+                "remote_sha256":"remote-sha",
+                "matches": true
+            }
+        }));
+    });
+
+    let output = Command::new(mc_bin())
+        .args(["profile", "status", "--name", "research"])
+        .env("MC_BASE_URL", server.url(""))
+        .env("MC_TOKEN", "test-token")
+        .env("MC_HOME", &mc_home)
+        .output()
+        .expect("run mc profile status");
+
+    assert!(output.status.success(), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"pin_check\""), "stdout={stdout}");
+    assert!(stdout.contains("\"matches\": true"), "stdout={stdout}");
+    get_mock.assert();
+    pin_mock.assert();
+}
