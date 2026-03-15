@@ -5,6 +5,7 @@ use mc::{
     client::MissionControlClient,
     commands::McCommand,
     config::McConfig,
+    secrets,
 };
 use tracing::Level;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -73,6 +74,15 @@ async fn main() -> anyhow::Result<()> {
         }
         sess
     });
+    let token = if let Some(raw) = token {
+        Some(
+            secrets::resolve_maybe_secret_ref(&raw)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to resolve MC token secret ref: {e}"))?,
+        )
+    } else {
+        None
+    };
 
     let config = McConfig::from_parts(
         &base_url,

@@ -764,6 +764,9 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         &config_target_home,
         &instance_mc_home,
     )?;
+    if matches!(selected_agent, AgentKind::Claude) {
+        claude_preflight_report(&agent_home);
+    }
 
     // 8. Exec the agent (replaces the current process on Unix).
     //    Always inject MC_TOKEN into the agent environment so the MCP shim can
@@ -778,6 +781,37 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         &instance_mc_home,
         &profile_name,
     )
+}
+
+fn claude_preflight_report(agent_home: &Path) {
+    let checks = [
+        (
+            agent_home.join(".claude.json"),
+            "Claude config (.claude.json)",
+        ),
+        (
+            agent_home.join(".claude").join("settings.json"),
+            "Claude settings (.claude/settings.json)",
+        ),
+        (
+            agent_home.join(".claude").join(".credentials.json"),
+            "Claude auth (.claude/.credentials.json)",
+        ),
+    ];
+    let mut missing: Vec<String> = Vec::new();
+    for (path, label) in checks {
+        if !path.exists() {
+            missing.push(format!("{} missing at {}", label, path.display()));
+        }
+    }
+    if missing.is_empty() {
+        mc_info!("claude preflight: auth/settings artifacts detected");
+        return;
+    }
+    for line in missing {
+        mc_warn!("claude preflight: {}", line);
+    }
+    mc_warn!("claude may prompt for theme/login if these are not initialized for this profile");
 }
 
 /// Determine whether to embed `MC_TOKEN` into the written agent config.
@@ -826,7 +860,7 @@ fn resolve_agent_choice(agent: Option<AgentKind>) -> Result<AgentKind> {
 fn managed_config_relpaths(agent: &AgentKind) -> &'static [&'static str] {
     match agent {
         AgentKind::Codex => &[".codex/config.toml"],
-        AgentKind::Claude => &[".claude.json"],
+        AgentKind::Claude => &[".claude.json", ".claude"],
         AgentKind::Gemini => &[".gemini/settings.json"],
         _ => &[],
     }
@@ -843,16 +877,7 @@ fn initialize_profile_overlay(
         if !profile_path.exists() {
             let global_path = global_home.join(rel);
             if global_path.exists() {
-                if let Some(parent) = profile_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::copy(&global_path, &profile_path).with_context(|| {
-                    format!(
-                        "failed to seed profile config from {} to {}",
-                        global_path.display(),
-                        profile_path.display()
-                    )
-                })?;
+                seed_profile_path(&global_path, &profile_path)?;
                 mc_info!(
                     "seeded profile config from global {}",
                     global_path.display()
@@ -877,7 +902,11 @@ fn initialize_profile_overlay(
             fs::create_dir_all(parent)?;
         }
         if !profile_path.exists() {
-            fs::write(&profile_path, "")?;
+            if rel.ends_with('/') || *rel == ".claude" {
+                fs::create_dir_all(&profile_path)?;
+            } else {
+                fs::write(&profile_path, "")?;
+            }
         }
 
         #[cfg(unix)]
@@ -893,6 +922,58 @@ fn initialize_profile_overlay(
         #[cfg(not(unix))]
         {
             fs::copy(&profile_path, &instance_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn seed_profile_path(global_path: &Path, profile_path: &Path) -> Result<()> {
+    if let Some(parent) = profile_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if global_path.is_dir() {
+        copy_dir_recursive(global_path, profile_path).with_context(|| {
+            format!(
+                "failed to seed profile directory from {} to {}",
+                global_path.display(),
+                profile_path.display()
+            )
+        })?;
+    } else {
+        fs::copy(global_path, profile_path).with_context(|| {
+            format!(
+                "failed to seed profile config from {} to {}",
+                global_path.display(),
+                profile_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        let meta = fs::symlink_metadata(&path)?;
+        if meta.file_type().is_symlink() {
+            let link_target = fs::read_link(&path)?;
+            #[cfg(unix)]
+            unix_fs::symlink(link_target, &target)?;
+            #[cfg(not(unix))]
+            {
+                if path.is_dir() {
+                    fs::create_dir_all(&target)?;
+                } else {
+                    fs::copy(&path, &target)?;
+                }
+            }
+        } else if meta.is_dir() {
+            copy_dir_recursive(&path, &target)?;
+        } else {
+            fs::copy(&path, &target)?;
         }
     }
     Ok(())
@@ -1330,5 +1411,37 @@ mod tests {
         assert!(meta.file_type().is_symlink(), "instance path should be symlink");
         let target = fs::read_link(&instance_cfg).expect("read symlink");
         assert_eq!(target, profile_cfg);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn overlay_seeds_claude_dir_and_links_instance_dir() {
+        let tmp = tempdir().expect("tempdir");
+        let global_home = tmp.path().join("global-home");
+        let profile_home = tmp.path().join("profile-home");
+        let agent_home = tmp.path().join("agent-home");
+        fs::create_dir_all(global_home.join(".claude")).expect("global claude dir");
+        fs::create_dir_all(&profile_home).expect("profile home");
+        fs::create_dir_all(&agent_home).expect("agent home");
+
+        let credentials = global_home.join(".claude").join(".credentials.json");
+        fs::write(&credentials, r#"{"kind":"oauth"}"#).expect("write global creds");
+
+        initialize_profile_overlay(&AgentKind::Claude, &agent_home, &profile_home, &global_home)
+            .expect("initialize profile overlay");
+
+        let profile_dir = profile_home.join(".claude");
+        let profile_creds = profile_dir.join(".credentials.json");
+        assert!(profile_creds.exists(), "profile creds should be seeded");
+        assert_eq!(
+            fs::read_to_string(&profile_creds).expect("read profile creds"),
+            r#"{"kind":"oauth"}"#
+        );
+
+        let instance_dir = agent_home.join(".claude");
+        let meta = fs::symlink_metadata(&instance_dir).expect("instance dir metadata");
+        assert!(meta.file_type().is_symlink(), "instance dir should be symlink");
+        let target = fs::read_link(&instance_dir).expect("read dir symlink");
+        assert_eq!(target, profile_dir);
     }
 }

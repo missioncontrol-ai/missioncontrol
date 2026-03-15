@@ -15,4 +15,5 @@ pub mod mcp_tools;
 pub mod ops;
 pub mod remote;
 pub mod schema_pack;
+pub mod secrets;
 pub mod update;
