@@ -54,6 +54,11 @@ pub struct CliOpts {
     #[arg(long, env = "MC_DISABLE_BOOSTER", default_value_t = false)]
     disable_booster: bool,
 
+    /// Allow booster modules to short-circuit MCP tool execution.
+    /// Disabled by default so authoritative reads/mutations always hit Mission Control.
+    #[arg(long, env = "MC_ALLOW_BOOSTER_SHORT_CIRCUIT", default_value_t = false)]
+    allow_booster_short_circuit: bool,
+
     #[command(subcommand)]
     command: McCommand,
 }
@@ -97,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
         opts.timeout_secs,
         opts.allow_insecure,
         !opts.disable_booster,
+        opts.allow_booster_short_circuit,
         opts.booster_wasm,
     )?;
     let client = MissionControlClient::new(&config)?;

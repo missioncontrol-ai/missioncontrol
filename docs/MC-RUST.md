@@ -38,6 +38,7 @@ queen hosts, or local planners that need an exceptional offline/online experienc
 | `MC_ALLOW_INSECURE` | Accept self-signed certs (daemon and doctor matrix checks) | `false` |
 | `MC_BOOSTER_WASM` | Path to a custom WASM booster module | embedded default |
 | `MC_DISABLE_BOOSTER` | Skip the booster hook even if configured | `false` |
+| `MC_ALLOW_BOOSTER_SHORT_CIRCUIT` | Allow booster to short-circuit MCP tool execution | `false` |
 | `MC_SCHEMA_PACK_FILE` | Schema pack JSON used to gate `mc tools call` payloads | `docs/schema-packs/main.json` |
 
 Point `MC_SCHEMA_PACK_FILE` at the same `docs/schema-packs/main.json` that the backend uses so the CLI-level booster, matrix doctor,

@@ -15,6 +15,7 @@ pub struct McConfig {
     pub agent_context: AgentContext,
     pub booster_wasm: Option<PathBuf>,
     pub booster_enabled: bool,
+    pub booster_allow_short_circuit: bool,
     pub schema_pack: SchemaPack,
 }
 
@@ -36,6 +37,7 @@ impl McConfig {
         timeout_secs: u64,
         allow_insecure: bool,
         booster_enabled: bool,
+        booster_allow_short_circuit: bool,
         booster_wasm: Option<PathBuf>,
     ) -> Result<Self, ConfigError> {
         if timeout_secs == 0 {
@@ -55,6 +57,7 @@ impl McConfig {
             ),
             booster_wasm,
             booster_enabled,
+            booster_allow_short_circuit,
             schema_pack: SchemaPack::load(),
         })
     }

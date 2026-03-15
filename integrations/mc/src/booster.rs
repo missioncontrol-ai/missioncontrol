@@ -20,6 +20,7 @@ const DEFAULT_WAT: &str = r#"
 pub struct AgentBooster {
     module: Option<Module>,
     engine: Engine,
+    allow_short_circuit: bool,
 }
 
 impl AgentBooster {
@@ -36,11 +37,19 @@ impl AgentBooster {
         } else {
             None
         };
-        Ok(Self { module, engine })
+        Ok(Self {
+            module,
+            engine,
+            allow_short_circuit: config.booster_allow_short_circuit,
+        })
     }
 
     pub fn is_enabled(&self) -> bool {
         self.module.is_some()
+    }
+
+    pub fn allow_short_circuit(&self) -> bool {
+        self.allow_short_circuit
     }
 
     pub fn run(&self, payload: &Value) -> Result<bool> {

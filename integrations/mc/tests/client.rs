@@ -5,7 +5,7 @@ use mc::config::McConfig;
 use serde_json::json;
 
 fn build_config(base_url: &str) -> McConfig {
-    McConfig::from_parts(base_url, None, None, None, None, 2, true, false, None).unwrap()
+    McConfig::from_parts(base_url, None, None, None, None, 2, true, false, false, None).unwrap()
 }
 
 fn build_config_with_context(base_url: &str) -> McConfig {
@@ -17,6 +17,7 @@ fn build_config_with_context(base_url: &str) -> McConfig {
         Some("research".into()),
         2,
         true,
+        false,
         false,
         None,
     )

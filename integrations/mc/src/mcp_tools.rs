@@ -19,8 +19,13 @@ pub async fn call_tool(
         if booster.is_enabled() {
             let short_circuit = booster.run(&args).context("booster validation failed")?;
             if short_circuit {
-                println!("[booster] short-circuited {tool}");
-                return Ok(json!({ "booster_short_circuit": true, "tool": tool }));
+                if booster.allow_short_circuit() {
+                    println!("[booster] short-circuited {tool}");
+                    return Ok(json!({ "booster_short_circuit": true, "tool": tool }));
+                }
+                println!(
+                    "[booster] short-circuit requested for {tool} but disabled; forwarding to Mission Control"
+                );
             }
         }
     }
