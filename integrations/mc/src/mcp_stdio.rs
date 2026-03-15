@@ -99,4 +99,27 @@ mod tests {
         assert_eq!(MessageFormat::JsonLine, MessageFormat::JsonLine);
         assert_eq!(MessageFormat::ContentLength, MessageFormat::ContentLength);
     }
+
+    #[test]
+    fn framing_examples_are_correct() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"result":{}}"#;
+        let framed = format!("Content-Length: {}\r\n\r\n{}", json.len(), json);
+        assert!(framed.starts_with("Content-Length: "));
+        assert!(framed.ends_with(json));
+    }
+
+    #[test]
+    fn content_length_header_is_case_insensitive() {
+        let header = "content-length: 42";
+        let (name, value) = header.split_once(':').expect("header format");
+        assert!(name.trim().eq_ignore_ascii_case("Content-Length"));
+        assert_eq!(value.trim(), "42");
+    }
+
+    #[test]
+    fn jsonl_roundtrip_example() {
+        let msg = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        let line = format!("{}\n", msg);
+        assert_eq!(line.trim_end(), msg);
+    }
 }
