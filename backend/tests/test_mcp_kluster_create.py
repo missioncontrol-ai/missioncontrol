@@ -31,7 +31,9 @@ class McpKlusterCreateTests(unittest.TestCase):
         with patch("app.routers.mcp.get_session", _dummy_session), patch("app.routers.mcp.require_policy_action"):
             response = call_tool(MCPCall(tool="create_kluster", args={"name": "x"}), request, Response())
         self.assertFalse(response.ok)
-        self.assertEqual(response.error, "mission_id is required")
+        self.assertIn("mission_id is required", response.error or "")
+        self.assertEqual((response.result or {}).get("error_code"), "invalid_request")
+        self.assertTrue((response.result or {}).get("request_id"))
 
     def test_create_mission_requires_name(self):
         request = SimpleNamespace(
@@ -47,7 +49,9 @@ class McpKlusterCreateTests(unittest.TestCase):
         with patch("app.routers.mcp.get_session", _dummy_session), patch("app.routers.mcp.require_policy_action"):
             response = call_tool(MCPCall(tool="create_mission", args={}), request, Response())
         self.assertFalse(response.ok)
-        self.assertEqual(response.error, "name is required")
+        self.assertIn("name is required", response.error or "")
+        self.assertEqual((response.result or {}).get("error_code"), "invalid_request")
+        self.assertTrue((response.result or {}).get("request_id"))
 
     def test_create_mission_requires_owner_when_token_actor(self):
         request = SimpleNamespace(
@@ -63,7 +67,9 @@ class McpKlusterCreateTests(unittest.TestCase):
         with patch("app.routers.mcp.get_session", _dummy_session), patch("app.routers.mcp.require_policy_action"):
             response = call_tool(MCPCall(tool="create_mission", args={"name": "m1"}), request, Response())
         self.assertFalse(response.ok)
-        self.assertEqual(response.error, "owners must include at least one owner")
+        self.assertIn("owners must include at least one owner", response.error or "")
+        self.assertEqual((response.result or {}).get("error_code"), "invalid_request")
+        self.assertTrue((response.result or {}).get("request_id"))
 
     def test_create_kluster_requires_owner(self):
         request = SimpleNamespace(
@@ -83,7 +89,9 @@ class McpKlusterCreateTests(unittest.TestCase):
                 Response(),
             )
         self.assertFalse(response.ok)
-        self.assertEqual(response.error, "owners must include at least one owner")
+        self.assertIn("owners must include at least one owner", response.error or "")
+        self.assertEqual((response.result or {}).get("error_code"), "invalid_request")
+        self.assertTrue((response.result or {}).get("request_id"))
 
 
 if __name__ == "__main__":

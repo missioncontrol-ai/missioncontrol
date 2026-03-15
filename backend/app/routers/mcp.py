@@ -851,23 +851,19 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             doc_id = int(args.get("doc_id"))
             doc = session.get(Doc, doc_id)
             if not doc:
-                return MCPResponse(
-                    ok=False,
-                    error=f"Doc not found [request_id={request_id}]",
-                    result={"error_code": "not_found", "request_id": request_id},
-                )
+                return _mcp_error(request_id=request_id, error="Doc not found", error_code="not_found")
             kluster = session.get(Kluster, doc.kluster_id)
             if not kluster or not kluster.mission_id:
-                return MCPResponse(
-                    ok=False,
-                    error=f"Doc is not linked to a mission [request_id={request_id}]",
-                    result={"error_code": "forbidden", "request_id": request_id},
+                return _mcp_error(
+                    request_id=request_id,
+                    error="Doc is not linked to a mission",
+                    error_code="forbidden",
                 )
             try:
                 assert_mission_reader_or_admin(session=session, request=request, mission_id=kluster.mission_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=f"{exc.detail} [request_id={request_id}]")
-            return MCPResponse(ok=True, result={"doc": model_to_dict(doc), "request_id": request_id})
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
+            return _mcp_ok(request_id=request_id, result={"doc": model_to_dict(doc)})
 
         if tool == "create_doc":
             gated = ensure_action("doc.create")
@@ -889,16 +885,24 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     operation="create",
                 )
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=str(exc.detail))
+                return _mcp_error(
+                    request_id=request_id,
+                    error=str(exc.detail),
+                    error_code="schema_validation_failed",
+                )
             kluster = session.get(Kluster, payload_data["kluster_id"])
             if not kluster:
-                return MCPResponse(ok=False, error="Kluster not found")
+                return _mcp_error(request_id=request_id, error="Kluster not found", error_code="not_found")
             if not kluster.mission_id:
-                return MCPResponse(ok=False, error="Kluster is not linked to a mission")
+                return _mcp_error(
+                    request_id=request_id,
+                    error="Kluster is not linked to a mission",
+                    error_code="forbidden",
+                )
             try:
                 assert_mission_writer_or_admin(session=session, request=request, mission_id=kluster.mission_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             doc = Doc(**payload_data)
             if object_storage_enabled():
                 safe_title = (doc.title or "doc").strip().lower().replace(" ", "-")[:48] or "doc"
@@ -947,8 +951,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 actor_subject=actor_subject,
                 source=source,
             )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result=_mutation_result_with_ledger(
                     session=session,
                     mission_id=kluster.mission_id,
@@ -1565,17 +1569,21 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             kluster_id = str(args.get("kluster_id"))
             kluster = session.get(Kluster, kluster_id)
             if not kluster:
-                return MCPResponse(ok=False, error="Kluster not found")
+                return _mcp_error(request_id=request_id, error="Kluster not found", error_code="not_found")
             if not kluster.mission_id:
-                return MCPResponse(ok=False, error="Kluster is not linked to a mission")
+                return _mcp_error(
+                    request_id=request_id,
+                    error="Kluster is not linked to a mission",
+                    error_code="forbidden",
+                )
             try:
                 assert_mission_reader_or_admin(session=session, request=request, mission_id=kluster.mission_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             tasks = session.exec(select(Task).where(Task.kluster_id == kluster_id)).all()
             for task in tasks:
                 ensure_task_public_id(session, task)
-            return MCPResponse(ok=True, result={"tasks": [task_to_public_dict(t) for t in tasks]})
+            return _mcp_ok(request_id=request_id, result={"tasks": [task_to_public_dict(t) for t in tasks]})
 
         if tool == "create_mission":
             gated = ensure_action("mission.create")
