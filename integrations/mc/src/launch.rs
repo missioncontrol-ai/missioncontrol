@@ -375,6 +375,30 @@ impl AgentDriver for ClaudeDriver {
             }
         }
 
+        // Claude Code detects its install method by looking for itself at
+        // $HOME/.local/bin/claude. When HOME is set to the isolated instance
+        // home, this path doesn't exist and Claude errors with
+        // "installMethod is native, but claude command not found".
+        // Create a symlink so Claude can find itself in the instance home.
+        if let Ok(real_claude) = which_binary("claude") {
+            let local_bin = target_home.join(".local").join("bin");
+            std::fs::create_dir_all(&local_bin)?;
+            let claude_link = local_bin.join("claude");
+            if !claude_link.exists() {
+                #[cfg(unix)]
+                unix_fs::symlink(&real_claude, &claude_link).with_context(|| {
+                    format!(
+                        "failed to symlink claude into instance home: {} -> {}",
+                        claude_link.display(),
+                        real_claude.display()
+                    )
+                })?;
+                #[cfg(not(unix))]
+                std::fs::copy(&real_claude, &claude_link)?;
+                mc_info!("claude self-link → {}", claude_link.display());
+            }
+        }
+
         Ok(())
     }
 
