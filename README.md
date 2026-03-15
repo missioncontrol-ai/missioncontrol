@@ -374,10 +374,11 @@ Release procedure checklist: `docs/RELEASE-UPGRADE-CHECKLIST.md`
 
 ## Tests
 
-Run the repo test suites (backend + MCP bridge package) from repo root:
+Canonical dev/test path from repo root:
 
 ```bash
-bash scripts/test.sh
+bash scripts/dev-up.sh
+bash scripts/smoke.sh --profile full
 ```
 
 ## Schema Packs
