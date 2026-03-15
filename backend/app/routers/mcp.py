@@ -718,6 +718,19 @@ def _mutation_result_with_ledger(
     return payload
 
 
+def _mcp_ok(*, result: dict, request_id: str) -> MCPResponse:
+    payload = dict(result or {})
+    payload.setdefault("request_id", request_id)
+    return MCPResponse(ok=True, result=payload)
+
+
+def _mcp_error(*, request_id: str, error: str, error_code: str = "invalid_request", result: dict | None = None) -> MCPResponse:
+    payload = dict(result or {})
+    payload.setdefault("error_code", error_code)
+    payload.setdefault("request_id", request_id)
+    return MCPResponse(ok=False, error=f"{error} [request_id={request_id}]", result=payload)
+
+
 @router.get("/tools", response_model=list[MCPTool])
 def list_tools():
     return TOOLS
@@ -1570,7 +1583,7 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 return gated
             name = str(args.get("name") or "").strip()
             if not name:
-                return MCPResponse(ok=False, error="name is required")
+                return _mcp_error(request_id=request_id, error="name is required")
             mission_payload = {
                 "name": name,
                 "description": str(args.get("description") or ""),
@@ -1588,14 +1601,14 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     operation="create",
                 )
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=str(exc.detail))
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="schema_validation_failed")
             if not mission_payload.get("owners") and actor_subject not in {"unknown", "token-client"}:
                 mission_payload["owners"] = actor_subject
             if not _owner_list(mission_payload.get("owners")):
-                return MCPResponse(ok=False, error="owners must include at least one owner")
+                return _mcp_error(request_id=request_id, error="owners must include at least one owner")
             existing = session.exec(select(Mission).where(Mission.name == name)).first()
             if existing:
-                return MCPResponse(ok=False, error="Mission name already exists")
+                return _mcp_error(request_id=request_id, error="Mission name already exists", error_code="already_exists")
             mission = Mission(id=new_hash_id(), **mission_payload)
             while session.get(Mission, mission.id):
                 mission.id = new_hash_id()
@@ -1615,8 +1628,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 actor_subject=actor_subject,
                 source=source,
             )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result=_mutation_result_with_ledger(
                     session=session,
                     mission_id=mission.id,
@@ -1632,7 +1645,7 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 missions = []
             else:
                 missions = [m for m in missions if m.id in readable_ids]
-            return MCPResponse(ok=True, result={"missions": [model_to_dict(m) for m in missions]})
+            return _mcp_ok(request_id=request_id, result={"missions": [model_to_dict(m) for m in missions]})
 
         if tool == "create_kluster":
             gated = ensure_action("kluster.create")
@@ -1640,14 +1653,14 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 return gated
             mission_id = str(args.get("mission_id") or "").strip()
             if not mission_id:
-                return MCPResponse(ok=False, error="mission_id is required")
+                return _mcp_error(request_id=request_id, error="mission_id is required")
             create_payload = {
                 key: args.get(key)
                 for key in {"name", "description", "owners", "contributors", "tags", "status"}
                 if key in args and args.get(key) is not None
             }
             if not str(create_payload.get("name") or "").strip():
-                return MCPResponse(ok=False, error="name is required")
+                return _mcp_error(request_id=request_id, error="name is required")
             create_payload["mission_id"] = mission_id
             try:
                 create_payload = enforce_schema_pack(
@@ -1657,18 +1670,21 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     operation="create",
                 )
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=str(exc.detail))
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="schema_validation_failed")
             if not _owner_list(create_payload.get("owners")):
-                return MCPResponse(ok=False, error="owners must include at least one owner")
+                return _mcp_error(request_id=request_id, error="owners must include at least one owner")
             mission = session.get(Mission, mission_id)
             if not mission:
-                return MCPResponse(ok=False, error="Mission not found")
+                return _mcp_error(request_id=request_id, error="Mission not found", error_code="not_found")
             try:
                 assert_mission_writer_or_admin(session=session, request=request, mission_id=mission_id)
             except HTTPException as exc:
                 return MCPResponse(ok=False, error=exc.detail)
             if create_payload.get("mission_id") not in {None, mission_id}:
-                return MCPResponse(ok=False, error="Payload mission_id must match route mission_id")
+                return _mcp_error(
+                    request_id=request_id,
+                    error="Payload mission_id must match route mission_id",
+                )
             create_payload["mission_id"] = mission_id
             kluster = Kluster(id=new_hash_id(), **create_payload)
             while session.get(Kluster, kluster.id):
@@ -1689,8 +1705,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 actor_subject=actor_subject,
                 source=source,
             )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result=_mutation_result_with_ledger(
                     session=session,
                     mission_id=kluster.mission_id,
