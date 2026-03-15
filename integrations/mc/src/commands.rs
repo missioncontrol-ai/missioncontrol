@@ -14,7 +14,9 @@ use base64::Engine;
 use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Cursor;
 use std::path::PathBuf;
+use tar::{Archive, Builder};
 use url::form_urlencoded;
 
 /// Top-level CLI entrypoints for the mc binary.
@@ -174,7 +176,9 @@ pub enum ProfileCommand {
         #[arg(long)]
         name: String,
         #[arg(long)]
-        bundle: PathBuf,
+        bundle: Option<PathBuf>,
+        #[arg(long)]
+        from_profile_dir: Option<PathBuf>,
         #[arg(long)]
         description: Option<String>,
         #[arg(long)]
@@ -186,6 +190,8 @@ pub enum ProfileCommand {
     Pull {
         #[arg(long)]
         name: String,
+        #[arg(long)]
+        apply: bool,
     },
     /// Pin a local profile to a specific remote sha256.
     Pin {
@@ -507,12 +513,19 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
         ProfileCommand::Publish {
             name,
             bundle,
+            from_profile_dir,
             description,
             manifest_file,
             activate,
         } => {
-            let bundle_bytes = fs::read(&bundle)
-                .with_context(|| format!("failed to read bundle {}", bundle.display()))?;
+            let bundle_bytes = if let Some(bundle_path) = bundle {
+                fs::read(&bundle_path)
+                    .with_context(|| format!("failed to read bundle {}", bundle_path.display()))?
+            } else if let Some(profile_dir) = from_profile_dir {
+                build_tar_from_dir(&profile_dir)?
+            } else {
+                anyhow::bail!("provide --bundle or --from-profile-dir");
+            };
             let tarball_b64 = base64::engine::general_purpose::STANDARD.encode(bundle_bytes);
             let manifest = if let Some(path) = manifest_file {
                 let raw = fs::read_to_string(&path)
@@ -534,7 +547,7 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
             let response = client.put_json(&path, &body).await?;
             print_json(&response);
         }
-        ProfileCommand::Pull { name } => {
+        ProfileCommand::Pull { name, apply } => {
             let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
             let path = format!("/me/profiles/{}/download", encoded);
             let response = client.get_json(&path).await?;
@@ -554,10 +567,19 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
             fs::create_dir_all(&bundles)?;
             let tar_path = bundles.join(format!("{}.tar", sha));
             fs::write(&tar_path, bytes)?;
+            let applied_dir = profile_root.join("applied");
+            if apply {
+                if applied_dir.exists() {
+                    fs::remove_dir_all(&applied_dir)?;
+                }
+                fs::create_dir_all(&applied_dir)?;
+                extract_tar_to_dir(&tar_path, &applied_dir)?;
+            }
             let state = json!({
                 "profile": name,
                 "last_pulled_sha256": sha,
                 "bundle_path": tar_path.display().to_string(),
+                "applied_dir": if apply { applied_dir.display().to_string() } else { String::new() },
                 "pulled_at": chrono::Utc::now().to_rfc3339(),
             });
             fs::write(
@@ -568,7 +590,9 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
                 "ok": true,
                 "profile": name,
                 "last_pulled_sha256": sha,
-                "bundle_path": tar_path.display().to_string()
+                "bundle_path": tar_path.display().to_string(),
+                "applied": apply,
+                "applied_dir": if apply { applied_dir.display().to_string() } else { String::new() }
             }));
         }
         ProfileCommand::Pin { name, sha256 } => {
@@ -611,6 +635,27 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
             }));
         }
     }
+    Ok(())
+}
+
+fn build_tar_from_dir(dir: &PathBuf) -> Result<Vec<u8>> {
+    if !dir.exists() || !dir.is_dir() {
+        anyhow::bail!("profile dir not found: {}", dir.display());
+    }
+    let mut out = Vec::<u8>::new();
+    {
+        let mut builder = Builder::new(&mut out);
+        builder.append_dir_all(".", dir)?;
+        builder.finish()?;
+    }
+    Ok(out)
+}
+
+fn extract_tar_to_dir(tar_path: &PathBuf, out_dir: &PathBuf) -> Result<()> {
+    let bytes = fs::read(tar_path)?;
+    let cursor = Cursor::new(bytes);
+    let mut archive = Archive::new(cursor);
+    archive.unpack(out_dir)?;
     Ok(())
 }
 

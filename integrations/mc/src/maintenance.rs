@@ -14,6 +14,8 @@ pub enum MaintenanceCommand {
     Doctor(DoctorArgs),
     /// Trigger local backups (postgres, rustfs, or both).
     Backup(BackupArgs),
+    /// Cleanup local profile/session artifacts with retention limits.
+    ProfileGc(ProfileGcArgs),
 }
 
 #[derive(Args, Debug)]
@@ -32,6 +34,19 @@ pub struct BackupArgs {
     pub target: BackupTarget,
     #[arg(long)]
     pub reason: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ProfileGcArgs {
+    /// Keep at most this many runtime instance dirs (newest first).
+    #[arg(long, default_value_t = 20)]
+    pub keep_instances: usize,
+    /// Keep at most this many bundle tar files per profile (newest first).
+    #[arg(long, default_value_t = 10)]
+    pub keep_bundles: usize,
+    /// Remove instance dirs older than this many days regardless of count.
+    #[arg(long, default_value_t = 14)]
+    pub max_age_days: u64,
 }
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -60,7 +75,89 @@ pub async fn run(
     match command {
         MaintenanceCommand::Doctor(args) => run_doctor(client, config, &args).await,
         MaintenanceCommand::Backup(args) => run_backup(client, args).await,
+        MaintenanceCommand::ProfileGc(args) => run_profile_gc(config, args),
     }
+}
+
+fn run_profile_gc(config: &McConfig, args: ProfileGcArgs) -> Result<()> {
+    let root = crate::config::mc_home_dir();
+    let mut removed_instances = Vec::<String>::new();
+    let mut removed_bundles = Vec::<String>::new();
+
+    let instances_dir = root.join("instances");
+    if instances_dir.exists() {
+        let mut entries: Vec<_> = std::fs::read_dir(&instances_dir)?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().is_dir())
+            .collect();
+        entries.sort_by_key(|entry| {
+            entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+        entries.reverse();
+
+        let age_limit = std::time::Duration::from_secs(args.max_age_days.saturating_mul(24 * 60 * 60));
+        let now = std::time::SystemTime::now();
+        for (idx, entry) in entries.iter().enumerate() {
+            let path = entry.path();
+            let modified = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            let old = now.duration_since(modified).unwrap_or_default() > age_limit;
+            if idx >= args.keep_instances || old {
+                std::fs::remove_dir_all(&path)?;
+                removed_instances.push(path.display().to_string());
+            }
+        }
+    }
+
+    let profiles_dir = root.join("profiles");
+    if profiles_dir.exists() {
+        for profile in std::fs::read_dir(&profiles_dir)?.filter_map(|entry| entry.ok()) {
+            let bundles_dir = profile.path().join("bundles");
+            if !bundles_dir.exists() {
+                continue;
+            }
+            let mut bundles: Vec<_> = std::fs::read_dir(&bundles_dir)?
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.path().is_file())
+                .collect();
+            bundles.sort_by_key(|entry| {
+                entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            });
+            bundles.reverse();
+            for (idx, bundle) in bundles.iter().enumerate() {
+                if idx >= args.keep_bundles {
+                    let path = bundle.path();
+                    std::fs::remove_file(&path)?;
+                    removed_bundles.push(path.display().to_string());
+                }
+            }
+        }
+    }
+
+    print_json(&json!({
+        "ok": true,
+        "root": root.display().to_string(),
+        "removed_instances": removed_instances,
+        "removed_bundles": removed_bundles,
+        "keep_instances": args.keep_instances,
+        "keep_bundles": args.keep_bundles,
+        "max_age_days": args.max_age_days
+    }));
+    crate::mc_ok!(
+        "profile-gc complete: removed {} instance dirs and {} bundle files",
+        removed_instances.len(),
+        removed_bundles.len()
+    );
+    let _ = config;
+    Ok(())
 }
 
 async fn run_doctor(
