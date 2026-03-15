@@ -6,9 +6,9 @@ pub const RESET: &str = "\x1b[0m";
 pub const BOLD: &str = "\x1b[1m";
 pub const DIM: &str = "\x1b[2m";
 
-/// Brand: rust-red/orange closer to EMC artwork (#AF3A14 ≈ 256-color 124)
-pub const ORANGE: &str = "\x1b[38;5;124m";
-pub const ORANGE_BOLD: &str = "\x1b[1;38;5;124m";
+/// Brand: deep rust-orange balance (#C25A12 ≈ 256-color 166)
+pub const ORANGE: &str = "\x1b[38;5;166m";
+pub const ORANGE_BOLD: &str = "\x1b[1;38;5;166m";
 
 pub const GREEN: &str = "\x1b[32m";
 pub const YELLOW: &str = "\x1b[33m";
