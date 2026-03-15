@@ -12,6 +12,10 @@ class McpToolsCatalogTests(unittest.TestCase):
         self.assertIn("load_kluster_workspace", names)
         self.assertIn("commit_kluster_workspace", names)
         self.assertIn("release_kluster_workspace", names)
+        self.assertIn("list_profiles", names)
+        self.assertIn("publish_profile", names)
+        self.assertIn("download_profile", names)
+        self.assertIn("pin_profile_version", names)
 
 
 if __name__ == "__main__":

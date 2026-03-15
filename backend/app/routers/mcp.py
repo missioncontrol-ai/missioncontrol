@@ -22,6 +22,7 @@ from app.models import (
     AgentSession,
     TaskAssignment,
     SkillSnapshot,
+    UserProfile,
 )
 from app.schemas import MCPCall, MCPResponse, MCPTool
 from app.services.authz import (
@@ -585,6 +586,72 @@ TOOLS = [
             "required": ["mission_id"],
         },
     ),
+    MCPTool(
+        name="list_profiles",
+        description="List profiles for the current principal",
+        input_schema={"type": "object", "properties": {"limit": {"type": "integer"}}},
+    ),
+    MCPTool(
+        name="get_profile",
+        description="Get profile metadata by name",
+        input_schema={
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    ),
+    MCPTool(
+        name="publish_profile",
+        description="Create or replace a profile bundle",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "description": {"type": "string"},
+                "is_default": {"type": "boolean"},
+                "manifest": {"type": "array"},
+                "tarball_b64": {"type": "string"},
+                "expected_sha256": {"type": "string"},
+            },
+            "required": ["name", "tarball_b64"],
+        },
+    ),
+    MCPTool(
+        name="download_profile",
+        description="Download profile bundle by name",
+        input_schema={
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "if_sha256": {"type": "string"}},
+            "required": ["name"],
+        },
+    ),
+    MCPTool(
+        name="activate_profile",
+        description="Set profile as default",
+        input_schema={
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    ),
+    MCPTool(
+        name="profile_status",
+        description="Read current profile sha and optional expected-sha match",
+        input_schema={
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "expected_sha256": {"type": "string"}},
+            "required": ["name"],
+        },
+    ),
+    MCPTool(
+        name="pin_profile_version",
+        description="Assert profile sha matches a pinned version",
+        input_schema={
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "sha256": {"type": "string"}},
+            "required": ["name", "sha256"],
+        },
+    ),
 ]
 
 
@@ -605,6 +672,21 @@ def model_to_dict(model):
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+def _profile_to_dict(profile: UserProfile) -> dict:
+    return {
+        "id": profile.id,
+        "name": profile.name,
+        "owner_subject": profile.owner_subject,
+        "description": profile.description,
+        "is_default": profile.is_default,
+        "manifest": json.loads(profile.manifest_json or "[]"),
+        "sha256": profile.sha256,
+        "size_bytes": profile.size_bytes,
+        "created_at": profile.created_at,
+        "updated_at": profile.updated_at,
+    }
 
 
 def task_to_public_dict(task: Task) -> dict:
@@ -2320,6 +2402,201 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                         "drift_details": json.loads(state.drift_details_json or "{}"),
                         "last_sync_at": state.last_sync_at,
                     }
+                },
+            )
+
+        if tool == "list_profiles":
+            limit = max(1, min(int(args.get("limit") or 50), 200))
+            profiles = session.exec(
+                select(UserProfile)
+                .where(UserProfile.owner_subject == actor_subject)
+                .order_by(UserProfile.updated_at.desc())
+                .limit(limit)
+            ).all()
+            return MCPResponse(ok=True, result={"profiles": [_profile_to_dict(p) for p in profiles]})
+
+        if tool == "get_profile":
+            name = str(args.get("name") or "").strip()
+            if not name:
+                return MCPResponse(ok=False, error="name is required")
+            profile = session.exec(
+                select(UserProfile)
+                .where(UserProfile.owner_subject == actor_subject)
+                .where(UserProfile.name == name)
+            ).first()
+            if not profile:
+                return MCPResponse(ok=False, error="Profile not found")
+            return MCPResponse(ok=True, result={"profile": _profile_to_dict(profile)})
+
+        if tool == "publish_profile":
+            name = str(args.get("name") or "").strip()
+            tarball_b64 = str(args.get("tarball_b64") or "").strip()
+            if not name or not tarball_b64:
+                return MCPResponse(ok=False, error="name and tarball_b64 are required")
+            expected_sha256 = str(args.get("expected_sha256") or "").strip()
+            description = str(args.get("description") or "")
+            is_default = bool(args.get("is_default") or False)
+            manifest = args.get("manifest")
+            if manifest is None:
+                manifest = []
+            if not isinstance(manifest, list):
+                return MCPResponse(ok=False, error="manifest must be an array")
+            try:
+                raw = base64.b64decode(tarball_b64)
+            except Exception:
+                return MCPResponse(ok=False, error="tarball_b64 is not valid base64")
+            computed_sha = hashlib.sha256(raw).hexdigest()
+            profile = session.exec(
+                select(UserProfile)
+                .where(UserProfile.owner_subject == actor_subject)
+                .where(UserProfile.name == name)
+            ).first()
+            if profile:
+                if expected_sha256 and (profile.sha256 or "") != expected_sha256:
+                    return MCPResponse(
+                        ok=False,
+                        error="profile_sha_mismatch",
+                        result={
+                            "expected_sha256": expected_sha256,
+                            "current_sha256": profile.sha256 or "",
+                            "name": name,
+                        },
+                    )
+                profile.description = description
+                profile.is_default = is_default
+                profile.manifest_json = json.dumps(manifest)
+                profile.tarball_b64 = tarball_b64
+                profile.sha256 = computed_sha
+                profile.size_bytes = len(raw)
+                profile.updated_at = datetime.utcnow()
+                session.add(profile)
+            else:
+                profile = UserProfile(
+                    name=name,
+                    owner_subject=actor_subject,
+                    description=description,
+                    is_default=is_default,
+                    manifest_json=json.dumps(manifest),
+                    tarball_b64=tarball_b64,
+                    sha256=computed_sha,
+                    size_bytes=len(raw),
+                )
+                session.add(profile)
+            if is_default:
+                others = session.exec(
+                    select(UserProfile)
+                    .where(UserProfile.owner_subject == actor_subject)
+                    .where(UserProfile.name != name)
+                    .where(UserProfile.is_default == True)  # noqa: E712
+                ).all()
+                for other in others:
+                    other.is_default = False
+                    other.updated_at = datetime.utcnow()
+                    session.add(other)
+            session.commit()
+            session.refresh(profile)
+            return MCPResponse(ok=True, result={"profile": _profile_to_dict(profile)})
+
+        if tool == "download_profile":
+            name = str(args.get("name") or "").strip()
+            if not name:
+                return MCPResponse(ok=False, error="name is required")
+            if_sha256 = str(args.get("if_sha256") or "").strip()
+            profile = session.exec(
+                select(UserProfile)
+                .where(UserProfile.owner_subject == actor_subject)
+                .where(UserProfile.name == name)
+            ).first()
+            if not profile:
+                return MCPResponse(ok=False, error="Profile not found")
+            current_sha = (profile.sha256 or "").strip()
+            if if_sha256 and if_sha256 != current_sha:
+                return MCPResponse(
+                    ok=False,
+                    error="profile_sha_mismatch",
+                    result={"expected_sha256": if_sha256, "current_sha256": current_sha, "name": name},
+                )
+            return MCPResponse(
+                ok=True,
+                result={
+                    "profile": _profile_to_dict(profile),
+                    "tarball_b64": profile.tarball_b64 or "",
+                },
+            )
+
+        if tool == "activate_profile":
+            name = str(args.get("name") or "").strip()
+            if not name:
+                return MCPResponse(ok=False, error="name is required")
+            profile = session.exec(
+                select(UserProfile)
+                .where(UserProfile.owner_subject == actor_subject)
+                .where(UserProfile.name == name)
+            ).first()
+            if not profile:
+                return MCPResponse(ok=False, error="Profile not found")
+            others = session.exec(
+                select(UserProfile)
+                .where(UserProfile.owner_subject == actor_subject)
+                .where(UserProfile.id != profile.id)
+                .where(UserProfile.is_default == True)  # noqa: E712
+            ).all()
+            for other in others:
+                other.is_default = False
+                other.updated_at = datetime.utcnow()
+                session.add(other)
+            profile.is_default = True
+            profile.updated_at = datetime.utcnow()
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            return MCPResponse(ok=True, result={"profile": _profile_to_dict(profile)})
+
+        if tool == "profile_status":
+            name = str(args.get("name") or "").strip()
+            if not name:
+                return MCPResponse(ok=False, error="name is required")
+            expected_sha256 = str(args.get("expected_sha256") or "").strip()
+            profile = session.exec(
+                select(UserProfile)
+                .where(UserProfile.owner_subject == actor_subject)
+                .where(UserProfile.name == name)
+            ).first()
+            if not profile:
+                return MCPResponse(ok=False, error="Profile not found")
+            remote_sha = (profile.sha256 or "").strip()
+            return MCPResponse(
+                ok=True,
+                result={
+                    "name": name,
+                    "remote_sha256": remote_sha,
+                    "expected_sha256": expected_sha256,
+                    "matches_expected": (not expected_sha256) or (expected_sha256 == remote_sha),
+                },
+            )
+
+        if tool == "pin_profile_version":
+            name = str(args.get("name") or "").strip()
+            pinned_sha = str(args.get("sha256") or "").strip()
+            if not name or not pinned_sha:
+                return MCPResponse(ok=False, error="name and sha256 are required")
+            profile = session.exec(
+                select(UserProfile)
+                .where(UserProfile.owner_subject == actor_subject)
+                .where(UserProfile.name == name)
+            ).first()
+            if not profile:
+                return MCPResponse(ok=False, error="Profile not found")
+            remote_sha = (profile.sha256 or "").strip()
+            matches = remote_sha == pinned_sha
+            return MCPResponse(
+                ok=matches,
+                error=None if matches else "profile_sha_mismatch",
+                result={
+                    "name": name,
+                    "pinned_sha256": pinned_sha,
+                    "remote_sha256": remote_sha,
+                    "matches": matches,
                 },
             )
 

@@ -133,6 +133,23 @@ class TestProfileCRUD(unittest.TestCase):
         expected_sha = hashlib.sha256(base64.b64decode(new_tb)).hexdigest()
         self.assertEqual(p.sha256, expected_sha)
 
+    def test_replace_profile_expected_sha_conflict(self):
+        created = self._create(name="work", description="old")
+        req = _request("user@example.com")
+        new_tb = _make_tarball({"personality.md": "bold"})
+        payload = UserProfileCreate(
+            name="work",
+            description="new desc",
+            is_default=False,
+            manifest=[],
+            tarball_b64=new_tb,
+            expected_sha256="deadbeef",
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            replace_profile("work", payload, req)
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn(created.sha256, str(ctx.exception.detail))
+
     def test_patch_description(self):
         self._create(name="work", description="old")
         req = _request("user@example.com")
@@ -147,6 +164,13 @@ class TestProfileCRUD(unittest.TestCase):
         expected_sha = hashlib.sha256(base64.b64decode(new_tb)).hexdigest()
         self.assertEqual(p.sha256, expected_sha)
 
+    def test_patch_profile_expected_sha_conflict(self):
+        self._create(name="work")
+        req = _request("user@example.com")
+        with self.assertRaises(HTTPException) as ctx:
+            patch_profile("work", UserProfileUpdate(description="x", expected_sha256="deadbeef"), req)
+        self.assertEqual(ctx.exception.status_code, 409)
+
     def test_delete_profile(self):
         self._create(name="work")
         req = _request("user@example.com")
@@ -160,6 +184,13 @@ class TestProfileCRUD(unittest.TestCase):
         req = _request("user@example.com")
         dl = download_profile("work", req)
         self.assertEqual(dl.tarball_b64, tb)
+
+    def test_download_profile_if_sha_conflict(self):
+        self._create(name="work")
+        req = _request("user@example.com")
+        with self.assertRaises(HTTPException) as ctx:
+            download_profile("work", req, if_sha256="deadbeef")
+        self.assertEqual(ctx.exception.status_code, 409)
 
     def test_activate_profile(self):
         self._create(name="work", is_default=False)

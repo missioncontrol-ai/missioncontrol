@@ -582,6 +582,7 @@ class UserProfileCreate(BaseModel):
     is_default: bool = False
     manifest: List[dict] = Field(default_factory=list)
     tarball_b64: str
+    expected_sha256: Optional[str] = None
 
 
 class UserProfileUpdate(BaseModel):
@@ -589,6 +590,7 @@ class UserProfileUpdate(BaseModel):
     is_default: Optional[bool] = None
     manifest: Optional[List[dict]] = None
     tarball_b64: Optional[str] = None
+    expected_sha256: Optional[str] = None
 
 
 class UserProfileRead(BaseModel):

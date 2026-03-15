@@ -73,6 +73,18 @@ def _compute_tarball_fields(tarball_b64: str) -> tuple[str, int]:
     return hashlib.sha256(raw).hexdigest(), len(raw)
 
 
+def _enforce_expected_sha(profile: UserProfile, expected_sha256: str | None) -> None:
+    expected = (expected_sha256 or "").strip()
+    if not expected:
+        return
+    current = (profile.sha256 or "").strip()
+    if current != expected:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Profile sha256 mismatch: expected {expected}, found {current or 'none'}",
+        )
+
+
 @router.get("/me/profiles", response_model=list[UserProfileRead])
 def list_profiles(request: Request, limit: int = limit_query()):
     owner_subject = actor_subject_from_request(request)
@@ -132,6 +144,7 @@ def replace_profile(name: str, payload: UserProfileCreate, request: Request):
     owner_subject = actor_subject_from_request(request)
     with get_session() as session:
         profile = _get_owned_profile(session, owner_subject, name)
+        _enforce_expected_sha(profile, payload.expected_sha256)
         sha256, size_bytes = _compute_tarball_fields(payload.tarball_b64)
 
         if payload.is_default:
@@ -155,6 +168,7 @@ def patch_profile(name: str, payload: UserProfileUpdate, request: Request):
     owner_subject = actor_subject_from_request(request)
     with get_session() as session:
         profile = _get_owned_profile(session, owner_subject, name)
+        _enforce_expected_sha(profile, payload.expected_sha256)
 
         if payload.description is not None:
             profile.description = payload.description
@@ -185,10 +199,11 @@ def delete_profile(name: str, request: Request):
 
 
 @router.get("/me/profiles/{name}/download", response_model=UserProfileDownloadRead)
-def download_profile(name: str, request: Request):
+def download_profile(name: str, request: Request, if_sha256: str | None = None):
     owner_subject = actor_subject_from_request(request)
     with get_session() as session:
         profile = _get_owned_profile(session, owner_subject, name)
+        _enforce_expected_sha(profile, if_sha256)
         if not profile.tarball_b64:
             raise HTTPException(status_code=404, detail="Profile has no bundle")
         return UserProfileDownloadRead(

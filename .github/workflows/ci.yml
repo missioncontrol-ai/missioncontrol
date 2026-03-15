@@ -34,3 +34,11 @@ jobs:
         with: { python-version: "3.12" }
       - run: pip install -r backend/requirements.txt
       - run: cd backend && python -m alembic upgrade head
+
+  launch-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run mc launch regression harness
+        run: bash scripts/launch-regression.sh
