@@ -83,6 +83,11 @@ bash scripts/install-mc.sh
 MC_TOKEN="TopSecret" mc doctor
 ```
 
+Optional (auto-load env on new shells):
+```bash
+MC_INSTALL_SHELL_HOOK=1 MC_ENV_FILE=/home/merlin/nas/code/missioncontrol/.env bash scripts/install-mc.sh
+```
+
 Then open:
 - API docs: `http://localhost:8008/api/docs`
 - UI: `http://localhost:8008/ui/`
