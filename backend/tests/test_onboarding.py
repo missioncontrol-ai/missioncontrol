@@ -14,12 +14,7 @@ class OnboardingManifestTests(unittest.TestCase):
         )
         self.assertEqual(manifest["mcp_server"]["command"], "mc")
         self.assertEqual(manifest["mcp_server"]["args"], ["serve"])
-        self.assertEqual(
-            manifest["legacy_mcp_server"]["env"]["MC_BASE_URLS"],
-            "https://mc.example.com,https://missioncontrol.internal.example,http://localhost:8008",
-        )
-        self.assertEqual(manifest["legacy_mcp_server"]["command"], "missioncontrol-mcp")
-        self.assertEqual(manifest["legacy_mcp_server"]["env"]["MC_STARTUP_PREFLIGHT"], "health")
+        self.assertNotIn("legacy_mcp_server", manifest)
         self.assertEqual(manifest["mcp_defaults"]["startup_timeout_sec"], 45)
         self.assertIn("MC_BASE_URL", manifest["mcp_server"]["env"])
         self.assertIn("mc-integration", manifest["bootstrap"]["remote_script"])

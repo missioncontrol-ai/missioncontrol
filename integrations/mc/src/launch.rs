@@ -70,6 +70,10 @@ pub struct LaunchArgs {
     #[arg(long)]
     new_session: bool,
 
+    /// Allow launching when local profile pin does not match remote profile sha.
+    #[arg(long)]
+    allow_pin_mismatch: bool,
+
     /// Do not embed MC_TOKEN in the written agent config.
     ///
     /// Use this for OIDC / short-lived tokens: the token is inherited from the
@@ -669,6 +673,7 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     };
     let effective_client: &MissionControlClient =
         login_client_holder.as_ref().unwrap_or(client);
+    enforce_profile_pin(effective_client, &profile_name, args.allow_pin_mismatch).await?;
 
     // 4. Preflight-only mode: verify connectivity then stop.
     if args.preflight_only {
@@ -1005,4 +1010,50 @@ fn exec_agent(
         }
         Ok(())
     }
+}
+
+async fn enforce_profile_pin(
+    client: &MissionControlClient,
+    profile_name: &str,
+    allow_pin_mismatch: bool,
+) -> Result<()> {
+    let profile_root = mc_home_dir().join("profiles").join(profile_name);
+    let pin_path = profile_root.join("pin.json");
+    if !pin_path.exists() {
+        return Ok(());
+    }
+    let pin_json: serde_json::Value = serde_json::from_str(&fs::read_to_string(&pin_path)?)
+        .context("invalid pin.json (expected JSON)")?;
+    let pinned_sha = pin_json
+        .get("pinned_sha256")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if pinned_sha.is_empty() {
+        return Ok(());
+    }
+    let encoded: String = url::form_urlencoded::byte_serialize(profile_name.as_bytes()).collect();
+    let remote = client
+        .get_json(&format!("/me/profiles/{}", encoded))
+        .await
+        .with_context(|| format!("failed to fetch remote profile '{}'", profile_name))?;
+    let remote_sha = remote
+        .get("sha256")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if remote_sha.is_empty() {
+        anyhow::bail!("remote profile '{}' has no sha256", profile_name);
+    }
+    if remote_sha != pinned_sha && !allow_pin_mismatch {
+        anyhow::bail!(
+            "profile '{}' is pinned to sha256 '{}' but remote is '{}'; rerun with --allow-pin-mismatch to override",
+            profile_name,
+            pinned_sha,
+            remote_sha
+        );
+    }
+    Ok(())
 }

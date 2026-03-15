@@ -192,6 +192,8 @@ pub enum ProfileCommand {
         name: String,
         #[arg(long)]
         apply: bool,
+        #[arg(long)]
+        allow_pin_mismatch: bool,
     },
     /// Pin a local profile to a specific remote sha256.
     Pin {
@@ -547,7 +549,11 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
             let response = client.put_json(&path, &body).await?;
             print_json(&response);
         }
-        ProfileCommand::Pull { name, apply } => {
+        ProfileCommand::Pull {
+            name,
+            apply,
+            allow_pin_mismatch,
+        } => {
             let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
             let path = format!("/me/profiles/{}/download", encoded);
             let response = client.get_json(&path).await?;
@@ -563,6 +569,16 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
             let profile_root = crate::config::mc_home_dir().join("profiles").join(&name);
+            if let Some(pinned_sha) = read_local_pinned_sha(&profile_root)? {
+                if pinned_sha != sha && !allow_pin_mismatch {
+                    anyhow::bail!(
+                        "profile '{}' is pinned to sha256 '{}' but remote is '{}'; rerun with --allow-pin-mismatch to override",
+                        name,
+                        pinned_sha,
+                        sha
+                    );
+                }
+            }
             let bundles = profile_root.join("bundles");
             fs::create_dir_all(&bundles)?;
             let tar_path = bundles.join(format!("{}.tar", sha));
@@ -657,6 +673,19 @@ fn extract_tar_to_dir(tar_path: &PathBuf, out_dir: &PathBuf) -> Result<()> {
     let mut archive = Archive::new(cursor);
     archive.unpack(out_dir)?;
     Ok(())
+}
+
+fn read_local_pinned_sha(profile_root: &std::path::Path) -> Result<Option<String>> {
+    let pin_path = profile_root.join("pin.json");
+    if !pin_path.exists() {
+        return Ok(None);
+    }
+    let value: Value = serde_json::from_str(&fs::read_to_string(&pin_path)?)
+        .context("pin.json is not valid JSON")?;
+    Ok(value
+        .get("pinned_sha256")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string()))
 }
 
 async fn handle_workspace(

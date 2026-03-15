@@ -28,6 +28,7 @@ AGENT_ITER_SLEEP_MS="${MC_PRESSURE_AGENT_ITER_SLEEP_MS:-500}"
 AGENT_EXEC_TIMEOUT_SEC="${MC_PRESSURE_AGENT_EXEC_TIMEOUT_SEC:-300}"
 AGENT_DRIVER="${MC_PRESSURE_AGENT_DRIVER:-daemon}" # daemon | codex
 DIAGNOSTIC_SAMPLE_LIMIT="${MC_PRESSURE_DIAGNOSTIC_SAMPLE_LIMIT:-5}"
+AGENT_ON_429_SLEEP_MS="${MC_PRESSURE_AGENT_ON_429_SLEEP_MS:-1000}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required" >&2
@@ -143,6 +144,7 @@ run_agent_worker() {
   local attempts=0
   local successes=0
   local failures=0
+  local consecutive_429s=0
 
   while [[ "$(date +%s)" -lt "$deadline" ]]; do
     attempts=$((attempts + 1))
@@ -173,9 +175,20 @@ EOF
       if [[ "$http_code" == "200" ]] && jq -e '.ok == true' "$out_file" >/dev/null 2>&1; then
         echo "RESULT: ok" >"$iter_msg"
         successes=$((successes + 1))
+        consecutive_429s=0
       else
         echo "RESULT: fail" >"$iter_msg"
         failures=$((failures + 1))
+        if [[ "$http_code" == "429" ]]; then
+          consecutive_429s=$((consecutive_429s + 1))
+          local exp=$(( consecutive_429s > 5 ? 5 : consecutive_429s - 1 ))
+          local exp_ms=$(( AGENT_ON_429_SLEEP_MS * (1 << exp) ))
+          [[ $exp_ms -gt 30000 ]] && exp_ms=30000
+          local backoff_ms=$(( exp_ms + (RANDOM % 1000) ))
+          sleep "$(awk "BEGIN{printf \"%.3f\", ${backoff_ms}/1000}")"
+        else
+          consecutive_429s=0
+        fi
       fi
       echo "{\"driver\":\"daemon\",\"http_code\":\"$http_code\"}" >"$iter_log"
     else
@@ -306,6 +319,45 @@ for i in $(seq 1 "$WORKERS"); do
 done
 wait
 
+status_files=("$RUN_DIR"/workers/*/status.json)
+if [[ ! -e "${status_files[0]}" ]]; then
+  jq -n \
+    --arg report_version "$REPORT_VERSION" \
+    --arg run_id "$RUN_ID" \
+    --arg mode "$MODE" \
+    --arg model "$MODEL" \
+    --arg base_url "$BASE_URL" \
+    --arg shim_host "$SHIM_HOST" \
+    --argjson shim_port "$SHIM_PORT" \
+    '{
+      report_version: $report_version,
+      run_id: $run_id,
+      mode: $mode,
+      model: $model,
+      workers: 0,
+      duration_sec: 0,
+      attempts: 0,
+      successes: 0,
+      failures: 0,
+      fatal_worker_failures: 0,
+      success_rate: 0,
+      startup_timeout_hits: 0,
+      latency: {count: 0, p50_ms: 0, p95_ms: 0, p99_ms: 0},
+      metrics: {startup_timeout_hits: 0, rate_limit_hits: 0, latency_p50_ms: 0, latency_p95_ms: 0, latency_p99_ms: 0},
+      failures_by_category: {auth_config: 0, rate_limit: 0, ownership_acl: 0, shim_transport: 0, api_5xx: 0, scenario_assertion: 0},
+      diagnostics: {sample_limit: 0, failure_drilldowns: {}, note: "No worker status files were produced; workers likely exited before reporting."},
+      endpoint: {base_url: $base_url, shim_host: $shim_host, shim_port: $shim_port},
+      scenario: {file: "", playbook_results: []},
+      end_state: {playbook_results_count: 0, all_cleanup_succeeded: false, task_counts_match: false},
+      pass: false,
+      failure_reason: "missing_worker_status"
+    }' > "$RUN_DIR/summary.json"
+  echo "== summary =="
+  cat "$RUN_DIR/summary.json"
+  echo "result=fail strict_gate=failed"
+  exit 1
+fi
+
 all_latencies_json="$(cat "$RUN_DIR"/workers/*/latencies.txt 2>/dev/null \
   | jq -Rs 'split("\n") | map(select(length > 0) | tonumber) | sort' || echo "[]")"
 latency_count=$(echo "$all_latencies_json" | jq 'length')
@@ -422,7 +474,7 @@ jq -s \
       all_cleanup_succeeded: (($playbook_results // []) | all(.cleanup.kluster_deleted == true and .cleanup.mission_deleted == true)),
       task_counts_match: (($playbook_results // []) | all(.actual_task_count >= .expected_task_count))
     }
-  }' "$RUN_DIR"/workers/*/status.json > "$RUN_DIR/summary.json"
+  }' "${status_files[@]}" > "$RUN_DIR/summary.json"
 
 pass=true
 if [[ "$(jq -r '.fatal_worker_failures' "$RUN_DIR/summary.json")" -ne 0 ]]; then

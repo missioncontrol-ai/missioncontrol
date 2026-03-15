@@ -42,15 +42,6 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
         "MC_BASE_URL": resolved_base_url,
         "MC_TOKEN": "${MC_TOKEN}",
     }
-    legacy_mcp_env = {
-        "MC_BASE_URL": resolved_base_url,
-        "MC_BASE_URLS": ",".join(default_base_urls),
-        "MC_TOKEN": "${MC_TOKEN}",
-        "MC_STARTUP_PREFLIGHT": "health",
-        "MC_HTTP_TIMEOUT_SEC": "20",
-        "MC_HTTP_RETRIES": "2",
-        "MC_HTTP_RETRY_BACKOFF_MS": "250",
-    }
     # mc serve env: only needs MC_BASE_URL; token is read from ~/.missioncontrol/session.json
     mc_serve_env = {
         "MC_BASE_URL": resolved_base_url,
@@ -84,11 +75,6 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
             "command": "mc",
             "args": ["serve"],
             "env": mcp_env,
-        },
-        "legacy_mcp_server": {
-            "name": "missioncontrol",
-            "command": "missioncontrol-mcp",
-            "env": legacy_mcp_env,
         },
         # mc serve: the Rust-native MCP server — single binary, no Python required.
         # MC_TOKEN is intentionally omitted; mc reads the session from disk.

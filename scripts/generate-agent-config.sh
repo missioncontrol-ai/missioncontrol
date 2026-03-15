@@ -72,7 +72,6 @@ curl -fsS \
 mkdir -p "$OUT_DIR"
 
 jq '{missioncontrol: .mcp_server}' "$TMP_MANIFEST" > "$OUT_DIR/missioncontrol.mcp.json"
-jq '{missioncontrol: (.legacy_mcp_server // .mcp_server)}' "$TMP_MANIFEST" > "$OUT_DIR/missioncontrol.legacy.mcp.json"
 
 # Codex prefers TOML config entries with timeout controls.
 jq -r '
@@ -85,19 +84,6 @@ jq -r '
   + ($m.mcp_server.env | to_entries | map(.key + " = \"" + (.value|tostring) + "\"") | join(", "))
   + " }\n"
 ' "$TMP_MANIFEST" > "$OUT_DIR/codex.mcp.toml"
-
-# Optional legacy codex config for direct Python MCP mode.
-jq -r '
-  . as $m
-  | ($m.legacy_mcp_server // $m.mcp_server) as $legacy
-  | "[mcp_servers.missioncontrol]\n"
-  + "command = \"" + $legacy.command + "\"\n"
-  + "startup_timeout_sec = " + ($m.mcp_defaults.startup_timeout_sec|tostring) + "\n"
-  + "tool_timeout_sec = " + ($m.mcp_defaults.tool_timeout_sec|tostring) + "\n"
-  + "env = { "
-  + ($legacy.env | to_entries | map(.key + " = \"" + (.value|tostring) + "\"") | join(", "))
-  + " }\n"
-' "$TMP_MANIFEST" > "$OUT_DIR/codex.legacy.mcp.toml"
 
 # Claude/OpenClaw/NanoClaw consume JSON snippets.
 jq '{
@@ -156,9 +142,7 @@ case "$AGENT" in
 esac
 
 echo "wrote $OUT_DIR/missioncontrol.mcp.json"
-echo "wrote $OUT_DIR/missioncontrol.legacy.mcp.json"
 echo "wrote $OUT_DIR/codex.mcp.toml"
-echo "wrote $OUT_DIR/codex.legacy.mcp.toml"
 echo "wrote $OUT_DIR/claude.mcp.json"
 echo "wrote $OUT_DIR/openclaw.acp.json"
 echo "wrote $OUT_DIR/nanoclaw.acp.json"
