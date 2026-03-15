@@ -352,16 +352,6 @@ impl AgentDriver for ClaudeDriver {
         target_home: &Path,
         _target_mc_home: &Path,
     ) -> Result<()> {
-        let config_path = target_home.join(".claude.json");
-
-        let mut root: serde_json::Value = if config_path.exists() {
-            let content = std::fs::read_to_string(&config_path)?;
-            serde_json::from_str(&content)
-                .unwrap_or_else(|_| serde_json::Value::Object(Default::default()))
-        } else {
-            serde_json::Value::Object(Default::default())
-        };
-
         let mc_entry = render_json_mcp_entry(
             include_str!("../../../distribution/templates/claude.mcp.json.tmpl"),
             "embedded claude template",
@@ -370,17 +360,21 @@ impl AgentDriver for ClaudeDriver {
             embed_token,
         );
         let mc_entry = absolutize_mc_command(mc_entry);
-
-        root.as_object_mut()
-            .ok_or_else(|| anyhow!("~/.claude.json is not a JSON object"))?
-            .entry("mcpServers")
-            .or_insert_with(|| serde_json::Value::Object(Default::default()))
-            .as_object_mut()
-            .ok_or_else(|| anyhow!("~/.claude.json mcpServers is not an object"))?
-            .insert("missioncontrol".to_string(), mc_entry);
-
-        std::fs::write(&config_path, serde_json::to_string_pretty(&root)?)?;
+        let config_path = target_home.join(".claude.json");
+        write_json_missioncontrol_entry(&config_path, mc_entry.clone())?;
         mc_ok!("claude MCP config written → {}", config_path.display());
+
+        if let Some(global_home) = dirs::home_dir() {
+            let global_path = global_home.join(".claude.json");
+            if global_path != config_path {
+                write_json_missioncontrol_entry(&global_path, mc_entry)?;
+                mc_info!(
+                    "claude global MCP config updated → {}",
+                    global_path.display()
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -389,6 +383,28 @@ impl AgentDriver for ClaudeDriver {
         cmd.args(extra_args);
         cmd
     }
+}
+
+fn write_json_missioncontrol_entry(
+    config_path: &Path,
+    mc_entry: serde_json::Value,
+) -> Result<()> {
+    let mut root: serde_json::Value = if config_path.exists() {
+        let content = std::fs::read_to_string(config_path)?;
+        serde_json::from_str(&content)
+            .unwrap_or_else(|_| serde_json::Value::Object(Default::default()))
+    } else {
+        serde_json::Value::Object(Default::default())
+    };
+    root.as_object_mut()
+        .ok_or_else(|| anyhow!("{} is not a JSON object", config_path.display()))?
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::Value::Object(Default::default()))
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("{} mcpServers is not an object", config_path.display()))?
+        .insert("missioncontrol".to_string(), mc_entry);
+    std::fs::write(config_path, serde_json::to_string_pretty(&root)?)?;
+    Ok(())
 }
 
 // ── GeminiDriver ─────────────────────────────────────────────────────────────
