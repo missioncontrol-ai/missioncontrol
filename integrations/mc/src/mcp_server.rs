@@ -18,7 +18,7 @@
 //! - Protocol version: "2024-11-05"
 //! - Methods: initialize, initialized, tools/list, tools/call, ping
 
-use crate::{client::MissionControlClient, mcp_tools};
+use crate::{client::MissionControlClient, mcp_stdio, mcp_tools};
 use anyhow::{Context, Result};
 use clap::Args;
 use serde_json::{json, Value};
@@ -26,15 +26,9 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::BufReader;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
-
-#[derive(Copy, Clone, Debug)]
-enum MessageFormat {
-    ContentLength,
-    JsonLine,
-}
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
@@ -109,7 +103,7 @@ pub async fn run(args: &ServeMcpArgs, client: &MissionControlClient) -> Result<(
 
     loop {
         // 1. Read either JSONL body or Content-Length framed body.
-        let (raw, format) = match read_next_message(&mut reader).await {
+        let (raw, format) = match mcp_stdio::read_next_message(&mut reader).await {
             Ok(Some(msg)) => msg,
             Ok(None) => break, // EOF — host closed the pipe
             Err(e) => {
@@ -137,17 +131,7 @@ pub async fn run(args: &ServeMcpArgs, client: &MissionControlClient) -> Result<(
             if debug {
                 eprintln!("mc serve --> {}", serialized);
             }
-            match format {
-                MessageFormat::ContentLength => {
-                    let framed = format!("Content-Length: {}\r\n\r\n{}", serialized.len(), serialized);
-                    stdout.write_all(framed.as_bytes()).await?;
-                }
-                MessageFormat::JsonLine => {
-                    stdout.write_all(serialized.as_bytes()).await?;
-                    stdout.write_all(b"\n").await?;
-                }
-            }
-            stdout.flush().await?;
+            mcp_stdio::write_message(&mut stdout, &serialized, format).await?;
         }
     }
 
@@ -299,81 +283,6 @@ async fn fetch_tools(
 }
 
 // ── I/O helpers ───────────────────────────────────────────────────────────────
-
-/// Read one MCP message from stdin.
-///
-/// Supports:
-/// - Content-Length framed messages (LSP style)
-/// - newline-delimited JSON messages (JSONL style)
-async fn read_next_message(
-    reader: &mut BufReader<tokio::io::Stdin>,
-) -> Result<Option<(String, MessageFormat)>> {
-    let first = loop {
-        let mut first_line = String::new();
-        let n = reader.read_line(&mut first_line).await?;
-        if n == 0 {
-            return Ok(None);
-        }
-        let first = first_line.trim().to_string();
-        if first.is_empty() {
-            continue;
-        }
-        break first;
-    };
-
-    if first.starts_with('{') {
-        return Ok(Some((first, MessageFormat::JsonLine)));
-    }
-
-    // Otherwise treat as Content-Length header block.
-    let content_length = read_content_length_with_first_line(reader, first).await?;
-    let mut body = vec![0u8; content_length];
-    reader.read_exact(&mut body).await.context("read body")?;
-    Ok(Some((
-        String::from_utf8_lossy(&body).to_string(),
-        MessageFormat::ContentLength,
-    )))
-}
-
-async fn read_content_length_with_first_line(
-    reader: &mut BufReader<tokio::io::Stdin>,
-    first_line: String,
-) -> Result<usize> {
-    let mut content_length: Option<usize> = None;
-    let mut pending_first = if first_line.is_empty() {
-        None
-    } else {
-        Some(first_line)
-    };
-    loop {
-        let line = if let Some(first) = pending_first.take() {
-            first
-        } else {
-            let mut line = String::new();
-            let n = reader.read_line(&mut line).await?;
-            if n == 0 {
-                anyhow::bail!("unexpected EOF while reading Content-Length headers");
-            }
-            line
-        };
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            // Blank line separates headers from body.
-            break;
-        }
-        if let Some((name, value)) = trimmed.split_once(':') {
-            if name.trim().eq_ignore_ascii_case("Content-Length") {
-                let val: usize = value
-                    .trim()
-                    .parse()
-                    .context("invalid Content-Length value")?;
-                content_length = Some(val);
-            }
-        }
-        // Other headers (Content-Type etc.) are ignored.
-    }
-    content_length.ok_or_else(|| anyhow::anyhow!("missing Content-Length header"))
-}
 
 fn error_response(id: Value, code: i64, message: &str) -> Value {
     json!({
