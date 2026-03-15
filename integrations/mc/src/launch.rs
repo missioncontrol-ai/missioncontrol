@@ -162,14 +162,24 @@ impl AgentDriver for CodexDriver {
             String::new()
         };
 
+        let new_stanza = render_codex_stanza(base_url, token, embed_token);
+
         // Detect existing missioncontrol section: either via our marker comment
         // or the raw TOML key (handles configs written before the marker existed).
         let has_marker = existing.contains(CODEX_MC_MARKER);
         let has_key = existing.contains("[mcp_servers.missioncontrol]");
 
         if has_marker || has_key {
-            // Prompt user to replace.
-            eprint!("mc launch: [mcp_servers.missioncontrol] already exists in {}. Replace? [y/N] ", config_path.display());
+            // Extract current section and compare to what we'd write.
+            let current_section = extract_codex_mc_section(&existing);
+            if current_section.trim() == new_stanza.trim() {
+                eprintln!("mc launch: codex MCP config is up to date (no changes needed)");
+                return Ok(());
+            }
+            // Config differs — prompt user to replace.
+            eprint!(
+                "mc launch: [mcp_servers.missioncontrol] exists but differs. Replace? [y/N] "
+            );
             std::io::stderr().flush()?;
             let mut answer = String::new();
             std::io::stdin().read_line(&mut answer)?;
@@ -180,10 +190,8 @@ impl AgentDriver for CodexDriver {
             // Remove the existing section (and its marker comment if present).
             let cleaned = remove_codex_mc_section(&existing);
             std::fs::write(&config_path, &cleaned)?;
-            eprintln!("mc launch: removed existing missioncontrol section");
         }
 
-        let stanza = render_codex_stanza(base_url, token, embed_token);
         let current = std::fs::read_to_string(&config_path).unwrap_or_default();
         let mut file = std::fs::OpenOptions::new()
             .create(true)
@@ -194,7 +202,7 @@ impl AgentDriver for CodexDriver {
             writeln!(file)?;
         }
         writeln!(file)?;
-        write!(file, "{}", stanza)?;
+        write!(file, "{}", new_stanza)?;
         eprintln!(
             "mc launch: installed codex MCP config at {}",
             config_path.display()
@@ -220,6 +228,30 @@ fn render_codex_stanza(base_url: &str, token: &str, embed_token: bool) -> String
         rendered.replace(", MC_TOKEN = \"__TOKEN__\"", "")
     };
     format!("{}\n{}\n", CODEX_MC_MARKER, rendered)
+}
+
+/// Extract the missioncontrol MCP section lines from a codex config.toml string
+/// (including the marker comment if present), for comparison purposes.
+fn extract_codex_mc_section(content: &str) -> String {
+    let mut out = Vec::new();
+    let mut in_mc_section = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if trimmed == CODEX_MC_MARKER || trimmed == "[mcp_servers.missioncontrol]" {
+            in_mc_section = true;
+        }
+
+        if in_mc_section {
+            if trimmed.starts_with('[') && trimmed != CODEX_MC_MARKER && !trimmed.starts_with("[mcp_servers.missioncontrol") {
+                break;
+            }
+            out.push(line);
+        }
+    }
+
+    out.join("\n")
 }
 
 /// Remove all lines belonging to the missioncontrol MCP section from a codex
