@@ -146,3 +146,8 @@ Current next build sequence:
 
 Open launch parity gap to close:
 - `MC-LAUNCH-CODEX-AUTH-001`: `mc launch claude` now supports working auth pass-through/profile seeding, but Codex launch/auth behavior is not yet equivalently standardized. Either align Codex to the same pass-through + profile-overlay model or enforce a shared MCP-standard launch/auth layer across both agents.
+
+Post-cutover follow-ups:
+- `MC-PERSIST-002`: implement full GitHub App installation-token lease flow (server-side) for mission-scoped publish providers.
+- `MC-PERSIST-003`: add publish idempotency/concurrency guardrails for mission-scoped routed publishes.
+- `MC-PERSIST-004`: extend API/MCP E2E coverage for persistence provisioning, route planning, and publication status/error paths.

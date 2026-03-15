@@ -22,7 +22,7 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 ## Core Capabilities
 
 - **Missions & Klusters** — organizational units that scope knowledge, tools, permissions, and governance. Agents and humans switch profiles without losing context or integrity.
-- **Overlap Detection** — fuzzy + vector similarity analysis runs before every task or artifact is created. Collisions are caught proactively, enabling safe parallelism at scale.
+- **Overlap Detection** — fuzzy + vector similarity analysis runs before task/artifact creation to proactively reduce collisions and enable safer parallelism at scale.
 - **Artifact Ledger** — every significant mutation is recorded in Postgres, indexed for search, and optionally committed to Git with full provenance metadata.
 - **MCP-Native Agent Interface** — agents interact via standard MCP stdio tools (`search_tasks`, `detect_overlaps`, `load_kluster_workspace`, `publish_pending_ledger_events`). No custom SDK required.
 - **Governance & Approvals** — versioned policy lifecycle (draft → active → rollback), role-based access (Admin / Contributor / Viewer), HMAC-signed approval tokens on sensitive mutations.
