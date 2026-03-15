@@ -367,6 +367,7 @@ pub async fn run(
     ctx: AgentContext,
     booster: AgentBooster,
     config: McConfig,
+    json_output: bool,
 ) -> Result<()> {
     match command {
         McCommand::Tools(cmd) => handle_tools(cmd, client, &booster, &config.schema_pack).await,
@@ -384,17 +385,22 @@ pub async fn run(
         McCommand::Update(cmd) => update::run(cmd, &config).await,
         McCommand::Daemon(args) => daemon::run(&args, &client, ctx).await,
         McCommand::Launch(args) => launch::run(args, &client, &config).await,
-        McCommand::Init(args) => handle_init(args, client, &config).await,
+        McCommand::Init(args) => handle_init(args, client, &config, json_output).await,
         McCommand::Evolve(args) => evolve::run(args, &client).await,
         McCommand::Login(args) => auth::login(args, &client, config.base_url.as_str()).await,
         McCommand::Logout(args) => auth::logout(args, &client).await,
         McCommand::Whoami(_) => auth::whoami(&client).await,
         McCommand::Serve(args) => mcp_server::run(&args, &client).await,
-        McCommand::Profile(cmd) => handle_profile(cmd, client).await,
+        McCommand::Profile(cmd) => handle_profile(cmd, client, json_output).await,
     }
 }
 
-async fn handle_init(args: InitArgs, client: MissionControlClient, config: &McConfig) -> Result<()> {
+async fn handle_init(
+    args: InitArgs,
+    client: MissionControlClient,
+    config: &McConfig,
+    json_output: bool,
+) -> Result<()> {
     let profile_name = args.profile.trim();
     if profile_name.is_empty() {
         anyhow::bail!("--profile cannot be empty");
@@ -419,6 +425,7 @@ async fn handle_init(args: InitArgs, client: MissionControlClient, config: &McCo
                 return bootstrap_local_profile(
                     profile_name,
                     Some(format!("login failed; continuing in local-only mode: {err}")),
+                    json_output,
                 );
             }
         }
@@ -442,6 +449,7 @@ async fn handle_init(args: InitArgs, client: MissionControlClient, config: &McCo
                 Some(format!(
                     "unable to reach Mission Control profile service; continuing in local-only mode: {err}"
                 )),
+                json_output,
             );
         }
     };
@@ -459,22 +467,42 @@ async fn handle_init(args: InitArgs, client: MissionControlClient, config: &McCo
         )
         .await;
         if activated.is_err() {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "ok": true,
-                    "created": false,
-                    "note": "profiles already exist; no bootstrap profile created",
-                }))
-                .unwrap_or_else(|_| "{\"ok\":true}".to_string())
-            );
+            let payload = json!({
+                "ok": true,
+                "created": false,
+                "note": "profiles already exist; no bootstrap profile created",
+            });
+            if json_output {
+                print_json(&payload);
+            } else {
+                println!(
+                    "{}{}{} profiles already exist; no bootstrap profile created",
+                    crate::ui::YELLOW,
+                    "⚑ ",
+                    crate::ui::RESET
+                );
+            }
             return Ok(());
         }
-        print_json(&json!({
+        write_synced_profile_state(profile_name)?;
+        let payload = json!({
             "ok": true,
             "created": false,
             "activated_profile": profile_name,
-        }));
+        });
+        if json_output {
+            print_json(&payload);
+        } else {
+            println!(
+                "{}{}{} profile active: {}{}{}",
+                crate::ui::GREEN,
+                "✓ ",
+                crate::ui::RESET,
+                crate::ui::CYAN,
+                profile_name,
+                crate::ui::RESET
+            );
+        }
         return Ok(());
     }
 
@@ -498,15 +526,30 @@ async fn handle_init(args: InitArgs, client: MissionControlClient, config: &McCo
                 Some(format!(
                     "failed to publish profile to Mission Control; continuing in local-only mode: {err}"
                 )),
+                json_output,
             );
         }
     };
-    print_json(&json!({
+    write_synced_profile_state(profile_name)?;
+    let payload = json!({
         "ok": true,
         "created": true,
         "synced": true,
         "profile": published.get("profile").cloned().unwrap_or(Value::Null),
-    }));
+    });
+    if json_output {
+        print_json(&payload);
+    } else {
+        println!(
+            "{}{}{} profile created + synced: {}{}{}",
+            crate::ui::GREEN,
+            "✓ ",
+            crate::ui::RESET,
+            crate::ui::CYAN,
+            profile_name,
+            crate::ui::RESET
+        );
+    }
     Ok(())
 }
 
@@ -543,6 +586,54 @@ fn print_json(value: &Value) {
         "{}",
         serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
     );
+}
+
+fn print_profiles_human(value: &Value) {
+    let Some(items) = value.as_array() else {
+        print_json(value);
+        return;
+    };
+    if items.is_empty() {
+        println!("no profiles");
+        return;
+    }
+    for p in items {
+        let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let sha = p.get("sha256").and_then(|v| v.as_str()).unwrap_or("-");
+        let is_default = p.get("is_default").and_then(|v| v.as_bool()).unwrap_or(false);
+        if is_default {
+            println!("{}*{} {}  {}", crate::ui::GREEN, crate::ui::RESET, name, sha);
+        } else {
+            println!("  {}  {}", name, sha);
+        }
+    }
+}
+
+fn print_profile_human(profile: &Value) {
+    let name = profile.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let sha = profile.get("sha256").and_then(|v| v.as_str()).unwrap_or("-");
+    let is_default = profile.get("is_default").and_then(|v| v.as_bool()).unwrap_or(false);
+    let default_marker = if is_default { " (default)" } else { "" };
+    println!("{}{}{}{}  {}", crate::ui::CYAN, name, crate::ui::RESET, default_marker, sha);
+}
+
+fn print_profile_status_human(value: &Value) {
+    let name = value.get("profile").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let remote_sha = value.get("remote_sha256").and_then(|v| v.as_str()).unwrap_or("-");
+    let local_pin = value
+        .get("local_pin")
+        .and_then(|v| v.get("pinned_sha256"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("(none)");
+    let synced = value
+        .get("local_state")
+        .and_then(|v| v.get("synced"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    println!("profile: {}{}{}", crate::ui::CYAN, name, crate::ui::RESET);
+    println!("remote_sha256: {}", remote_sha);
+    println!("local_pin: {}", local_pin);
+    println!("synced: {}", synced);
 }
 
 fn build_path_with_query(base: &str, query: String) -> String {
@@ -595,19 +686,43 @@ async fn handle_sync(command: SyncCommand, client: MissionControlClient) -> Resu
     Ok(())
 }
 
-async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -> Result<()> {
+async fn handle_profile(command: ProfileCommand, client: MissionControlClient, json_output: bool) -> Result<()> {
     match command {
         ProfileCommand::List { limit } => {
             let response = mcp_profile_call(&client, "list_profiles", json!({ "limit": limit })).await?;
-            print_json(&response.get("profiles").cloned().unwrap_or_else(|| json!([])));
+            let profiles = response.get("profiles").cloned().unwrap_or_else(|| json!([]));
+            if json_output {
+                print_json(&profiles);
+            } else {
+                print_profiles_human(&profiles);
+            }
         }
         ProfileCommand::Show { name } => {
             let response = mcp_profile_call(&client, "get_profile", json!({ "name": name })).await?;
-            print_json(&response.get("profile").cloned().unwrap_or(Value::Null));
+            let profile = response.get("profile").cloned().unwrap_or(Value::Null);
+            if json_output {
+                print_json(&profile);
+            } else {
+                print_profile_human(&profile);
+            }
         }
         ProfileCommand::Activate { name } => {
             let response = mcp_profile_call(&client, "activate_profile", json!({ "name": name })).await?;
-            print_json(&response.get("profile").cloned().unwrap_or(Value::Null));
+            let profile = response.get("profile").cloned().unwrap_or(Value::Null);
+            if json_output {
+                print_json(&profile);
+            } else {
+                let shown = profile.get("name").and_then(|v| v.as_str()).unwrap_or(&name);
+                println!(
+                    "{}{}{} default profile: {}{}{}",
+                    crate::ui::GREEN,
+                    "✓ ",
+                    crate::ui::RESET,
+                    crate::ui::CYAN,
+                    shown,
+                    crate::ui::RESET
+                );
+            }
         }
         ProfileCommand::Download { name, out } => {
             let response = mcp_profile_call(&client, "download_profile", json!({ "name": name })).await?;
@@ -621,15 +736,21 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
             let out_path = out.unwrap_or_else(|| PathBuf::from(format!("{}.profile.tar", name)));
             std::fs::write(&out_path, bytes)
                 .with_context(|| format!("failed to write {}", out_path.display()))?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "ok": true,
-                    "profile": name,
-                    "out": out_path.display().to_string()
-                }))
-                .unwrap_or_else(|_| "{\"ok\":true}".to_string())
-            );
+            let payload = json!({"ok": true, "profile": name, "out": out_path.display().to_string()});
+            if json_output {
+                print_json(&payload);
+            } else {
+                println!(
+                    "{}{}{} downloaded profile {}{}{} -> {}",
+                    crate::ui::GREEN,
+                    "✓ ",
+                    crate::ui::RESET,
+                    crate::ui::CYAN,
+                    name,
+                    crate::ui::RESET,
+                    out_path.display()
+                );
+            }
         }
         ProfileCommand::Publish {
             name,
@@ -668,7 +789,21 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
                 }),
             )
             .await?;
-            print_json(&response.get("profile").cloned().unwrap_or(Value::Null));
+            let profile = response.get("profile").cloned().unwrap_or(Value::Null);
+            if json_output {
+                print_json(&profile);
+            } else {
+                let shown = profile.get("name").and_then(|v| v.as_str()).unwrap_or(&name);
+                println!(
+                    "{}{}{} published profile: {}{}{}",
+                    crate::ui::GREEN,
+                    "✓ ",
+                    crate::ui::RESET,
+                    crate::ui::CYAN,
+                    shown,
+                    crate::ui::RESET
+                );
+            }
         }
         ProfileCommand::Pull {
             name,
@@ -728,14 +863,28 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
                 profile_root.join("state.json"),
                 serde_json::to_string_pretty(&state)?,
             )?;
-            print_json(&json!({
+            let payload = json!({
                 "ok": true,
                 "profile": name,
                 "last_pulled_sha256": sha,
                 "bundle_path": tar_path.display().to_string(),
                 "applied": apply,
                 "applied_dir": if apply { applied_dir.display().to_string() } else { String::new() }
-            }));
+            });
+            if json_output {
+                print_json(&payload);
+            } else {
+                println!(
+                    "{}{}{} pulled profile {}{}{} @ {}",
+                    crate::ui::GREEN,
+                    "✓ ",
+                    crate::ui::RESET,
+                    crate::ui::CYAN,
+                    name,
+                    crate::ui::RESET,
+                    sha
+                );
+            }
         }
         ProfileCommand::Pin { name, sha256 } => {
             let profile_root = crate::config::mc_home_dir().join("profiles").join(&name);
@@ -749,7 +898,21 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
                 profile_root.join("pin.json"),
                 serde_json::to_string_pretty(&pin)?,
             )?;
-            print_json(&json!({"ok": true, "profile": name, "pinned_sha256": sha256}));
+            let payload = json!({"ok": true, "profile": name, "pinned_sha256": sha256});
+            if json_output {
+                print_json(&payload);
+            } else {
+                println!(
+                    "{}{}{} pinned {}{}{} -> {}",
+                    crate::ui::GREEN,
+                    "✓ ",
+                    crate::ui::RESET,
+                    crate::ui::CYAN,
+                    name,
+                    crate::ui::RESET,
+                    sha256
+                );
+            }
         }
         ProfileCommand::Status { name } => {
             let remote = mcp_profile_call(&client, "get_profile", json!({ "name": name })).await?;
@@ -786,13 +949,18 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
             } else {
                 Value::Null
             };
-            print_json(&json!({
+            let payload = json!({
                 "profile": name,
                 "remote_sha256": remote_sha,
                 "local_pin": local_pin,
                 "local_state": local_state,
                 "pin_check": pin_check
-            }));
+            });
+            if json_output {
+                print_json(&payload);
+            } else {
+                print_profile_status_human(&payload);
+            }
         }
     }
     Ok(())
@@ -875,7 +1043,23 @@ fn validate_init_base_url(config: &McConfig) -> Result<()> {
     Ok(())
 }
 
-fn bootstrap_local_profile(profile_name: &str, warning: Option<String>) -> Result<()> {
+fn write_synced_profile_state(profile_name: &str) -> Result<()> {
+    let profile_root = crate::config::mc_home_dir().join("profiles").join(profile_name);
+    fs::create_dir_all(&profile_root)?;
+    let payload = json!({
+        "profile": profile_name,
+        "mode": "remote",
+        "synced": true,
+        "updated_at": chrono::Utc::now().to_rfc3339(),
+    });
+    fs::write(
+        profile_root.join("state.json"),
+        serde_json::to_string_pretty(&payload)?,
+    )?;
+    Ok(())
+}
+
+fn bootstrap_local_profile(profile_name: &str, warning: Option<String>, json_output: bool) -> Result<()> {
     let profile_root = crate::config::mc_home_dir().join("profiles").join(profile_name);
     fs::create_dir_all(&profile_root)?;
     let payload = json!({
@@ -895,13 +1079,26 @@ fn bootstrap_local_profile(profile_name: &str, warning: Option<String>) -> Resul
             "mc: warning: this profile is local-only and will not sync until Mission Control connectivity/auth is fixed"
         );
     }
-    print_json(&json!({
+    let payload = json!({
         "ok": true,
         "created": true,
         "synced": false,
         "profile": profile_name,
         "mode": "local_only"
-    }));
+    });
+    if json_output {
+        print_json(&payload);
+    } else {
+        println!(
+            "{}{}{} local-only profile initialized: {}{}{}",
+            crate::ui::YELLOW,
+            "⚑ ",
+            crate::ui::RESET,
+            crate::ui::CYAN,
+            profile_name,
+            crate::ui::RESET
+        );
+    }
     Ok(())
 }
 

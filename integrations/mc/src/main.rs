@@ -59,6 +59,10 @@ pub struct CliOpts {
     #[arg(long, env = "MC_ALLOW_BOOSTER_SHORT_CIRCUIT", default_value_t = false)]
     allow_booster_short_circuit: bool,
 
+    /// Emit JSON output (machine-readable). Human-readable text is default.
+    #[arg(long, global = true, default_value_t = false)]
+    json: bool,
+
     #[command(subcommand)]
     command: McCommand,
 }
@@ -109,5 +113,5 @@ async fn main() -> anyhow::Result<()> {
     let booster = AgentBooster::load(&config)?;
 
     let ctx = config.agent_context.clone();
-    mc::commands::run(opts.command, client, ctx, booster, config).await
+    mc::commands::run(opts.command, client, ctx, booster, config, opts.json).await
 }
