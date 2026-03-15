@@ -828,9 +828,7 @@ fn resolve_embed_token(no_embed_flag: bool, token: &str) -> bool {
         return false;
     }
     if crate::auth::is_session_token(token) {
-        mc_info!("session token (mcs_*) detected — not embedding in agent config");
-        mc_info!("token will be injected into the agent process at exec time");
-        return false;
+        mc_info!("session token (mcs_*) detected — embedding for MCP subprocess compatibility");
     }
     if token.is_empty() {
         mc_warn!("MC_TOKEN is not set — implying --no-embed-token");
