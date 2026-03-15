@@ -17,6 +17,7 @@ class McpToolsCatalogTests(unittest.TestCase):
         self.assertIn("download_profile", names)
         self.assertIn("pin_profile_version", names)
         self.assertIn("list_repo_bindings", names)
+        self.assertIn("provision_mission_persistence", names)
         self.assertIn("resolve_publish_plan", names)
         self.assertIn("get_publication_status", names)
 

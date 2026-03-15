@@ -23,7 +23,10 @@ from app.models import (
     TaskAssignment,
     SkillSnapshot,
     UserProfile,
+    RepoConnection,
     RepoBinding,
+    MissionPersistencePolicy,
+    MissionPersistenceRoute,
 )
 from app.schemas import MCPCall, MCPResponse, MCPTool
 from app.services.authz import (
@@ -289,6 +292,21 @@ TOOLS = [
         name="list_repo_bindings",
         description="List configured repository bindings for current principal",
         input_schema={"type": "object", "properties": {}},
+    ),
+    MCPTool(
+        name="provision_mission_persistence",
+        description="Create/update connection, binding, and mission policy routes in one call",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "mission_id": {"type": "string"},
+                "connection": {"type": "object"},
+                "binding": {"type": "object"},
+                "default_binding_name": {"type": "string"},
+                "routes": {"type": "array"},
+            },
+            "required": ["mission_id", "connection", "binding"],
+        },
     ),
     MCPTool(
         name="resolve_publish_plan",
@@ -1615,6 +1633,147 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 .order_by(RepoBinding.updated_at.desc())
             ).all()
             return _mcp_ok(request_id=request_id, result={"bindings": [model_to_dict(b) for b in bindings]})
+
+        if tool == "provision_mission_persistence":
+            mission_id = str(args.get("mission_id") or "").strip()
+            if not mission_id:
+                return _mcp_error(request_id=request_id, error="mission_id is required", error_code="invalid_input")
+            try:
+                assert_mission_owner_or_admin(session=session, request=request, mission_id=mission_id)
+            except HTTPException as exc:
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
+
+            now = datetime.utcnow()
+            conn_input = args.get("connection") if isinstance(args.get("connection"), dict) else {}
+            bind_input = args.get("binding") if isinstance(args.get("binding"), dict) else {}
+            routes_input = args.get("routes") if isinstance(args.get("routes"), list) else []
+
+            conn_name = str(conn_input.get("name") or "").strip()
+            repo_path = str(conn_input.get("repo_path") or "").strip()
+            if not conn_name or not repo_path:
+                return _mcp_error(
+                    request_id=request_id,
+                    error="connection.name and connection.repo_path are required",
+                    error_code="invalid_input",
+                )
+            connection = session.exec(
+                select(RepoConnection)
+                .where(RepoConnection.owner_subject == actor_subject)
+                .where(RepoConnection.name == conn_name)
+            ).first()
+            if not connection:
+                connection = RepoConnection(
+                    owner_subject=actor_subject,
+                    name=conn_name,
+                    provider=str(conn_input.get("provider") or "github_app").strip(),
+                    host=str(conn_input.get("host") or "github.com").strip(),
+                    repo_path=repo_path,
+                    default_branch=str(conn_input.get("default_branch") or "main").strip(),
+                    credential_ref=str(conn_input.get("credential_ref") or "").strip(),
+                    options_json=json.dumps(conn_input.get("options") or {}, separators=(",", ":")),
+                    created_at=now,
+                    updated_at=now,
+                )
+            else:
+                connection.provider = str(conn_input.get("provider") or connection.provider).strip()
+                connection.host = str(conn_input.get("host") or connection.host).strip()
+                connection.repo_path = repo_path
+                connection.default_branch = str(conn_input.get("default_branch") or connection.default_branch).strip()
+                connection.credential_ref = str(conn_input.get("credential_ref") or connection.credential_ref).strip()
+                connection.options_json = json.dumps(conn_input.get("options") or {}, separators=(",", ":"))
+                connection.updated_at = now
+            session.add(connection)
+            session.commit()
+            session.refresh(connection)
+
+            binding_name = str(bind_input.get("name") or "").strip()
+            if not binding_name:
+                return _mcp_error(request_id=request_id, error="binding.name is required", error_code="invalid_input")
+            binding = session.exec(
+                select(RepoBinding)
+                .where(RepoBinding.owner_subject == actor_subject)
+                .where(RepoBinding.name == binding_name)
+            ).first()
+            if not binding:
+                binding = RepoBinding(
+                    owner_subject=actor_subject,
+                    name=binding_name,
+                    connection_id=connection.id,
+                    branch_override=str(bind_input.get("branch_override") or "").strip(),
+                    base_path=str(bind_input.get("base_path") or "missions").strip().strip("/"),
+                    active=bool(bind_input.get("active", True)),
+                    created_at=now,
+                    updated_at=now,
+                )
+            else:
+                binding.connection_id = connection.id
+                binding.branch_override = str(bind_input.get("branch_override") or binding.branch_override).strip()
+                binding.base_path = str(bind_input.get("base_path") or binding.base_path).strip().strip("/")
+                binding.active = bool(bind_input.get("active", True))
+                binding.updated_at = now
+            session.add(binding)
+            session.commit()
+            session.refresh(binding)
+
+            policy = session.exec(
+                select(MissionPersistencePolicy).where(MissionPersistencePolicy.mission_id == mission_id)
+            ).first()
+            if not policy:
+                policy = MissionPersistencePolicy(mission_id=mission_id, created_at=now, updated_at=now)
+            policy.default_binding_id = binding.id
+            policy.fallback_mode = str(args.get("fallback_mode") or "fail_closed")
+            policy.require_approval = bool(args.get("require_approval", False))
+            policy.updated_at = now
+            session.add(policy)
+            session.commit()
+
+            session.exec(
+                MissionPersistenceRoute.__table__.delete().where(MissionPersistenceRoute.mission_id == mission_id)
+            )
+            for item in routes_input:
+                if not isinstance(item, dict):
+                    continue
+                target_name = str(item.get("binding_name") or binding.name).strip()
+                target = session.exec(
+                    select(RepoBinding)
+                    .where(RepoBinding.owner_subject == actor_subject)
+                    .where(RepoBinding.name == target_name)
+                ).first()
+                if not target:
+                    continue
+                row = MissionPersistenceRoute(
+                    mission_id=mission_id,
+                    entity_kind=str(item.get("entity_kind") or "").strip(),
+                    event_kind=str(item.get("event_kind") or "").strip(),
+                    binding_id=target.id,
+                    branch_override=str(item.get("branch_override") or "").strip(),
+                    path_template=str(
+                        item.get("path_template") or "missions/{mission_id}/{entity_kind}/{entity_id}.json"
+                    ),
+                    format=str(item.get("format") or "json_v1"),
+                    active=bool(item.get("active", True)),
+                    created_at=now,
+                    updated_at=now,
+                )
+                if row.entity_kind:
+                    session.add(row)
+            session.commit()
+            routes = session.exec(
+                select(MissionPersistenceRoute)
+                .where(MissionPersistenceRoute.mission_id == mission_id)
+                .where(MissionPersistenceRoute.active == True)  # noqa: E712
+                .order_by(MissionPersistenceRoute.id.asc())
+            ).all()
+            return _mcp_ok(
+                request_id=request_id,
+                result={
+                    "ok": True,
+                    "mission_id": mission_id,
+                    "connection": model_to_dict(connection),
+                    "binding": model_to_dict(binding),
+                    "routes": [model_to_dict(r) for r in routes],
+                },
+            )
 
         if tool == "resolve_publish_plan":
             mission_id = str(args.get("mission_id") or "").strip()
