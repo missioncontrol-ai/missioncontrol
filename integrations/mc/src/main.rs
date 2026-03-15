@@ -34,6 +34,10 @@ pub struct CliOpts {
     #[arg(long, env = "MC_RUNTIME_SESSION_ID")]
     runtime_session_id: Option<String>,
 
+    /// Optional profile name propagated for per-profile attribution.
+    #[arg(long, env = "MC_AGENT_PROFILE")]
+    profile_name: Option<String>,
+
     /// Timeout (in seconds) for all outbound calls.
     #[arg(long, env = "MC_TIMEOUT_SECS", default_value_t = 10)]
     timeout_secs: u64,
@@ -89,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
         token,
         opts.agent_id.clone(),
         opts.runtime_session_id.clone(),
+        opts.profile_name.clone(),
         opts.timeout_secs,
         opts.allow_insecure,
         !opts.disable_booster,

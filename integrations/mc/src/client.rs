@@ -13,6 +13,7 @@ pub struct MissionControlClient {
     token: Option<String>,
     agent_id: Option<String>,
     runtime_session_id: Option<String>,
+    profile_name: Option<String>,
 }
 
 impl MissionControlClient {
@@ -28,6 +29,7 @@ impl MissionControlClient {
             token: config.token.clone(),
             agent_id: config.agent_context.agent_id.clone(),
             runtime_session_id: config.agent_context.runtime_session_id.clone(),
+            profile_name: config.agent_context.profile_name.clone(),
         })
     }
 
@@ -43,6 +45,7 @@ impl MissionControlClient {
             token: if token.is_empty() { None } else { Some(token.to_string()) },
             agent_id: None,
             runtime_session_id: None,
+            profile_name: None,
         })
     }
 
@@ -61,6 +64,11 @@ impl MissionControlClient {
             if !runtime_session_id.trim().is_empty() {
                 request = request.header("x-mc-runtime-session-id", runtime_session_id);
                 request = request.header("x-mc-instance-id", runtime_session_id);
+            }
+        }
+        if let Some(profile_name) = &self.profile_name {
+            if !profile_name.trim().is_empty() {
+                request = request.header("x-mc-agent-profile", profile_name);
             }
         }
         request

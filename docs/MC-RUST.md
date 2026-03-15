@@ -117,3 +117,19 @@ all while reusing the same SSE contracts documented in [`docs/REAL-TIME.md`](REA
   so quick checks run before every MCP call.
 - Keep expanding the `mc` CLI until every critical Python command has parity and the Rust daemon hosts the matrix + MQTT pipeline for
   teams who prefer Rust-first tooling.
+
+## Build status checkpoint (2026-03-15)
+
+Completed recently:
+- `MC-PROFILE-001`: profile-aware launch + new/resume session flow with persisted runtime session metadata.
+- `MC-PROFILE-003`: MCP-backed profile lifecycle (`publish`, `pull`, `status`, pin conflict checks) with CLI tests.
+- `MC-PROFILE-004`: cleanup/retention integrated with doctor via `mc maintenance doctor --cleanup`.
+- `MC-LAUNCH-001`: launch regression harness landed for supported agent runtimes.
+- `MC-LAUNCH-002`: instance-local config default with explicit `--legacy-global-config` compatibility mode.
+
+Current next build sequence:
+1. `MC-PROFILE-002`: finish agent/session/profile identity propagation and validate concurrent multi-agent launches.
+2. `MC-MCP-BOOST-001`: default booster behavior must fall through to authoritative MCP backend paths.
+3. `MC-MCP-003`: publish REST vs MCP parity matrix and track remaining gaps.
+4. `MC-MCP-004`: close remaining create-flow parity gaps (`create_kluster` + critical creates) with E2E coverage.
+5. `MC-MCP-005`: standardize MCP response/error envelope and compatibility assertions before release gating.

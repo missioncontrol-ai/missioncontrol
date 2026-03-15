@@ -32,6 +32,7 @@ impl McConfig {
         token: Option<String>,
         agent_id: Option<String>,
         runtime_session_id: Option<String>,
+        profile_name: Option<String>,
         timeout_secs: u64,
         allow_insecure: bool,
         booster_enabled: bool,
@@ -50,6 +51,7 @@ impl McConfig {
             agent_context: AgentContext::new(
                 resolve_agent_id(agent_id),
                 runtime_session_id.filter(|value| !value.trim().is_empty()),
+                profile_name.filter(|value| !value.trim().is_empty()),
             ),
             booster_wasm,
             booster_enabled,
