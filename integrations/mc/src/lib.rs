@@ -9,6 +9,7 @@ pub mod evolve;
 pub mod governance;
 pub mod launch;
 pub mod maintenance;
+pub mod mcp_server;
 pub mod mcp_tools;
 pub mod ops;
 pub mod remote;

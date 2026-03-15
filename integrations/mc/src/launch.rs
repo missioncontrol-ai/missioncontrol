@@ -19,6 +19,7 @@
 //! is implied and a notice is printed.
 
 use crate::{
+    auth,
     client::MissionControlClient,
     config::{mc_home_dir, McConfig},
 };
@@ -456,16 +457,62 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     // 2. Daemon lifecycle (skip if externally managed).
     if !args.no_daemon {
         ensure_daemon_running(args.daemon_timeout, config).await?;
+
+        // Non-fatal probe: warn if the daemon tools cache isn't warm yet so the
+        // agent doesn't silently see an empty tools list on its first call.
+        if let Ok(http) = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+        {
+            let tools_url = format!("http://{}:{}/v1/tools", SHIM_HOST, SHIM_PORT);
+            match http.get(&tools_url).send().await {
+                Ok(r) if r.status().is_success() => {}
+                _ => tracing::warn!(
+                    "daemon tools cache not yet warm — agent may see empty tools on first call"
+                ),
+            }
+        }
     }
 
-    // 3. Auth preflight — 401 / unreachable → bail.
-    client
-        .get_json("/mcp/health")
-        .await
-        .context("auth preflight failed — check MC_TOKEN and MC_BASE_URL")?;
+    // 3. Auth: verify we have a valid session or static token; run interactive
+    //    login if neither is available.  Falls through immediately when MC_TOKEN
+    //    is already set (static token path).
+    let login_client_holder: Option<MissionControlClient> = if config.token.is_none() {
+        if auth::load_saved_session(config.base_url.as_str()).is_none() {
+            eprintln!("mc: no valid session found for {}", config.base_url.as_str());
+            eprintln!("mc: running `mc login` to authenticate...");
+            auth::login(
+                auth::LoginArgs {
+                    ttl_hours: 8,
+                    print_token: false,
+                    non_interactive: false,
+                },
+                client,
+                config.base_url.as_str(),
+            )
+            .await
+            .context("login failed — cannot launch without authentication")?;
+        }
+        // Rebuild client with the freshly written (or pre-existing) session token.
+        let session_token = auth::load_saved_session(config.base_url.as_str())
+            .map(|s| s.token)
+            .context("session not found after login — run `mc login` manually")?;
+        Some(
+            MissionControlClient::new_with_token(config.base_url.as_str(), &session_token)
+                .context("failed to build client with session token")?,
+        )
+    } else {
+        None
+    };
+    let effective_client: &MissionControlClient =
+        login_client_holder.as_ref().unwrap_or(client);
 
-    // 4. Preflight-only mode: stop here.
+    // 4. Preflight-only mode: verify connectivity then stop.
     if args.preflight_only {
+        effective_client
+            .get_json("/mcp/health")
+            .await
+            .context("auth preflight failed — check MC_TOKEN and MC_BASE_URL")?;
         eprintln!("mc launch: preflight passed");
         return Ok(());
     }
@@ -475,7 +522,12 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         .as_str()
         .trim_end_matches('/')
         .to_string();
-    let token = config.token.clone().unwrap_or_default();
+    // Effective token: static config token, or session token from disk (after login).
+    let token = config.token.clone().unwrap_or_else(|| {
+        auth::load_saved_session(config.base_url.as_str())
+            .map(|s| s.token)
+            .unwrap_or_default()
+    });
 
     // 5. Resolve token-embedding mode.
     //
@@ -490,7 +542,7 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
 
     // 6. Fetch agent config from onboarding manifest and write to staging dir.
     if !args.skip_config_gen {
-        fetch_and_stage_agent_config(client, &args.agent, &staging_dir, &base_url, &token)
+        fetch_and_stage_agent_config(effective_client, &args.agent, &staging_dir, &base_url, &token)
             .await?;
     }
 

@@ -60,6 +60,10 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
         "MC_HTTP_RETRIES": "2",
         "MC_HTTP_RETRY_BACKOFF_MS": "250",
     }
+    # mc serve env: only needs MC_BASE_URL; token is read from ~/.missioncontrol/session.json
+    mc_serve_env = {
+        "MC_BASE_URL": resolved_base_url,
+    }
     return {
         "name": "MissionControl Agent Onboarding",
         "version": "1.0",
@@ -94,12 +98,28 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
             "command": "missioncontrol-mcp",
             "env": legacy_mcp_env,
         },
+        # mc serve: the Rust-native MCP server — single binary, no Python required.
+        # MC_TOKEN is intentionally omitted; mc reads the session from disk.
+        # Run `mc login` once before using this entry.
+        "mc_serve_mcp_server": {
+            "name": "missioncontrol",
+            "command": "mc",
+            "args": ["serve"],
+            "env": mc_serve_env,
+        },
         "agent_configs": {
             "claude_code": {
                 "missioncontrol": {
                     "command": "missioncontrol-mcp",
                     "env": mcp_env,
-                }
+                },
+                # Alternative: use the Rust-native mc binary instead of missioncontrol-mcp.
+                # Requires `mc login` to have been run once on the machine.
+                "missioncontrol_mc_serve": {
+                    "command": "mc",
+                    "args": ["serve"],
+                    "env": mc_serve_env,
+                },
             },
             "codex": {
                 "missioncontrol": {
@@ -140,6 +160,7 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
             "Public distribution repo: https://github.com/missioncontrol-ai/mc-integration",
             "Use missioncontrol-explorer for inline terminal tree views.",
             "missioncontrol-mcp is configured in shim mode by default; use legacy_mcp_server for direct mode only.",
+            "mc_serve_mcp_server uses the Rust-native `mc serve` binary — run `mc login` once, no MC_TOKEN env var needed.",
         ],
     }
 

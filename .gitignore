@@ -18,6 +18,9 @@ taskman.db
 tmpclaude*
 .claude/
 **/.claude/
+!.claude/
+!.claude/agents/
+!.claude/agents/**
 
 # Local .terraform directories
 .terraform/

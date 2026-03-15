@@ -5,7 +5,7 @@ use crate::{
     client::MissionControlClient,
     config::McConfig,
     daemon::{self, DaemonArgs},
-    evolve, governance, launch, maintenance, mcp_tools, ops, remote,
+    evolve, governance, launch, maintenance, mcp_server, mcp_tools, ops, remote,
     schema_pack::SchemaPack,
     update,
 };
@@ -62,6 +62,8 @@ pub enum McCommand {
     Logout(auth::LogoutArgs),
     /// Show the current authenticated identity.
     Whoami(auth::WhoamiArgs),
+    /// Start an MCP server (stdio JSON-RPC 2.0) for LLM runtime connections.
+    Serve(mcp_server::ServeMcpArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -307,6 +309,7 @@ pub async fn run(
         McCommand::Login(args) => auth::login(args, &client, config.base_url.as_str()).await,
         McCommand::Logout(args) => auth::logout(args, &client).await,
         McCommand::Whoami(_) => auth::whoami(&client).await,
+        McCommand::Serve(args) => mcp_server::run(&args, &client).await,
     }
 }
 
