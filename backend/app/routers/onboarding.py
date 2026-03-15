@@ -110,12 +110,6 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
         "agent_configs": {
             "claude_code": {
                 "missioncontrol": {
-                    "command": "missioncontrol-mcp",
-                    "env": mcp_env,
-                },
-                # Alternative: use the Rust-native mc binary instead of missioncontrol-mcp.
-                # Requires `mc login` to have been run once on the machine.
-                "missioncontrol_mc_serve": {
                     "command": "mc",
                     "args": ["serve"],
                     "env": mc_serve_env,
@@ -123,21 +117,24 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
             },
             "codex": {
                 "missioncontrol": {
-                    "command": "missioncontrol-mcp",
-                    "env": mcp_env,
-                }
+                    "command": "mc",
+                    "args": ["serve"],
+                    "env": mc_serve_env,
+                },
             },
             "openclaw_nanoclaw": {
                 "missioncontrol": {
-                    "command": "missioncontrol-mcp",
-                    "env": mcp_env,
-                }
+                    "command": "mc",
+                    "args": ["serve"],
+                    "env": mc_serve_env,
+                },
             },
             "gemini": {
                 "missioncontrol": {
-                    "command": "missioncontrol-mcp",
-                    "env": mcp_env,
-                }
+                    "command": "mc",
+                    "args": ["serve"],
+                    "env": mc_serve_env,
+                },
             },
         },
         "bootstrap": {
@@ -154,13 +151,12 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
             + " --token ${MC_TOKEN} --agent both"
         },
         "notes": [
-            "Set MC_TOKEN in your shell before launching agent tools.",
-            "Run mc daemon before launching agents so MCP shim traffic stays on the Rust control plane.",
+            "Run `mc login` once to authenticate; mc serve reads the session token from disk.",
+            "All agents now use `mc serve` (Rust-native MCP server) — no Python missioncontrol-mcp required.",
             "Set the activation endpoint to your MissionControl instance before copying configs.",
             "Public distribution repo: https://github.com/missioncontrol-ai/mc-integration",
             "Use missioncontrol-explorer for inline terminal tree views.",
-            "missioncontrol-mcp is configured in shim mode by default; use legacy_mcp_server for direct mode only.",
-            "mc_serve_mcp_server uses the Rust-native `mc serve` binary — run `mc login` once, no MC_TOKEN env var needed.",
+            "`mc daemon` is optional and only needed for event streaming / Matrix integration.",
         ],
     }
 

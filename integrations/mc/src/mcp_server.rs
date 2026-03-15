@@ -38,9 +38,14 @@ pub struct ServeMcpArgs {
     #[arg(long, default_value = "60")]
     pub tools_cache_ttl: u64,
 
-    /// Skip preflight health check on startup
+    /// Run a preflight health check before entering the message loop.
+    ///
+    /// Disabled by default because an stdio MCP server must respond to
+    /// `initialize` immediately; blocking on a network call delays startup
+    /// and causes agents (e.g. Codex) to time out waiting for the handshake.
+    /// Enable only when invoking `mc serve` outside an agent context.
     #[arg(long)]
-    pub no_preflight: bool,
+    pub preflight: bool,
 
     /// Log MCP messages to stderr for debugging
     #[arg(long)]
@@ -79,8 +84,9 @@ impl ToolsCache {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: &ServeMcpArgs, client: &MissionControlClient) -> Result<()> {
-    // Preflight: verify connectivity + auth before entering the message loop.
-    if !args.no_preflight {
+    // Optional preflight: verify connectivity before entering the message loop.
+    // Off by default — stdio servers must respond to `initialize` immediately.
+    if args.preflight {
         client
             .get_json("/mcp/health")
             .await

@@ -22,18 +22,15 @@ use crate::{
     auth,
     client::MissionControlClient,
     config::{mc_home_dir, McConfig},
+    mc_info, mc_ok, mc_warn,
+    ui,
 };
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, ValueEnum};
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    process::Stdio,
-    time::Duration,
 };
-
-const SHIM_HOST: &str = "127.0.0.1";
-const SHIM_PORT: u16 = 8765;
 
 // ── CLI args ────────────────────────────────────────────────────────────────
 
@@ -42,7 +39,7 @@ pub struct LaunchArgs {
     /// Agent to launch: codex, claude, gemini, openclaw, nanoclaw
     agent: AgentKind,
 
-    /// Skip daemon lifecycle management (daemon managed externally)
+    /// No-op (daemon is no longer started by mc launch; kept for backwards compat)
     #[arg(long)]
     no_daemon: bool,
 
@@ -61,10 +58,6 @@ pub struct LaunchArgs {
     /// Automatically implied when MC_TOKEN is absent.
     #[arg(long)]
     no_embed_token: bool,
-
-    /// Seconds to wait for daemon to become ready (default: 15)
-    #[arg(long, default_value_t = 15)]
-    daemon_timeout: u64,
 
     /// Extra args forwarded verbatim to the agent binary (after --)
     #[arg(last = true)]
@@ -173,18 +166,19 @@ impl AgentDriver for CodexDriver {
             // Extract current section and compare to what we'd write.
             let current_section = extract_codex_mc_section(&existing);
             if current_section.trim() == new_stanza.trim() {
-                eprintln!("mc launch: codex MCP config is up to date (no changes needed)");
+                mc_ok!("codex MCP config is up to date");
                 return Ok(());
             }
             // Config differs — prompt user to replace.
             eprint!(
-                "mc launch: [mcp_servers.missioncontrol] exists but differs. Replace? [y/N] "
+                "{}⚑{} [mcp_servers.missioncontrol] differs from current template. Replace? [y/N] ",
+                crate::ui::YELLOW, crate::ui::RESET
             );
             std::io::stderr().flush()?;
             let mut answer = String::new();
             std::io::stdin().read_line(&mut answer)?;
             if !answer.trim().eq_ignore_ascii_case("y") {
-                eprintln!("mc launch: keeping existing codex MCP config");
+                mc_info!("keeping existing codex MCP config");
                 return Ok(());
             }
             // Remove the existing section (and its marker comment if present).
@@ -203,10 +197,7 @@ impl AgentDriver for CodexDriver {
         }
         writeln!(file)?;
         write!(file, "{}", new_stanza)?;
-        eprintln!(
-            "mc launch: installed codex MCP config at {}",
-            config_path.display()
-        );
+        mc_ok!("codex MCP config written → {}", config_path.display());
         Ok(())
     }
 
@@ -344,10 +335,7 @@ impl AgentDriver for ClaudeDriver {
             .insert("missioncontrol".to_string(), mc_entry);
 
         std::fs::write(&config_path, serde_json::to_string_pretty(&root)?)?;
-        eprintln!(
-            "mc launch: installed claude MCP config at {}",
-            config_path.display()
-        );
+        mc_ok!("claude MCP config written → {}", config_path.display());
         Ok(())
     }
 
@@ -412,10 +400,7 @@ impl AgentDriver for GeminiDriver {
             .insert("missioncontrol".to_string(), mc_entry);
 
         std::fs::write(&config_path, serde_json::to_string_pretty(&root)?)?;
-        eprintln!(
-            "mc launch: installed gemini MCP config at {}",
-            config_path.display()
-        );
+        mc_ok!("gemini MCP config written → {}", config_path.display());
         Ok(())
     }
 
@@ -523,8 +508,6 @@ fn install_acp_config(name: &str, base_url: &str, token: &str, embed_token: bool
     let out = config_dir.join(format!("{}.acp.json", name));
     let mut config = serde_json::json!({
         "mc_base_url": base_url,
-        "shim_host": SHIM_HOST,
-        "shim_port": SHIM_PORT,
     });
     if embed_token {
         config["mc_token"] = serde_json::json!(token);
@@ -532,7 +515,7 @@ fn install_acp_config(name: &str, base_url: &str, token: &str, embed_token: bool
     // When not embedding, mc_token is intentionally absent; the ACP client
     // must read MC_TOKEN from the process environment at runtime.
     std::fs::write(&out, serde_json::to_string_pretty(&config)?)?;
-    eprintln!("mc launch: wrote ACP config to {}", out.display());
+    mc_ok!("ACP config written → {}", out.display());
     Ok(())
 }
 
@@ -544,33 +527,22 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     // 1. Verify binary is on PATH before doing anything else.
     check_binary(driver.as_ref())?;
 
-    // 2. Daemon lifecycle (skip if externally managed).
-    if !args.no_daemon {
-        ensure_daemon_running(args.daemon_timeout, config).await?;
+    // Print brand banner after confirming the binary exists.
+    ui::print_banner(
+        config.base_url.as_str(),
+        args.agent.config_key(),
+        env!("CARGO_PKG_VERSION"),
+    );
 
-        // Non-fatal probe: warn if the daemon tools cache isn't warm yet so the
-        // agent doesn't silently see an empty tools list on its first call.
-        if let Ok(http) = reqwest::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .build()
-        {
-            let tools_url = format!("http://{}:{}/v1/tools", SHIM_HOST, SHIM_PORT);
-            match http.get(&tools_url).send().await {
-                Ok(r) if r.status().is_success() => {}
-                _ => tracing::warn!(
-                    "daemon tools cache not yet warm — agent may see empty tools on first call"
-                ),
-            }
-        }
-    }
+    // 2. (Daemon lifecycle removed — mc serve connects directly to backend.)
 
     // 3. Auth: verify we have a valid session or static token; run interactive
     //    login if neither is available.  Falls through immediately when MC_TOKEN
     //    is already set (static token path).
     let login_client_holder: Option<MissionControlClient> = if config.token.is_none() {
         if auth::load_saved_session(config.base_url.as_str()).is_none() {
-            eprintln!("mc: no valid session found for {}", config.base_url.as_str());
-            eprintln!("mc: running `mc login` to authenticate...");
+            mc_warn!("no valid session found for {}", config.base_url.as_str());
+            mc_info!("running `mc login` to authenticate...");
             auth::login(
                 auth::LoginArgs {
                     ttl_hours: 8,
@@ -603,7 +575,7 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
             .get_json("/mcp/health")
             .await
             .context("auth preflight failed — check MC_TOKEN and MC_BASE_URL")?;
-        eprintln!("mc launch: preflight passed");
+        mc_ok!("preflight passed");
         return Ok(());
     }
 
@@ -654,18 +626,18 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
 ///   4. Default → embed
 fn resolve_embed_token(no_embed_flag: bool, token: &str) -> bool {
     if no_embed_flag {
-        eprintln!("mc launch: --no-embed-token — MC_TOKEN will NOT be written to agent config");
-        eprintln!("mc launch: token will be injected into the agent process at exec time");
+        mc_info!("--no-embed-token: MC_TOKEN will NOT be written to agent config");
+        mc_info!("token will be injected into the agent process at exec time");
         return false;
     }
     if crate::auth::is_session_token(token) {
-        eprintln!("mc launch: session token (mcs_*) detected — not writing token to agent config");
-        eprintln!("mc launch: token will be injected into the agent process at exec time");
+        mc_info!("session token (mcs_*) detected — not embedding in agent config");
+        mc_info!("token will be injected into the agent process at exec time");
         return false;
     }
     if token.is_empty() {
-        eprintln!("mc launch: MC_TOKEN is not set — implying --no-embed-token");
-        eprintln!("mc launch: ensure MC_TOKEN is present in the environment when the agent runs");
+        mc_warn!("MC_TOKEN is not set — implying --no-embed-token");
+        mc_warn!("ensure MC_TOKEN is present in the environment when the agent runs");
         return false;
     }
     true
@@ -697,50 +669,6 @@ fn which_binary(name: &str) -> Result<PathBuf> {
     Err(anyhow!("not found on PATH"))
 }
 
-async fn ensure_daemon_running(timeout_secs: u64, config: &McConfig) -> Result<()> {
-    let health_url = format!("http://{}:{}/v1/health", SHIM_HOST, SHIM_PORT);
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(1))
-        .build()?;
-
-    if http.get(&health_url).send().await.is_ok() {
-        return Ok(()); // Already running.
-    }
-
-    // Spawn a detached daemon; drop the handle so it becomes an orphan after exec().
-    let base_url = config.base_url.as_str();
-    let token = config.token.as_deref().unwrap_or("");
-    std::process::Command::new(std::env::current_exe()?)
-        .args([
-            "daemon",
-            "--shim-host",
-            SHIM_HOST,
-            "--shim-port",
-            &SHIM_PORT.to_string(),
-            "--disable-matrix",
-        ])
-        .env("MC_BASE_URL", base_url)
-        .env("MC_TOKEN", token)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to spawn mc daemon")?;
-
-    eprintln!("mc launch: waiting for daemon (up to {} s)…", timeout_secs);
-    for _ in 0..timeout_secs {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        if http.get(&health_url).send().await.is_ok() {
-            eprintln!("mc launch: daemon ready");
-            return Ok(());
-        }
-    }
-    anyhow::bail!(
-        "daemon did not become ready within {} seconds",
-        timeout_secs
-    )
-}
-
 async fn fetch_and_stage_agent_config(
     client: &MissionControlClient,
     agent: &AgentKind,
@@ -762,15 +690,9 @@ async fn fetch_and_stage_agent_config(
     {
         let out_path = staging_dir.join(format!("{}.manifest.json", config_key));
         std::fs::write(&out_path, serde_json::to_string_pretty(agent_cfg)?)?;
-        eprintln!(
-            "mc launch: staged manifest config to {}",
-            out_path.display()
-        );
+        mc_info!("manifest staged → {}", out_path.display());
     } else {
-        eprintln!(
-            "mc launch: no agent_configs.{} in manifest, using embedded template",
-            config_key
-        );
+        mc_warn!("no agent_configs.{} in manifest — using embedded template", config_key);
     }
     Ok(())
 }

@@ -1,5 +1,6 @@
 [mcp_servers.missioncontrol]
-command = "missioncontrol-mcp"
-startup_timeout_sec = 45
+command = "mc"
+args = ["serve"]
+startup_timeout_sec = 30
 tool_timeout_sec = 60
-env = { MC_MCP_MODE = "shim", MC_DAEMON_HOST = "127.0.0.1", MC_DAEMON_PORT = "8765", MC_FAIL_OPEN_ON_LIST = "1", MC_STARTUP_PREFLIGHT = "none", MC_BASE_URL = "__BASE_URL__", MC_TOKEN = "__TOKEN__" }
+env = { MC_BASE_URL = "__BASE_URL__", MC_TOKEN = "__TOKEN__" }
