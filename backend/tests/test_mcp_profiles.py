@@ -50,11 +50,13 @@ class McpProfileToolsTests(unittest.TestCase):
             Response(),
         )
         self.assertTrue(published.ok)
+        self.assertTrue(published.result.get("request_id"))
         remote_sha = published.result["profile"]["sha256"]
         self.assertTrue(remote_sha)
 
         listed = call_tool(MCPCall(tool="list_profiles", args={}), self.req, Response())
         self.assertTrue(listed.ok)
+        self.assertTrue(listed.result.get("request_id"))
         self.assertEqual(len(listed.result["profiles"]), 1)
 
         status = call_tool(
@@ -63,6 +65,7 @@ class McpProfileToolsTests(unittest.TestCase):
             Response(),
         )
         self.assertTrue(status.ok)
+        self.assertTrue(status.result.get("request_id"))
         self.assertTrue(status.result["matches_expected"])
 
         pin_ok = call_tool(
@@ -71,6 +74,7 @@ class McpProfileToolsTests(unittest.TestCase):
             Response(),
         )
         self.assertTrue(pin_ok.ok)
+        self.assertTrue(pin_ok.result.get("request_id"))
         self.assertTrue(pin_ok.result["matches"])
 
         downloaded = call_tool(
@@ -79,11 +83,13 @@ class McpProfileToolsTests(unittest.TestCase):
             Response(),
         )
         self.assertTrue(downloaded.ok)
+        self.assertTrue(downloaded.result.get("request_id"))
         self.assertEqual(downloaded.result["profile"]["name"], "research")
         self.assertEqual(downloaded.result["tarball_b64"], tarball)
 
         activated = call_tool(MCPCall(tool="activate_profile", args={"name": "research"}), self.req, Response())
         self.assertTrue(activated.ok)
+        self.assertTrue(activated.result.get("request_id"))
         self.assertTrue(activated.result["profile"]["is_default"])
 
     def test_publish_expected_sha_conflict(self):
@@ -103,7 +109,16 @@ class McpProfileToolsTests(unittest.TestCase):
             Response(),
         )
         self.assertFalse(conflict.ok)
-        self.assertEqual(conflict.error, "profile_sha_mismatch")
+        self.assertIn("profile_sha_mismatch", conflict.error or "")
+        self.assertEqual((conflict.result or {}).get("error_code"), "profile_sha_mismatch")
+        self.assertTrue((conflict.result or {}).get("request_id"))
+
+    def test_unknown_tool_uses_error_envelope(self):
+        response = call_tool(MCPCall(tool="definitely_not_a_tool", args={}), self.req, Response())
+        self.assertFalse(response.ok)
+        self.assertIn("Unknown tool:", response.error or "")
+        self.assertEqual((response.result or {}).get("error_code"), "unknown_tool")
+        self.assertTrue((response.result or {}).get("request_id"))
 
 
 if __name__ == "__main__":

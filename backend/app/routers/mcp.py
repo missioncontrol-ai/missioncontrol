@@ -2437,26 +2437,26 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 .order_by(UserProfile.updated_at.desc())
                 .limit(limit)
             ).all()
-            return MCPResponse(ok=True, result={"profiles": [_profile_to_dict(p) for p in profiles]})
+            return _mcp_ok(request_id=request_id, result={"profiles": [_profile_to_dict(p) for p in profiles]})
 
         if tool == "get_profile":
             name = str(args.get("name") or "").strip()
             if not name:
-                return MCPResponse(ok=False, error="name is required")
+                return _mcp_error(request_id=request_id, error="name is required")
             profile = session.exec(
                 select(UserProfile)
                 .where(UserProfile.owner_subject == actor_subject)
                 .where(UserProfile.name == name)
             ).first()
             if not profile:
-                return MCPResponse(ok=False, error="Profile not found")
-            return MCPResponse(ok=True, result={"profile": _profile_to_dict(profile)})
+                return _mcp_error(request_id=request_id, error="Profile not found", error_code="not_found")
+            return _mcp_ok(request_id=request_id, result={"profile": _profile_to_dict(profile)})
 
         if tool == "publish_profile":
             name = str(args.get("name") or "").strip()
             tarball_b64 = str(args.get("tarball_b64") or "").strip()
             if not name or not tarball_b64:
-                return MCPResponse(ok=False, error="name and tarball_b64 are required")
+                return _mcp_error(request_id=request_id, error="name and tarball_b64 are required")
             expected_sha256 = str(args.get("expected_sha256") or "").strip()
             description = str(args.get("description") or "")
             is_default = bool(args.get("is_default") or False)
@@ -2464,11 +2464,11 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             if manifest is None:
                 manifest = []
             if not isinstance(manifest, list):
-                return MCPResponse(ok=False, error="manifest must be an array")
+                return _mcp_error(request_id=request_id, error="manifest must be an array")
             try:
                 raw = base64.b64decode(tarball_b64)
             except Exception:
-                return MCPResponse(ok=False, error="tarball_b64 is not valid base64")
+                return _mcp_error(request_id=request_id, error="tarball_b64 is not valid base64")
             computed_sha = hashlib.sha256(raw).hexdigest()
             profile = session.exec(
                 select(UserProfile)
@@ -2479,8 +2479,10 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 if expected_sha256 and (profile.sha256 or "") != expected_sha256:
                     return MCPResponse(
                         ok=False,
-                        error="profile_sha_mismatch",
+                        error=f"profile_sha_mismatch [request_id={request_id}]",
                         result={
+                            "error_code": "profile_sha_mismatch",
+                            "request_id": request_id,
                             "expected_sha256": expected_sha256,
                             "current_sha256": profile.sha256 or "",
                             "name": name,
@@ -2519,12 +2521,12 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     session.add(other)
             session.commit()
             session.refresh(profile)
-            return MCPResponse(ok=True, result={"profile": _profile_to_dict(profile)})
+            return _mcp_ok(request_id=request_id, result={"profile": _profile_to_dict(profile)})
 
         if tool == "download_profile":
             name = str(args.get("name") or "").strip()
             if not name:
-                return MCPResponse(ok=False, error="name is required")
+                return _mcp_error(request_id=request_id, error="name is required")
             if_sha256 = str(args.get("if_sha256") or "").strip()
             profile = session.exec(
                 select(UserProfile)
@@ -2532,16 +2534,22 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 .where(UserProfile.name == name)
             ).first()
             if not profile:
-                return MCPResponse(ok=False, error="Profile not found")
+                return _mcp_error(request_id=request_id, error="Profile not found", error_code="not_found")
             current_sha = (profile.sha256 or "").strip()
             if if_sha256 and if_sha256 != current_sha:
                 return MCPResponse(
                     ok=False,
-                    error="profile_sha_mismatch",
-                    result={"expected_sha256": if_sha256, "current_sha256": current_sha, "name": name},
+                    error=f"profile_sha_mismatch [request_id={request_id}]",
+                    result={
+                        "error_code": "profile_sha_mismatch",
+                        "request_id": request_id,
+                        "expected_sha256": if_sha256,
+                        "current_sha256": current_sha,
+                        "name": name,
+                    },
                 )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "profile": _profile_to_dict(profile),
                     "tarball_b64": profile.tarball_b64 or "",
@@ -2551,14 +2559,14 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
         if tool == "activate_profile":
             name = str(args.get("name") or "").strip()
             if not name:
-                return MCPResponse(ok=False, error="name is required")
+                return _mcp_error(request_id=request_id, error="name is required")
             profile = session.exec(
                 select(UserProfile)
                 .where(UserProfile.owner_subject == actor_subject)
                 .where(UserProfile.name == name)
             ).first()
             if not profile:
-                return MCPResponse(ok=False, error="Profile not found")
+                return _mcp_error(request_id=request_id, error="Profile not found", error_code="not_found")
             others = session.exec(
                 select(UserProfile)
                 .where(UserProfile.owner_subject == actor_subject)
@@ -2574,12 +2582,12 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             session.add(profile)
             session.commit()
             session.refresh(profile)
-            return MCPResponse(ok=True, result={"profile": _profile_to_dict(profile)})
+            return _mcp_ok(request_id=request_id, result={"profile": _profile_to_dict(profile)})
 
         if tool == "profile_status":
             name = str(args.get("name") or "").strip()
             if not name:
-                return MCPResponse(ok=False, error="name is required")
+                return _mcp_error(request_id=request_id, error="name is required")
             expected_sha256 = str(args.get("expected_sha256") or "").strip()
             profile = session.exec(
                 select(UserProfile)
@@ -2587,10 +2595,10 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 .where(UserProfile.name == name)
             ).first()
             if not profile:
-                return MCPResponse(ok=False, error="Profile not found")
+                return _mcp_error(request_id=request_id, error="Profile not found", error_code="not_found")
             remote_sha = (profile.sha256 or "").strip()
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "name": name,
                     "remote_sha256": remote_sha,
@@ -2603,19 +2611,31 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             name = str(args.get("name") or "").strip()
             pinned_sha = str(args.get("sha256") or "").strip()
             if not name or not pinned_sha:
-                return MCPResponse(ok=False, error="name and sha256 are required")
+                return _mcp_error(request_id=request_id, error="name and sha256 are required")
             profile = session.exec(
                 select(UserProfile)
                 .where(UserProfile.owner_subject == actor_subject)
                 .where(UserProfile.name == name)
             ).first()
             if not profile:
-                return MCPResponse(ok=False, error="Profile not found")
+                return _mcp_error(request_id=request_id, error="Profile not found", error_code="not_found")
             remote_sha = (profile.sha256 or "").strip()
             matches = remote_sha == pinned_sha
-            return MCPResponse(
-                ok=matches,
-                error=None if matches else "profile_sha_mismatch",
+            if not matches:
+                return MCPResponse(
+                    ok=False,
+                    error=f"profile_sha_mismatch [request_id={request_id}]",
+                    result={
+                        "error_code": "profile_sha_mismatch",
+                        "request_id": request_id,
+                        "name": name,
+                        "pinned_sha256": pinned_sha,
+                        "remote_sha256": remote_sha,
+                        "matches": matches,
+                    },
+                )
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "name": name,
                     "pinned_sha256": pinned_sha,
@@ -2624,4 +2644,4 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 },
             )
 
-    raise HTTPException(status_code=400, detail="Unknown tool")
+    return _mcp_error(request_id=request_id, error=f"Unknown tool: {tool}", error_code="unknown_tool")
