@@ -1,3 +1,0 @@
-[console_scripts]
-missioncontrol-explorer = missioncontrol_mcp.explorer:main
-missioncontrol-mcp = missioncontrol_mcp.server:main

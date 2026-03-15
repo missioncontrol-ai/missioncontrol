@@ -14,18 +14,6 @@ jobs:
       - run: pip install -r backend/requirements.txt
       - run: cd backend && python -m unittest discover -s tests -p "test_*.py"
 
-  mcp-package:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - run: pip install paho-mqtt
-      - run: cd distribution/missioncontrol-mcp && PYTHONPATH=src python -m unittest discover -s tests -p "test_*.py"
-      - name: Install smoke
-        run: pip install distribution/missioncontrol-mcp/
-      - run: bash -c 'echo "{}" | missioncontrol-mcp --help || true'
-
   migrations:
     runs-on: ubuntu-latest
     steps:

@@ -51,6 +51,3 @@ jobs:
 
       - name: Test suite
         run: python -m unittest discover -s tests -p "test_*.py"
-
-      - name: MCP integration tests
-        run: PYTHONPATH=../distribution/missioncontrol-mcp/src python -m unittest discover -s ../distribution/missioncontrol-mcp/tests -p "test_*.py"

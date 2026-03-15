@@ -6,18 +6,6 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 10
 
-  - package-ecosystem: "pip"
-    directory: "/integrations/missioncontrol-mcp"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-
-  - package-ecosystem: "pip"
-    directory: "/distribution/mc-integration/missioncontrol-mcp"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
