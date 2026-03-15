@@ -874,14 +874,23 @@ fn initialize_profile_overlay(
 ) -> Result<()> {
     for rel in managed_config_relpaths(agent) {
         let profile_path = profile_home.join(rel);
-        if !profile_path.exists() {
-            let global_path = global_home.join(rel);
-            if global_path.exists() {
+        let global_path = global_home.join(rel);
+        if global_path.exists() {
+            if !profile_path.exists() {
                 seed_profile_path(&global_path, &profile_path)?;
                 mc_info!(
                     "seeded profile config from global {}",
                     global_path.display()
                 );
+            } else if global_path.is_dir() && profile_path.is_dir() {
+                let copied = merge_missing_dir_entries(&global_path, &profile_path)?;
+                if copied > 0 {
+                    mc_info!(
+                        "merged {} missing profile entries from global {}",
+                        copied,
+                        global_path.display()
+                    );
+                }
             }
         }
 
@@ -977,6 +986,40 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn merge_missing_dir_entries(src: &Path, dst: &Path) -> Result<usize> {
+    let mut copied: usize = 0;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let meta = fs::symlink_metadata(&src_path)?;
+        if meta.is_dir() {
+            if !dst_path.exists() {
+                copy_dir_recursive(&src_path, &dst_path)?;
+                copied += 1;
+            } else if dst_path.is_dir() {
+                copied += merge_missing_dir_entries(&src_path, &dst_path)?;
+            }
+            continue;
+        }
+        if !dst_path.exists() {
+            if meta.file_type().is_symlink() {
+                let link_target = fs::read_link(&src_path)?;
+                #[cfg(unix)]
+                unix_fs::symlink(link_target, &dst_path)?;
+                #[cfg(not(unix))]
+                {
+                    fs::copy(&src_path, &dst_path)?;
+                }
+            } else {
+                fs::copy(&src_path, &dst_path)?;
+            }
+            copied += 1;
+        }
+    }
+    Ok(copied)
 }
 
 fn parse_agent_kind(value: &str) -> Result<AgentKind> {
@@ -1443,5 +1486,44 @@ mod tests {
         assert!(meta.file_type().is_symlink(), "instance dir should be symlink");
         let target = fs::read_link(&instance_dir).expect("read dir symlink");
         assert_eq!(target, profile_dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn overlay_merges_missing_files_into_existing_profile_claude_dir() {
+        let tmp = tempdir().expect("tempdir");
+        let global_home = tmp.path().join("global-home");
+        let profile_home = tmp.path().join("profile-home");
+        let agent_home = tmp.path().join("agent-home");
+        fs::create_dir_all(global_home.join(".claude")).expect("global claude dir");
+        fs::create_dir_all(profile_home.join(".claude")).expect("profile claude dir");
+        fs::create_dir_all(&agent_home).expect("agent home");
+
+        fs::write(
+            global_home.join(".claude").join(".credentials.json"),
+            r#"{"kind":"oauth"}"#,
+        )
+        .expect("write global creds");
+        fs::write(
+            profile_home.join(".claude").join("settings.json"),
+            r#"{"theme":"dark"}"#,
+        )
+        .expect("write existing profile settings");
+
+        initialize_profile_overlay(&AgentKind::Claude, &agent_home, &profile_home, &global_home)
+            .expect("initialize profile overlay");
+
+        assert!(
+            profile_home
+                .join(".claude")
+                .join(".credentials.json")
+                .exists(),
+            "credentials should be merged into existing profile dir"
+        );
+        assert_eq!(
+            fs::read_to_string(profile_home.join(".claude").join("settings.json"))
+                .expect("read settings"),
+            r#"{"theme":"dark"}"#
+        );
     }
 }
