@@ -845,7 +845,7 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 internal_id = int(item["id"])
                 item["internal_id"] = internal_id
                 item["id"] = public_id_by_internal.get(internal_id, str(internal_id))
-            return MCPResponse(ok=True, result={"tasks": matches, "request_id": request_id})
+            return _mcp_ok(request_id=request_id, result={"tasks": matches})
 
         if tool == "read_doc":
             doc_id = int(args.get("doc_id"))
@@ -2142,13 +2142,11 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             task_ref = str(args.get("task_id") or "")
             task = resolve_task_by_ref(session=session, task_ref=task_ref)
             if not task:
-                return MCPResponse(ok=False, error="Task not found")
+                return _mcp_error(request_id=request_id, error="Task not found", error_code="not_found")
             suggestions = session.exec(
                 select(OverlapSuggestion).where(OverlapSuggestion.task_id == task.id)
             ).all()
-            return MCPResponse(
-                ok=True, result={"overlaps": [model_to_dict(s) for s in suggestions]}
-            )
+            return _mcp_ok(request_id=request_id, result={"overlaps": [model_to_dict(s) for s in suggestions]})
 
         if tool == "register_agent":
             name = args.get("name") or ""
@@ -2158,7 +2156,7 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             session.add(agent)
             session.commit()
             session.refresh(agent)
-            return MCPResponse(ok=True, result={"agent": model_to_dict(agent)})
+            return _mcp_ok(request_id=request_id, result={"agent": model_to_dict(agent)})
 
         if tool == "list_agents":
             status = args.get("status")
@@ -2166,75 +2164,75 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             if status:
                 stmt = stmt.where(Agent.status == status)
             agents = session.exec(stmt.order_by(Agent.updated_at.desc())).all()
-            return MCPResponse(ok=True, result={"agents": [model_to_dict(a) for a in agents]})
+            return _mcp_ok(request_id=request_id, result={"agents": [model_to_dict(a) for a in agents]})
 
         if tool == "get_agent":
             agent_id = int(args.get("agent_id"))
             agent = session.get(Agent, agent_id)
             if not agent:
-                return MCPResponse(ok=False, error="Agent not found")
-            return MCPResponse(ok=True, result={"agent": model_to_dict(agent)})
+                return _mcp_error(request_id=request_id, error="Agent not found", error_code="not_found")
+            return _mcp_ok(request_id=request_id, result={"agent": model_to_dict(agent)})
 
         if tool == "update_agent_status":
             agent_id = int(args.get("agent_id"))
             status = args.get("status") or "offline"
             agent = session.get(Agent, agent_id)
             if not agent:
-                return MCPResponse(ok=False, error="Agent not found")
+                return _mcp_error(request_id=request_id, error="Agent not found", error_code="not_found")
             agent.status = status
             agent.updated_at = datetime.utcnow()
             session.add(agent)
             session.commit()
             session.refresh(agent)
-            return MCPResponse(ok=True, result={"agent": model_to_dict(agent)})
+            return _mcp_ok(request_id=request_id, result={"agent": model_to_dict(agent)})
 
         if tool == "start_agent_session":
             agent_id = int(args.get("agent_id"))
             context = args.get("context") or ""
             agent = session.get(Agent, agent_id)
             if not agent:
-                return MCPResponse(ok=False, error="Agent not found")
+                return _mcp_error(request_id=request_id, error="Agent not found", error_code="not_found")
             session_obj = AgentSession(agent_id=agent_id, context=context)
             agent.status = "online"
             session.add(session_obj)
             session.add(agent)
             session.commit()
             session.refresh(session_obj)
-            return MCPResponse(ok=True, result={"session": model_to_dict(session_obj)})
+            return _mcp_ok(request_id=request_id, result={"session": model_to_dict(session_obj)})
 
         if tool == "end_agent_session":
             agent_id = int(args.get("agent_id"))
             session_id = int(args.get("session_id"))
             agent = session.get(Agent, agent_id)
             if not agent:
-                return MCPResponse(ok=False, error="Agent not found")
+                return _mcp_error(request_id=request_id, error="Agent not found", error_code="not_found")
             session_obj = session.get(AgentSession, session_id)
             if not session_obj or session_obj.agent_id != agent_id:
-                return MCPResponse(ok=False, error="Session not found")
+                return _mcp_error(request_id=request_id, error="Session not found", error_code="not_found")
             session_obj.ended_at = datetime.utcnow()
             agent.status = "offline"
             session.add(session_obj)
             session.add(agent)
             session.commit()
             session.refresh(session_obj)
-            return MCPResponse(ok=True, result={"session": model_to_dict(session_obj)})
+            return _mcp_ok(request_id=request_id, result={"session": model_to_dict(session_obj)})
 
         if tool == "claim_task":
             task_ref = str(args.get("task_id") or "")
             agent_id = int(args.get("agent_id"))
             agent = session.get(Agent, agent_id)
             if not agent:
-                return MCPResponse(ok=False, error="Agent not found")
+                return _mcp_error(request_id=request_id, error="Agent not found", error_code="not_found")
             task = resolve_task_by_ref(session=session, task_ref=task_ref)
             if not task:
-                return MCPResponse(ok=False, error="Task not found")
+                return _mcp_error(request_id=request_id, error="Task not found", error_code="not_found")
             task_id = task.id
             assignment = TaskAssignment(task_id=task_id, agent_id=agent_id, status="claimed")
             session.add(assignment)
             session.commit()
             session.refresh(assignment)
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "assignment": model_to_dict(assignment),
                     "task_id": task.public_id or str(task.id),
@@ -2245,13 +2243,13 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             assignment_id = int(args.get("assignment_id"))
             assignment = session.get(TaskAssignment, assignment_id)
             if not assignment:
-                return MCPResponse(ok=False, error="Assignment not found")
+                return _mcp_error(request_id=request_id, error="Assignment not found", error_code="not_found")
             assignment.status = "available"
             assignment.updated_at = datetime.utcnow()
             session.add(assignment)
             session.commit()
             session.refresh(assignment)
-            return MCPResponse(ok=True, result={"assignment": model_to_dict(assignment)})
+            return _mcp_ok(request_id=request_id, result={"assignment": model_to_dict(assignment)})
 
         if tool == "list_task_assignments":
             agent_id = args.get("agent_id")
@@ -2263,12 +2261,12 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             if task_ref is not None:
                 task = resolve_task_by_ref(session=session, task_ref=str(task_ref))
                 if not task:
-                    return MCPResponse(ok=True, result={"assignments": []})
+                    return _mcp_ok(request_id=request_id, result={"assignments": []})
                 stmt = stmt.where(TaskAssignment.task_id == int(task.id))
             if status:
                 stmt = stmt.where(TaskAssignment.status == status)
             assignments = session.exec(stmt.order_by(TaskAssignment.updated_at.desc())).all()
-            return MCPResponse(ok=True, result={"assignments": [model_to_dict(a) for a in assignments]})
+            return _mcp_ok(request_id=request_id, result={"assignments": [model_to_dict(a) for a in assignments]})
 
         if tool == "resolve_skill_snapshot":
             gated = ensure_action("skills.snapshot.resolve")
@@ -2277,16 +2275,16 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             mission_id = str(args.get("mission_id") or "")
             kluster_id = str(args.get("kluster_id") or "")
             if not mission_id:
-                return MCPResponse(ok=False, error="mission_id is required")
+                return _mcp_error(request_id=request_id, error="mission_id is required")
             try:
                 assert_mission_reader_or_admin(session=session, request=request, mission_id=mission_id)
                 if kluster_id:
                     validate_kluster_scope(session=session, mission_id=mission_id, kluster_id=kluster_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=exc.detail, error_code="forbidden")
             snapshot = resolve_effective_snapshot(session=session, mission_id=mission_id, kluster_id=kluster_id)
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "snapshot": {
                         "id": snapshot.id,
@@ -2305,16 +2303,16 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
         if tool == "download_skill_snapshot":
             snapshot_id = str(args.get("snapshot_id") or "")
             if not snapshot_id:
-                return MCPResponse(ok=False, error="snapshot_id is required")
+                return _mcp_error(request_id=request_id, error="snapshot_id is required")
             snapshot = session.get(SkillSnapshot, snapshot_id)
             if not snapshot:
-                return MCPResponse(ok=False, error="Skill snapshot not found")
+                return _mcp_error(request_id=request_id, error="Skill snapshot not found", error_code="not_found")
             try:
                 assert_mission_reader_or_admin(session=session, request=request, mission_id=snapshot.mission_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
-            return MCPResponse(
-                ok=True,
+                return _mcp_error(request_id=request_id, error=exc.detail, error_code="forbidden")
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "snapshot": {
                         "id": snapshot.id,
@@ -2331,13 +2329,13 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             kluster_id = str(args.get("kluster_id") or "")
             agent_id = str(args.get("agent_id") or header_agent_id or "")
             if not mission_id:
-                return MCPResponse(ok=False, error="mission_id is required")
+                return _mcp_error(request_id=request_id, error="mission_id is required")
             try:
                 assert_mission_reader_or_admin(session=session, request=request, mission_id=mission_id)
                 if kluster_id:
                     validate_kluster_scope(session=session, mission_id=mission_id, kluster_id=kluster_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=exc.detail, error_code="forbidden")
             actor = actor_subject
             state = get_sync_state(
                 session=session,
@@ -2347,8 +2345,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 agent_id=agent_id,
             )
             if state is None:
-                return MCPResponse(
-                    ok=True,
+                return _mcp_ok(
+                    request_id=request_id,
                     result={
                         "status": {
                             "mission_id": mission_id,
@@ -2365,8 +2363,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                         }
                     },
                 )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "status": {
                         "mission_id": state.mission_id,
@@ -2389,13 +2387,13 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             kluster_id = str(args.get("kluster_id") or "")
             agent_id = str(args.get("agent_id") or header_agent_id or "")
             if not mission_id:
-                return MCPResponse(ok=False, error="mission_id is required")
+                return _mcp_error(request_id=request_id, error="mission_id is required")
             try:
                 assert_mission_reader_or_admin(session=session, request=request, mission_id=mission_id)
                 if kluster_id:
                     validate_kluster_scope(session=session, mission_id=mission_id, kluster_id=kluster_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=exc.detail, error_code="forbidden")
             state = upsert_sync_state(
                 session=session,
                 actor_subject=actor_subject,
@@ -2409,8 +2407,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 drift_flag=bool(args.get("drift_flag") or False),
                 drift_details=args.get("drift_details") or {},
             )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "status": {
                         "mission_id": state.mission_id,
@@ -2434,13 +2432,13 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             agent_id = str(args.get("agent_id") or "")
             local_overlay_sha256 = str(args.get("local_overlay_sha256") or "")
             if not mission_id:
-                return MCPResponse(ok=False, error="mission_id is required")
+                return _mcp_error(request_id=request_id, error="mission_id is required")
             try:
                 assert_mission_reader_or_admin(session=session, request=request, mission_id=mission_id)
                 if kluster_id:
                     validate_kluster_scope(session=session, mission_id=mission_id, kluster_id=kluster_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=exc.detail, error_code="forbidden")
             existing_state = get_sync_state(
                 session=session,
                 actor_subject=actor_subject,
@@ -2461,8 +2459,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 drift_flag=False,
                 drift_details={"promoted": True, "note": str(args.get("note") or "")},
             )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "status": {
                         "mission_id": state.mission_id,
@@ -2524,12 +2522,11 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             ).first()
             if profile:
                 if expected_sha256 and (profile.sha256 or "") != expected_sha256:
-                    return MCPResponse(
-                        ok=False,
-                        error=f"profile_sha_mismatch [request_id={request_id}]",
+                    return _mcp_error(
+                        request_id=request_id,
+                        error="profile_sha_mismatch",
+                        error_code="profile_sha_mismatch",
                         result={
-                            "error_code": "profile_sha_mismatch",
-                            "request_id": request_id,
                             "expected_sha256": expected_sha256,
                             "current_sha256": profile.sha256 or "",
                             "name": name,
@@ -2584,12 +2581,11 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 return _mcp_error(request_id=request_id, error="Profile not found", error_code="not_found")
             current_sha = (profile.sha256 or "").strip()
             if if_sha256 and if_sha256 != current_sha:
-                return MCPResponse(
-                    ok=False,
-                    error=f"profile_sha_mismatch [request_id={request_id}]",
+                return _mcp_error(
+                    request_id=request_id,
+                    error="profile_sha_mismatch",
+                    error_code="profile_sha_mismatch",
                     result={
-                        "error_code": "profile_sha_mismatch",
-                        "request_id": request_id,
                         "expected_sha256": if_sha256,
                         "current_sha256": current_sha,
                         "name": name,
@@ -2669,12 +2665,11 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             remote_sha = (profile.sha256 or "").strip()
             matches = remote_sha == pinned_sha
             if not matches:
-                return MCPResponse(
-                    ok=False,
-                    error=f"profile_sha_mismatch [request_id={request_id}]",
+                return _mcp_error(
+                    request_id=request_id,
+                    error="profile_sha_mismatch",
+                    error_code="profile_sha_mismatch",
                     result={
-                        "error_code": "profile_sha_mismatch",
-                        "request_id": request_id,
                         "name": name,
                         "pinned_sha256": pinned_sha,
                         "remote_sha256": remote_sha,
