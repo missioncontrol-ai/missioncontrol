@@ -134,3 +134,6 @@ Current next build sequence:
 3. `MC-MCP-003`: publish REST vs MCP parity matrix and track remaining gaps (see [`docs/MCP-PARITY-MATRIX.md`](MCP-PARITY-MATRIX.md)).
 4. `MC-MCP-004`: close remaining create-flow parity gaps (`create_kluster` + critical creates) with E2E coverage.
 5. `MC-MCP-005`: standardize MCP response/error envelope and compatibility assertions before release gating.
+
+Open launch parity gap to close:
+- `MC-LAUNCH-CODEX-AUTH-001`: `mc launch claude` now supports working auth pass-through/profile seeding, but Codex launch/auth behavior is not yet equivalently standardized. Either align Codex to the same pass-through + profile-overlay model or enforce a shared MCP-standard launch/auth layer across both agents.
