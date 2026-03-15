@@ -4,7 +4,6 @@ sqlmodel
 pydantic
 python-multipart
 rapidfuzz
-chromadb
 numpy
 psycopg[binary]
 PyJWT[crypto]

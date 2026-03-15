@@ -31,4 +31,13 @@ else
   docker compose "${compose_args[@]}" down --remove-orphans
 fi
 docker compose "${compose_args[@]}" up -d --build --remove-orphans
+
+# Keep only the 3 most recent dev-tagged builds; prune the rest to prevent disk bloat.
+_old_dev_images=$(docker images --format "{{.Repository}}:{{.Tag}}" \
+  | grep -E "missioncontrol.*:dev-[0-9]" | sort -r | tail -n +4)
+if [[ -n "$_old_dev_images" ]]; then
+  echo "Pruning old dev images..."
+  echo "$_old_dev_images" | xargs docker rmi --force 2>/dev/null || true
+fi
+
 echo "MissionControl API: http://localhost:8008 (profile=${STACK_PROFILE})"

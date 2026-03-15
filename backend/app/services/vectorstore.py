@@ -3,8 +3,6 @@ import os
 from pathlib import Path
 from typing import List
 
-import chromadb
-from chromadb.config import Settings
 from sqlalchemy import text
 
 from app.db import DATABASE_URL, engine
@@ -26,6 +24,14 @@ _chroma_client = None
 def _get_chroma_collection(name: str):
     global _chroma_client
     if _chroma_client is None:
+        try:
+            import chromadb
+            from chromadb.config import Settings
+        except ImportError:
+            raise RuntimeError(
+                "chromadb is not installed. Install it with 'pip install chromadb' "
+                "or set VECTOR_STORE_BACKEND=pgvector to use PostgreSQL instead."
+            )
         _chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR), settings=Settings(allow_reset=False))
     return _chroma_client.get_or_create_collection(name=name)
 

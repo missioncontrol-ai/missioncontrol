@@ -18,8 +18,13 @@ RUN apt-get update \
     && useradd --uid 3000 --gid 3000 --create-home --shell /usr/sbin/nologin missioncontrol \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+ARG INSTALL_CHROMA=false
+COPY backend/requirements.txt backend/requirements-chroma.txt /app/
+RUN if [ "$INSTALL_CHROMA" = "true" ]; then \
+      pip install --no-cache-dir -r /app/requirements-chroma.txt; \
+    else \
+      pip install --no-cache-dir -r /app/requirements.txt; \
+    fi
 
 COPY backend /app
 COPY web /app/web
