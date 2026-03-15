@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Response
 from sqlmodel import select
 from app.db import get_session
-from app.models import Artifact, Kluster, Mission
+from app.models import Artifact, Kluster
 from app.schemas import ArtifactCreate, ArtifactRead, ArtifactUpdate
 from app.services.authz import (
     assert_mission_reader_or_admin,
@@ -15,8 +15,13 @@ from app.services.authz import (
     is_platform_admin,
     readable_mission_ids_for_request,
 )
-from app.services.git_publisher import GitPublishError, publish_artifact_record
-from app.services.git_ledger import enqueue_ledger_event, actor_subject_from_request, request_source
+from app.services.git_ledger import (
+    enqueue_ledger_event,
+    actor_subject_from_request,
+    publish_pending_ledger_events,
+    request_source,
+)
+from app.services.persistence_publish import PublishRoutingError
 from app.services.schema_pack import enforce_schema_pack
 from app.services.governance import extract_approval_context, require_policy_action
 from app.services.object_storage import (
@@ -285,45 +290,14 @@ def publish_artifact(artifact_id: int, request: Request):
             raise HTTPException(status_code=404, detail="Kluster not found")
         if kluster.mission_id:
             assert_mission_writer_or_admin(session=session, request=request, mission_id=kluster.mission_id)
-        mission = session.get(Mission, kluster.mission_id) if kluster.mission_id is not None else None
-
         artifact.status = "published"
         artifact.updated_at = datetime.now(timezone.utc)
         artifact.version += 1
 
-        try:
-            publish_result = publish_artifact_record(
-                artifact_id=artifact.id,
-                mission_id=kluster.mission_id,
-                mission_name=mission.name if mission else None,
-                kluster_id=artifact.kluster_id,
-                artifact_name=artifact.name,
-                artifact_uri=artifact.uri,
-                artifact_type=artifact.artifact_type,
-                status=artifact.status,
-                updated_at=artifact.updated_at,
-            )
-        except GitPublishError as exc:
-            raise HTTPException(status_code=502, detail=f"Git publish failed: {exc}") from exc
-
-        if publish_result:
-            artifact.provenance = json.dumps(
-                {
-                    "publisher": "git",
-                    "repo": publish_result["repo_url"],
-                    "branch": publish_result["branch"],
-                    "path": publish_result["path"],
-                    "commit": publish_result["commit_sha"],
-                    "artifact_key": publish_result.get("artifact_key", ""),
-                    "layout_version": publish_result.get("layout_version", "v1"),
-                },
-                separators=(",", ":"),
-            )
-
         session.add(artifact)
         session.commit()
         session.refresh(artifact)
-        enqueue_ledger_event(
+        event = enqueue_ledger_event(
             session=session,
             mission_id=kluster.mission_id,
             kluster_id=artifact.kluster_id,
@@ -335,6 +309,27 @@ def publish_artifact(artifact_id: int, request: Request):
             actor_subject=actor_subject_from_request(request),
             source=request_source(request),
         )
+        if kluster.mission_id:
+            try:
+                publish_result = publish_pending_ledger_events(
+                    session=session,
+                    mission_id=kluster.mission_id,
+                    actor_subject=actor_subject_from_request(request),
+                )
+                artifact.provenance = json.dumps(
+                    {
+                        "publisher": "git",
+                        "repo": publish_result.get("repo_url", ""),
+                        "branch": publish_result.get("branch", ""),
+                        "path": event.git_path,
+                        "commit": event.git_commit,
+                    },
+                    separators=(",", ":"),
+                )
+                session.add(artifact)
+                session.commit()
+            except PublishRoutingError as exc:
+                raise HTTPException(status_code=502, detail=f"Publish route failed: {exc}") from exc
         session.refresh(artifact)
         return artifact
 

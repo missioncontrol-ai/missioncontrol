@@ -23,6 +23,7 @@ from app.models import (
     TaskAssignment,
     SkillSnapshot,
     UserProfile,
+    RepoBinding,
 )
 from app.schemas import MCPCall, MCPResponse, MCPTool
 from app.services.authz import (
@@ -45,7 +46,11 @@ from app.services.git_ledger import (
     actor_subject_from_request,
     request_source,
 )
-from app.services.git_publisher import GitPublishError
+from app.services.persistence_publish import (
+    PublishRoutingError,
+    get_publication_status,
+    resolve_publish_plan,
+)
 from app.services.schema_pack import enforce_schema_pack
 from app.services.ids import new_hash_id
 from app.services.task_identity import ensure_task_public_id, resolve_task_by_ref
@@ -277,6 +282,36 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "mission_id": {"type": "string"},
+            },
+        },
+    ),
+    MCPTool(
+        name="list_repo_bindings",
+        description="List configured repository bindings for current principal",
+        input_schema={"type": "object", "properties": {}},
+    ),
+    MCPTool(
+        name="resolve_publish_plan",
+        description="Resolve publish route (binding/repo/branch/path) for an entity",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "mission_id": {"type": "string"},
+                "entity_kind": {"type": "string"},
+                "event_kind": {"type": "string"},
+                "entity_id": {"type": "string"},
+            },
+            "required": ["mission_id", "entity_kind", "event_kind", "entity_id"],
+        },
+    ),
+    MCPTool(
+        name="get_publication_status",
+        description="List recent publication records",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "mission_id": {"type": "string"},
+                "limit": {"type": "integer"},
             },
         },
     ),
@@ -1569,8 +1604,78 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     actor_subject=actor_subject,
                 )
                 return _mcp_ok(request_id=request_id, result=result)
-            except GitPublishError as exc:
+            except PublishRoutingError as exc:
                 return _mcp_error(request_id=request_id, error=str(exc), error_code="ledger_publish_failed")
+
+        if tool == "list_repo_bindings":
+            bindings = session.exec(
+                select(RepoBinding)
+                .where(RepoBinding.owner_subject == actor_subject)
+                .where(RepoBinding.active == True)  # noqa: E712
+                .order_by(RepoBinding.updated_at.desc())
+            ).all()
+            return _mcp_ok(request_id=request_id, result={"bindings": [model_to_dict(b) for b in bindings]})
+
+        if tool == "resolve_publish_plan":
+            mission_id = str(args.get("mission_id") or "").strip()
+            entity_kind = str(args.get("entity_kind") or "").strip()
+            event_kind = str(args.get("event_kind") or "").strip()
+            entity_id = str(args.get("entity_id") or "").strip()
+            if not mission_id or not entity_kind or not event_kind or not entity_id:
+                return _mcp_error(
+                    request_id=request_id,
+                    error="mission_id, entity_kind, event_kind, entity_id are required",
+                    error_code="invalid_input",
+                )
+            try:
+                assert_mission_reader_or_admin(session=session, request=request, mission_id=mission_id)
+            except HTTPException as exc:
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
+            try:
+                plan = resolve_publish_plan(
+                    session=session,
+                    owner_subject=actor_subject,
+                    mission_id=mission_id,
+                    entity_kind=entity_kind,
+                    event_kind=event_kind,
+                    entity_id=entity_id,
+                )
+            except PublishRoutingError as exc:
+                return _mcp_error(request_id=request_id, error=str(exc), error_code="publish_route_unavailable")
+            return _mcp_ok(
+                request_id=request_id,
+                result={
+                    "mission_id": mission_id,
+                    "entity_kind": entity_kind,
+                    "event_kind": event_kind,
+                    "entity_id": entity_id,
+                    "binding_id": plan.binding.id,
+                    "binding_name": plan.binding.name,
+                    "connection_id": plan.connection.id,
+                    "provider": plan.connection.provider,
+                    "repo": f"{plan.connection.host}/{plan.connection.repo_path}",
+                    "branch": plan.branch,
+                    "path": plan.rel_path,
+                    "format": plan.format,
+                },
+            )
+
+        if tool == "get_publication_status":
+            mission_id_raw = args.get("mission_id")
+            mission_id = str(mission_id_raw) if mission_id_raw is not None else None
+            if mission_id:
+                try:
+                    assert_mission_reader_or_admin(session=session, request=request, mission_id=mission_id)
+                except HTTPException as exc:
+                    return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
+            limit = int(args.get("limit") or 20)
+            records = get_publication_status(
+                session=session,
+                owner_subject=actor_subject,
+                mission_id=mission_id,
+                limit=limit,
+            )
+            return _mcp_ok(request_id=request_id, result={"records": [model_to_dict(r) for r in records]})
 
         if tool == "get_entity_history":
             mission_id_raw = args.get("mission_id")

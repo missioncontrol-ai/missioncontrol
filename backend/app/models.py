@@ -184,6 +184,79 @@ class LedgerEvent(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class RepoConnection(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("owner_subject", "name", name="uq_repo_connection_owner_name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    name: str = Field(index=True)
+    provider: str = Field(index=True)  # github_app|ssh|https_token
+    host: str = Field(default="github.com", index=True)
+    repo_path: str = Field(default="")  # owner/repo
+    default_branch: str = Field(default="main")
+    credential_ref: str = Field(default="")
+    options_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RepoBinding(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("owner_subject", "name", name="uq_repo_binding_owner_name"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    name: str = Field(index=True)
+    connection_id: int = Field(index=True)
+    branch_override: str = Field(default="")
+    base_path: str = Field(default="missions")
+    active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class MissionPersistencePolicy(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("mission_id", name="uq_mission_persistence_policy_mission"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    mission_id: str = Field(index=True)
+    default_binding_id: Optional[int] = Field(default=None, index=True)
+    fallback_mode: str = Field(default="fail_closed", index=True)
+    require_approval: bool = Field(default=False, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class MissionPersistenceRoute(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    mission_id: str = Field(index=True)
+    entity_kind: str = Field(index=True)  # artifact|doc|mission_snapshot
+    event_kind: str = Field(default="", index=True)
+    binding_id: int = Field(index=True)
+    branch_override: str = Field(default="")
+    path_template: str = Field(default="missions/{mission_id}/{entity_kind}/{entity_id}.json")
+    format: str = Field(default="json_v1")
+    active: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class PublicationRecord(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    mission_id: Optional[str] = Field(default=None, index=True)
+    ledger_event_id: Optional[int] = Field(default=None, index=True)
+    entity_kind: str = Field(index=True)
+    entity_id: str = Field(index=True)
+    event_kind: str = Field(index=True)
+    binding_id: int = Field(index=True)
+    repo_url: str = Field(default="")
+    branch: str = Field(default="")
+    file_path: str = Field(default="")
+    commit_sha: str = Field(default="", index=True)
+    status: str = Field(default="succeeded", index=True)  # planned|succeeded|failed
+    error: str = Field(default="")
+    detail_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class MissionRoleMembership(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     mission_id: str = Field(index=True)

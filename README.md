@@ -322,24 +322,22 @@ curl -X POST http://localhost:8008/ingest/github -H "Content-Type: application/j
 curl http://localhost:8008/ingest/jobs?cluster_id=abc123def456
 ```
 
-## Git Publisher (Optional)
+## Mission-Scoped Git Persistence
 
-`POST /artifacts/{id}/publish` always marks the artifact as `published` in Postgres.
+`POST /artifacts/{id}/publish` marks artifacts as `published`, enqueues ledger provenance,
+and executes mission-routed Git publication.
 
-If `GIT_PUBLISH_ENABLED=true`, the publish endpoint also writes an artifact record JSON
-to a Git repository and pushes it to the configured branch. On success, artifact
-`provenance` is populated with repo/branch/path/commit metadata.
+Publication is now policy-routed (not global env routed):
+- Configure repository targets via `/persistence/connections` and `/persistence/bindings`.
+- Configure mission routing via `/persistence/missions/{mission_id}/policy`.
+- Resolve targets before publish with MCP `resolve_publish_plan`.
+- Execute mission publish with MCP `publish_pending_ledger_events`.
+- Inspect results with MCP `get_publication_status`.
 
-Ledger workflow:
-- Create actions (mission/cluster/task) attempt immediate bootstrap Git commit to initialize location with pending metadata.
-- Non-create mutations are recorded as pending ledger events in DB (explicit publish flow).
-- Use MCP `publish_pending_ledger_events` (mission-scoped) to persist pending events to Git.
-- Use MCP `list_pending_ledger_events` and `get_entity_history` for pre-publish visibility.
-
-Artifact layout defaults:
-- `GIT_PUBLISH_LAYOUT_VERSION=v2`
-- `GIT_PUBLISH_BASE_PATH=artifacts`
-- v2 uses hash-bucketed key+slug paths with mission folder format `{mission_slug}-{mission_hash}`.
+Core model:
+- Postgres is coordination source-of-truth.
+- S3-compatible storage keeps active artifact/document bytes.
+- Git is explicit projection/memory-of-record with commit provenance in `publication_records`.
 
 ## Search Examples
 

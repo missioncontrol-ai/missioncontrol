@@ -1,18 +1,25 @@
-# Architecture 
+# Architecture
 
-## Core Services
-- **Knowledge Service**: clusters, docs, artifacts with publish/draft status.
-- **Task Service**: tasks, epics, dependencies, overlap suggestions.
-- **Overlap Detection**: fuzzy similarity over task text with evidence.
-- **Agent Gateway**: MCP-style tool registry and call endpoint.
+## Core Runtime
+- **Postgres (+ pgvector)**: authoritative coordination state (missions, klusters, tasks, approvals, profiles, ledger).
+- **S3-compatible object storage**: active artifact/document bytes and workspace file persistence.
+- **Git publication layer**: explicit memory-of-record projection for routable entities.
+- **MCP/API control plane**: policy-gated tool execution, publish planning, and audited mutations.
 
-## Data Flow
-1. Human creates tasks in the UI.
-2. Task creation triggers overlap suggestions (top 5 matches).
-3. Agents can call MCP tools to search, read, and create tasks.
-4. All activity is stored in SQLite with audit-ready timestamps.
+## Persistence Model
+- **Coordination truth stays in MissionControl (Postgres)**.
+- **Git is a projection sink**, never the authority for mission ownership, approvals, or governance.
+- **Mission-scoped routing** controls where publication events land:
+  - `repo_connections`
+  - `repo_bindings`
+  - `mission_persistence_policies`
+  - `mission_persistence_routes`
+  - `publication_records`
 
-## Extension Points
-- Replace overlap scoring with embedding-based retrieval.
-- Add graph DB for entity relationships.
-- Move storage to Postgres + S3 for production.
+## Publish Flow
+1. Mutation enters ledger (`pending`) in Postgres.
+2. Approval/policy checks run in MissionControl.
+3. Route resolver picks binding/repo/branch/path from mission policy.
+4. Provider adapter acquires server-side credential.
+5. Publisher writes canonical file(s) to Git and records commit provenance.
+6. Ledger/publication records are marked and queryable via API/MCP.

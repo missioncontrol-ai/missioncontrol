@@ -52,6 +52,7 @@ from app.routers import (
     evolve,
     ai,
     scheduled_jobs,
+    persistence,
 )
 
 app = FastAPI(
@@ -546,6 +547,7 @@ app.include_router(profiles.router)
 app.include_router(evolve.router)
 app.include_router(ai.router)
 app.include_router(scheduled_jobs.router)
+app.include_router(persistence.router)
 app.include_router(auth_sessions.router)
 app.include_router(oidc_web.router)
 
