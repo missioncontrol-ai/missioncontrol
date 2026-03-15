@@ -472,26 +472,19 @@ async fn handle_sync(command: SyncCommand, client: MissionControlClient) -> Resu
 async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -> Result<()> {
     match command {
         ProfileCommand::List { limit } => {
-            let path = format!("/me/profiles?limit={}", limit);
-            let response = client.get_json(&path).await?;
-            print_json(&response);
+            let response = mcp_profile_call(&client, "list_profiles", json!({ "limit": limit })).await?;
+            print_json(&response.get("profiles").cloned().unwrap_or_else(|| json!([])));
         }
         ProfileCommand::Show { name } => {
-            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
-            let path = format!("/me/profiles/{}", encoded);
-            let response = client.get_json(&path).await?;
-            print_json(&response);
+            let response = mcp_profile_call(&client, "get_profile", json!({ "name": name })).await?;
+            print_json(&response.get("profile").cloned().unwrap_or(Value::Null));
         }
         ProfileCommand::Activate { name } => {
-            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
-            let path = format!("/me/profiles/{}/activate", encoded);
-            let response = client.post_json(&path, &json!({})).await?;
-            print_json(&response);
+            let response = mcp_profile_call(&client, "activate_profile", json!({ "name": name })).await?;
+            print_json(&response.get("profile").cloned().unwrap_or(Value::Null));
         }
         ProfileCommand::Download { name, out } => {
-            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
-            let path = format!("/me/profiles/{}/download", encoded);
-            let response = client.get_json(&path).await?;
+            let response = mcp_profile_call(&client, "download_profile", json!({ "name": name })).await?;
             let tarball = response
                 .get("tarball_b64")
                 .and_then(|v| v.as_str())
@@ -537,26 +530,33 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
                 json!([])
             };
             let manifest = if manifest.is_array() { manifest } else { json!([manifest]) };
-            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
-            let path = format!("/me/profiles/{}", encoded);
-            let body = json!({
+            let response = mcp_profile_call(
+                &client,
+                "publish_profile",
+                json!({
                 "name": name,
                 "description": description.unwrap_or_default(),
                 "is_default": activate,
                 "manifest": manifest,
                 "tarball_b64": tarball_b64
-            });
-            let response = client.put_json(&path, &body).await?;
-            print_json(&response);
+                }),
+            )
+            .await?;
+            print_json(&response.get("profile").cloned().unwrap_or(Value::Null));
         }
         ProfileCommand::Pull {
             name,
             apply,
             allow_pin_mismatch,
         } => {
-            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
-            let path = format!("/me/profiles/{}/download", encoded);
-            let response = client.get_json(&path).await?;
+            let profile_root = crate::config::mc_home_dir().join("profiles").join(&name);
+            let mut pull_args = json!({ "name": name });
+            if let Some(pinned_sha) = read_local_pinned_sha(&profile_root)? {
+                if !allow_pin_mismatch {
+                    pull_args["if_sha256"] = json!(pinned_sha);
+                }
+            }
+            let response = mcp_profile_call(&client, "download_profile", pull_args).await?;
             let tarball = response
                 .get("tarball_b64")
                 .and_then(|v| v.as_str())
@@ -565,10 +565,10 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
                 .decode(tarball)
                 .context("tarball_b64 is not valid base64")?;
             let sha = response
-                .get("sha256")
+                .get("profile")
+                .and_then(|v| v.get("sha256"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            let profile_root = crate::config::mc_home_dir().join("profiles").join(&name);
             if let Some(pinned_sha) = read_local_pinned_sha(&profile_root)? {
                 if pinned_sha != sha && !allow_pin_mismatch {
                     anyhow::bail!(
@@ -626,10 +626,12 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
             print_json(&json!({"ok": true, "profile": name, "pinned_sha256": sha256}));
         }
         ProfileCommand::Status { name } => {
-            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
-            let path = format!("/me/profiles/{}", encoded);
-            let remote = client.get_json(&path).await?;
-            let remote_sha = remote.get("sha256").cloned().unwrap_or(Value::Null);
+            let remote = mcp_profile_call(&client, "get_profile", json!({ "name": name })).await?;
+            let remote_sha = remote
+                .get("profile")
+                .and_then(|v| v.get("sha256"))
+                .cloned()
+                .unwrap_or(Value::Null);
             let profile_root = crate::config::mc_home_dir().join("profiles").join(&name);
             let local_pin_path = profile_root.join("pin.json");
             let local_state_path = profile_root.join("state.json");
@@ -643,15 +645,46 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient) -
             } else {
                 Value::Null
             };
+            let pin_check = if let Some(pinned) = local_pin
+                .get("pinned_sha256")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+            {
+                mcp_profile_call(
+                    &client,
+                    "pin_profile_version",
+                    json!({ "name": name, "sha256": pinned }),
+                )
+                .await
+                .unwrap_or_else(|_| json!({"matches": false}))
+            } else {
+                Value::Null
+            };
             print_json(&json!({
                 "profile": name,
                 "remote_sha256": remote_sha,
                 "local_pin": local_pin,
-                "local_state": local_state
+                "local_state": local_state,
+                "pin_check": pin_check
             }));
         }
     }
     Ok(())
+}
+
+async fn mcp_profile_call(client: &MissionControlClient, tool: &str, args: Value) -> Result<Value> {
+    let response = client
+        .post_json("/mcp/call", &json!({ "tool": tool, "args": args }))
+        .await?;
+    let ok = response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !ok {
+        let err = response
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("mcp profile tool failed");
+        anyhow::bail!("{}", err);
+    }
+    Ok(response.get("result").cloned().unwrap_or_else(|| json!({})))
 }
 
 fn build_tar_from_dir(dir: &PathBuf) -> Result<Vec<u8>> {
