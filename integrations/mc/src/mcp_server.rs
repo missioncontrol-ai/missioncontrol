@@ -30,6 +30,12 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
+#[derive(Copy, Clone, Debug)]
+enum MessageFormat {
+    ContentLength,
+    JsonLine,
+}
+
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
@@ -103,8 +109,8 @@ pub async fn run(args: &ServeMcpArgs, client: &MissionControlClient) -> Result<(
 
     loop {
         // 1. Read either JSONL body or Content-Length framed body.
-        let raw = match read_next_message(&mut reader).await {
-            Ok(Some(body)) => body,
+        let (raw, format) = match read_next_message(&mut reader).await {
+            Ok(Some(msg)) => msg,
             Ok(None) => break, // EOF — host closed the pipe
             Err(e) => {
                 tracing::warn!("mcp_server: failed to read message: {}", e);
@@ -131,8 +137,16 @@ pub async fn run(args: &ServeMcpArgs, client: &MissionControlClient) -> Result<(
             if debug {
                 eprintln!("mc serve --> {}", serialized);
             }
-            let framed = format!("Content-Length: {}\r\n\r\n{}", serialized.len(), serialized);
-            stdout.write_all(framed.as_bytes()).await?;
+            match format {
+                MessageFormat::ContentLength => {
+                    let framed = format!("Content-Length: {}\r\n\r\n{}", serialized.len(), serialized);
+                    stdout.write_all(framed.as_bytes()).await?;
+                }
+                MessageFormat::JsonLine => {
+                    stdout.write_all(serialized.as_bytes()).await?;
+                    stdout.write_all(b"\n").await?;
+                }
+            }
             stdout.flush().await?;
         }
     }
@@ -293,7 +307,7 @@ async fn fetch_tools(
 /// - newline-delimited JSON messages (JSONL style)
 async fn read_next_message(
     reader: &mut BufReader<tokio::io::Stdin>,
-) -> Result<Option<String>> {
+) -> Result<Option<(String, MessageFormat)>> {
     let first = loop {
         let mut first_line = String::new();
         let n = reader.read_line(&mut first_line).await?;
@@ -308,14 +322,17 @@ async fn read_next_message(
     };
 
     if first.starts_with('{') {
-        return Ok(Some(first));
+        return Ok(Some((first, MessageFormat::JsonLine)));
     }
 
     // Otherwise treat as Content-Length header block.
     let content_length = read_content_length_with_first_line(reader, first).await?;
     let mut body = vec![0u8; content_length];
     reader.read_exact(&mut body).await.context("read body")?;
-    Ok(Some(String::from_utf8_lossy(&body).to_string()))
+    Ok(Some((
+        String::from_utf8_lossy(&body).to_string(),
+        MessageFormat::ContentLength,
+    )))
 }
 
 async fn read_content_length_with_first_line(
