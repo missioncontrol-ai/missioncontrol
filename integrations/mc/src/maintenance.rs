@@ -26,6 +26,18 @@ pub struct DoctorArgs {
     pub matrix_sample_seconds: u64,
     #[arg(long)]
     pub repair: bool,
+    /// Also cleanup local profile/session artifacts after checks.
+    #[arg(long, default_value_t = false)]
+    pub cleanup: bool,
+    /// When --cleanup is set, keep at most this many runtime instance dirs.
+    #[arg(long, default_value_t = 8)]
+    pub cleanup_keep_instances: usize,
+    /// When --cleanup is set, keep at most this many bundle tar files per profile.
+    #[arg(long, default_value_t = 6)]
+    pub cleanup_keep_bundles: usize,
+    /// When --cleanup is set, remove instance dirs older than this many days.
+    #[arg(long, default_value_t = 7)]
+    pub cleanup_max_age_days: u64,
 }
 
 #[derive(Args, Debug)]
@@ -47,6 +59,16 @@ pub struct ProfileGcArgs {
     /// Remove instance dirs older than this many days regardless of count.
     #[arg(long, default_value_t = 14)]
     pub max_age_days: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ProfileGcSummary {
+    root: String,
+    removed_instances: Vec<String>,
+    removed_bundles: Vec<String>,
+    keep_instances: usize,
+    keep_bundles: usize,
+    max_age_days: u64,
 }
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -80,6 +102,26 @@ pub async fn run(
 }
 
 fn run_profile_gc(config: &McConfig, args: ProfileGcArgs) -> Result<()> {
+    let summary = perform_profile_gc(args)?;
+    print_json(&json!({
+        "ok": true,
+        "root": summary.root,
+        "removed_instances": summary.removed_instances,
+        "removed_bundles": summary.removed_bundles,
+        "keep_instances": summary.keep_instances,
+        "keep_bundles": summary.keep_bundles,
+        "max_age_days": summary.max_age_days
+    }));
+    crate::mc_ok!(
+        "profile-gc complete: removed {} instance dirs and {} bundle files",
+        summary.removed_instances.len(),
+        summary.removed_bundles.len()
+    );
+    let _ = config;
+    Ok(())
+}
+
+fn perform_profile_gc(args: ProfileGcArgs) -> Result<ProfileGcSummary> {
     let root = crate::config::mc_home_dir();
     let mut removed_instances = Vec::<String>::new();
     let mut removed_bundles = Vec::<String>::new();
@@ -142,22 +184,14 @@ fn run_profile_gc(config: &McConfig, args: ProfileGcArgs) -> Result<()> {
         }
     }
 
-    print_json(&json!({
-        "ok": true,
-        "root": root.display().to_string(),
-        "removed_instances": removed_instances,
-        "removed_bundles": removed_bundles,
-        "keep_instances": args.keep_instances,
-        "keep_bundles": args.keep_bundles,
-        "max_age_days": args.max_age_days
-    }));
-    crate::mc_ok!(
-        "profile-gc complete: removed {} instance dirs and {} bundle files",
-        removed_instances.len(),
-        removed_bundles.len()
-    );
-    let _ = config;
-    Ok(())
+    Ok(ProfileGcSummary {
+        root: root.display().to_string(),
+        removed_instances,
+        removed_bundles,
+        keep_instances: args.keep_instances,
+        keep_bundles: args.keep_bundles,
+        max_age_days: args.max_age_days,
+    })
 }
 
 async fn run_doctor(
@@ -180,12 +214,28 @@ async fn run_doctor(
     } else {
         Vec::new()
     };
+    let cleanup = if args.cleanup {
+        let gc = perform_profile_gc(ProfileGcArgs {
+            keep_instances: args.cleanup_keep_instances,
+            keep_bundles: args.cleanup_keep_bundles,
+            max_age_days: args.cleanup_max_age_days,
+        })?;
+        crate::mc_ok!(
+            "doctor cleanup complete: removed {} instance dirs and {} bundle files",
+            gc.removed_instances.len(),
+            gc.removed_bundles.len()
+        );
+        Some(gc)
+    } else {
+        None
+    };
     let report = DoctorReport {
         base_url: config.base_url.to_string(),
         agent_id: config.agent_context.agent_id.clone(),
         matrix_endpoint: args.matrix_endpoint.clone(),
         checks,
         repairs,
+        cleanup,
     };
     println!(
         "Doctor report ({} checks, {} repairs)",
@@ -385,6 +435,7 @@ struct DoctorReport {
     matrix_endpoint: String,
     checks: Vec<DoctorCheck>,
     repairs: Vec<DoctorRepair>,
+    cleanup: Option<ProfileGcSummary>,
 }
 
 #[derive(serde::Serialize)]
