@@ -139,7 +139,9 @@ class WorkspaceMcpTests(unittest.TestCase):
             Response(),
         )
         self.assertFalse(conflicted.ok)
-        self.assertEqual(conflicted.error, "workspace_conflicts_detected")
+        self.assertIn("workspace_conflicts_detected", conflicted.error or "")
+        self.assertEqual((conflicted.result or {}).get("error_code"), "workspace_conflicts_detected")
+        self.assertTrue((conflicted.result or {}).get("request_id"))
         self.assertTrue(conflicted.result["conflicts"])
 
         readonly = call_tool(
@@ -154,7 +156,9 @@ class WorkspaceMcpTests(unittest.TestCase):
             Response(),
         )
         self.assertFalse(readonly.ok)
-        self.assertEqual(readonly.error, "workspace_conflicts_detected")
+        self.assertIn("workspace_conflicts_detected", readonly.error or "")
+        self.assertEqual((readonly.result or {}).get("error_code"), "workspace_conflicts_detected")
+        self.assertTrue((readonly.result or {}).get("request_id"))
         self.assertEqual(readonly.result["conflicts"][0]["reason"], "readonly_snapshot")
 
     def test_fetch_workspace_artifact_download_url(self):

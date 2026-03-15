@@ -993,20 +993,20 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     operation="create",
                 )
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=str(exc.detail))
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="schema_validation_failed")
             for key in ("storage_backend", "content_sha256", "size_bytes", "mime_type"):
                 payload_data[key] = raw_payload.get(key)
             if payload_data["uri"].startswith("s3://") and not args.get("storage_backend"):
                 payload_data["storage_backend"] = "s3"
             kluster = session.get(Kluster, payload_data["kluster_id"])
             if not kluster:
-                return MCPResponse(ok=False, error="Kluster not found")
+                return _mcp_error(request_id=request_id, error="Kluster not found", error_code="not_found")
             if not kluster.mission_id:
-                return MCPResponse(ok=False, error="Kluster is not linked to a mission")
+                return _mcp_error(request_id=request_id, error="Kluster is not linked to a mission", error_code="forbidden")
             try:
                 assert_mission_writer_or_admin(session=session, request=request, mission_id=kluster.mission_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             artifact = Artifact(**payload_data)
             if object_storage_enabled() and artifact.uri and not artifact.uri.startswith("s3://"):
                 safe_name = (artifact.name or "artifact").strip().lower().replace(" ", "-")[:48] or "artifact"
@@ -1047,8 +1047,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 actor_subject=actor_subject,
                 source=source,
             )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result=_mutation_result_with_ledger(
                     session=session,
                     mission_id=kluster.mission_id,
@@ -1060,20 +1060,24 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
         if tool == "get_artifact_download_url":
             artifact_id = int(args.get("artifact_id") or 0)
             if artifact_id <= 0:
-                return MCPResponse(ok=False, error="artifact_id is required")
+                return _mcp_error(request_id=request_id, error="artifact_id is required")
             expires_seconds = int(args.get("expires_seconds") or 60)
             artifact = session.get(Artifact, artifact_id)
             if not artifact:
-                return MCPResponse(ok=False, error="Artifact not found")
+                return _mcp_error(request_id=request_id, error="Artifact not found", error_code="not_found")
             kluster = session.get(Kluster, artifact.kluster_id)
             if not kluster or not kluster.mission_id:
-                return MCPResponse(ok=False, error="Artifact is not linked to a mission")
+                return _mcp_error(request_id=request_id, error="Artifact is not linked to a mission", error_code="forbidden")
             try:
                 assert_mission_reader_or_admin(session=session, request=request, mission_id=kluster.mission_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             if artifact.storage_backend != "s3" or not artifact.uri.startswith("s3://"):
-                return MCPResponse(ok=False, error="Artifact does not have retrievable S3-backed content")
+                return _mcp_error(
+                    request_id=request_id,
+                    error="Artifact does not have retrievable S3-backed content",
+                    error_code="invalid_request",
+                )
             try:
                 expected = scoped_prefix(mission_id=kluster.mission_id, kluster_id=artifact.kluster_id)
                 download_url = presign_get_uri(
@@ -1082,16 +1086,15 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     expected_prefix=expected,
                 )
             except Exception as exc:
-                return MCPResponse(ok=False, error=f"S3 presign failed: {exc}")
+                return _mcp_error(request_id=request_id, error=f"S3 presign failed: {exc}", error_code="storage_error")
             ttl = max(1, min(expires_seconds, 3600))
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "artifact_id": artifact.id,
                     "uri": artifact.uri,
                     "expires_seconds": ttl,
                     "download_url": download_url,
-                    "request_id": request_id,
                 },
             )
 
@@ -1101,16 +1104,16 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 return gated
             kluster_id = str(args.get("kluster_id") or "")
             if not kluster_id:
-                return MCPResponse(ok=False, error="kluster_id is required")
+                return _mcp_error(request_id=request_id, error="kluster_id is required")
             kluster = session.get(Kluster, kluster_id)
             if not kluster:
-                return MCPResponse(ok=False, error="Kluster not found")
+                return _mcp_error(request_id=request_id, error="Kluster not found", error_code="not_found")
             if not kluster.mission_id:
-                return MCPResponse(ok=False, error="Kluster is not linked to a mission")
+                return _mcp_error(request_id=request_id, error="Kluster is not linked to a mission", error_code="forbidden")
             try:
                 assert_mission_reader_or_admin(session=session, request=request, mission_id=kluster.mission_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             lease_seconds = int(args.get("lease_seconds") or 900)
             workspace_label = str(args.get("workspace_label") or header_runtime_session_id or "")
             agent_id = str(args.get("agent_id") or header_agent_id or "")
@@ -1123,8 +1126,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 workspace_label=workspace_label,
                 lease_seconds=lease_seconds,
             )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "lease": {
                         "id": lease.id,
@@ -1139,7 +1142,6 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                         "expires_at": lease.expires_at,
                     },
                     "workspace_snapshot": snapshot,
-                    "request_id": request_id,
                 },
             )
 
@@ -1149,18 +1151,18 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 return gated
             lease_id = str(args.get("lease_id") or "")
             if not lease_id:
-                return MCPResponse(ok=False, error="lease_id is required")
+                return _mcp_error(request_id=request_id, error="lease_id is required")
             lease = get_lease(session, lease_id)
             if not lease:
-                return MCPResponse(ok=False, error="Workspace lease not found")
+                return _mcp_error(request_id=request_id, error="Workspace lease not found", error_code="not_found")
             try:
                 assert_lease_owner_or_admin(lease, actor_subject, is_admin=is_platform_admin(request))
                 assert_mission_reader_or_admin(session=session, request=request, mission_id=lease.mission_id)
                 lease = heartbeat_workspace_lease(session=session, lease=lease)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
-            return MCPResponse(
-                ok=True,
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "lease": {
                         "id": lease.id,
@@ -1168,7 +1170,6 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                         "last_heartbeat_at": lease.last_heartbeat_at,
                         "expires_at": lease.expires_at,
                     },
-                    "request_id": request_id,
                 },
             )
 
@@ -1180,41 +1181,44 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             artifact_id = int(args.get("artifact_id") or 0)
             mode = str(args.get("mode") or "download_url").strip().lower()
             if not lease_id:
-                return MCPResponse(ok=False, error="lease_id is required")
+                return _mcp_error(request_id=request_id, error="lease_id is required")
             if artifact_id <= 0:
-                return MCPResponse(ok=False, error="artifact_id is required")
+                return _mcp_error(request_id=request_id, error="artifact_id is required")
             lease = get_lease(session, lease_id)
             if not lease:
-                return MCPResponse(ok=False, error="Workspace lease not found")
+                return _mcp_error(request_id=request_id, error="Workspace lease not found", error_code="not_found")
             try:
                 assert_lease_owner_or_admin(lease, actor_subject, is_admin=is_platform_admin(request))
                 assert_mission_reader_or_admin(session=session, request=request, mission_id=lease.mission_id)
                 if lease.status != "active":
                     raise HTTPException(status_code=409, detail="Workspace lease is not active")
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             artifact = session.get(Artifact, artifact_id)
             if not artifact:
-                return MCPResponse(ok=False, error="Artifact not found")
+                return _mcp_error(request_id=request_id, error="Artifact not found", error_code="not_found")
             if artifact.kluster_id != lease.kluster_id:
-                return MCPResponse(ok=False, error="Artifact is outside lease kluster scope")
+                return _mcp_error(request_id=request_id, error="Artifact is outside lease kluster scope", error_code="forbidden")
             if artifact.storage_backend != "s3" or not artifact.uri.startswith("s3://"):
-                return MCPResponse(ok=False, error="Artifact is not S3-backed and cannot be lazily fetched")
+                return _mcp_error(
+                    request_id=request_id,
+                    error="Artifact is not S3-backed and cannot be lazily fetched",
+                    error_code="invalid_request",
+                )
             expected = scoped_prefix(mission_id=lease.mission_id, kluster_id=lease.kluster_id)
             if mode == "content":
                 try:
                     body, content_type = get_bytes_from_uri(artifact.uri, expected_prefix=expected)
                 except Exception as exc:
-                    return MCPResponse(ok=False, error=f"S3 fetch failed: {exc}")
-                return MCPResponse(
-                    ok=True,
+                    return _mcp_error(request_id=request_id, error=f"S3 fetch failed: {exc}", error_code="storage_error")
+                return _mcp_ok(
+                    request_id=request_id,
                     result={
                         "artifact_id": artifact.id,
                         "mode": "content",
                         "mime_type": content_type,
                         "size_bytes": len(body),
                         "content_b64": base64.b64encode(body).decode("ascii"),
-                        "request_id": request_id,
                     },
                 )
             expires_seconds = int(args.get("expires_seconds") or 60)
@@ -1225,17 +1229,16 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     expected_prefix=expected,
                 )
             except Exception as exc:
-                return MCPResponse(ok=False, error=f"S3 presign failed: {exc}")
+                return _mcp_error(request_id=request_id, error=f"S3 presign failed: {exc}", error_code="storage_error")
             ttl = max(1, min(expires_seconds, 3600))
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "artifact_id": artifact.id,
                     "mode": "download_url",
                     "uri": artifact.uri,
                     "expires_seconds": ttl,
                     "download_url": download_url,
-                    "request_id": request_id,
                 },
             )
 
@@ -1245,18 +1248,18 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 return gated
             lease_id = str(args.get("lease_id") or "")
             if not lease_id:
-                return MCPResponse(ok=False, error="lease_id is required")
+                return _mcp_error(request_id=request_id, error="lease_id is required")
             changes = args.get("change_set")
             if not isinstance(changes, list) or not changes:
-                return MCPResponse(ok=False, error="change_set must be a non-empty array")
+                return _mcp_error(request_id=request_id, error="change_set must be a non-empty array")
             lease = get_lease(session, lease_id)
             if not lease:
-                return MCPResponse(ok=False, error="Workspace lease not found")
+                return _mcp_error(request_id=request_id, error="Workspace lease not found", error_code="not_found")
             try:
                 assert_lease_owner_or_admin(lease, actor_subject, is_admin=is_platform_admin(request))
                 assert_mission_writer_or_admin(session=session, request=request, mission_id=lease.mission_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             try:
                 result = commit_workspace_changes(
                     session=session,
@@ -1267,15 +1270,16 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     source=source,
                 )
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="conflict")
             if not result.get("ok"):
-                return MCPResponse(
-                    ok=False,
+                return _mcp_error(
+                    request_id=request_id,
                     error="workspace_conflicts_detected",
-                    result={"conflicts": result.get("conflicts", []), "request_id": request_id},
+                    error_code="workspace_conflicts_detected",
+                    result={"conflicts": result.get("conflicts", [])},
                 )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result=_mutation_result_with_ledger(
                     session=session,
                     mission_id=lease.mission_id,
@@ -1283,7 +1287,6 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                         "applied_count": result.get("applied_count", 0),
                         "applied": result.get("applied", []),
                         "workspace_snapshot": result.get("workspace_snapshot", {}),
-                        "request_id": request_id,
                     },
                     approval_trace=approval_trace,
                 ),
@@ -1296,18 +1299,18 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             lease_id = str(args.get("lease_id") or "")
             reason = str(args.get("reason") or "")
             if not lease_id:
-                return MCPResponse(ok=False, error="lease_id is required")
+                return _mcp_error(request_id=request_id, error="lease_id is required")
             lease = get_lease(session, lease_id)
             if not lease:
-                return MCPResponse(ok=False, error="Workspace lease not found")
+                return _mcp_error(request_id=request_id, error="Workspace lease not found", error_code="not_found")
             try:
                 assert_lease_owner_or_admin(lease, actor_subject, is_admin=is_platform_admin(request))
                 assert_mission_reader_or_admin(session=session, request=request, mission_id=lease.mission_id)
                 lease = release_workspace_lease(session=session, lease=lease, reason=reason)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
-            return MCPResponse(
-                ok=True,
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
+            return _mcp_ok(
+                request_id=request_id,
                 result={
                     "lease": {
                         "id": lease.id,
@@ -1315,7 +1318,6 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                         "release_reason": lease.release_reason,
                         "released_at": lease.released_at,
                     },
-                    "request_id": request_id,
                 },
             )
 
@@ -1990,14 +1992,14 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             doc_id = int(args.get("doc_id"))
             doc = session.get(Doc, doc_id)
             if not doc:
-                return MCPResponse(ok=False, error="Doc not found")
+                return _mcp_error(request_id=request_id, error="Doc not found", error_code="not_found")
             before = doc.dict()
             kluster = session.get(Kluster, doc.kluster_id)
             if kluster and kluster.mission_id:
                 try:
                     assert_mission_writer_or_admin(session=session, request=request, mission_id=kluster.mission_id)
                 except HTTPException as exc:
-                    return MCPResponse(ok=False, error=exc.detail)
+                    return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             allowed_fields = {"title", "body", "doc_type", "status", "provenance"}
             update_payload = {
                 key: args.get(key)
@@ -2012,7 +2014,11 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     operation="update",
                 )
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=str(exc.detail))
+                return _mcp_error(
+                    request_id=request_id,
+                    error=str(exc.detail),
+                    error_code="schema_validation_failed",
+                )
             for key in allowed_fields:
                 if key in update_payload:
                     setattr(doc, key, update_payload.get(key))
@@ -2041,8 +2047,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 actor_subject=actor_subject,
                 source=source,
             )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result=_mutation_result_with_ledger(
                     session=session,
                     mission_id=kluster.mission_id if kluster else None,
@@ -2058,14 +2064,14 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             artifact_id = int(args.get("artifact_id"))
             artifact = session.get(Artifact, artifact_id)
             if not artifact:
-                return MCPResponse(ok=False, error="Artifact not found")
+                return _mcp_error(request_id=request_id, error="Artifact not found", error_code="not_found")
             before = artifact.dict()
             kluster = session.get(Kluster, artifact.kluster_id)
             if kluster and kluster.mission_id:
                 try:
                     assert_mission_writer_or_admin(session=session, request=request, mission_id=kluster.mission_id)
                 except HTTPException as exc:
-                    return MCPResponse(ok=False, error=exc.detail)
+                    return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             allowed_fields = {
                 "name",
                 "artifact_type",
@@ -2095,7 +2101,11 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     operation="update",
                 )
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=str(exc.detail))
+                return _mcp_error(
+                    request_id=request_id,
+                    error=str(exc.detail),
+                    error_code="schema_validation_failed",
+                )
             for key, value in schema_checked_payload.items():
                 update_payload[key] = value
             for key in allowed_fields:
@@ -2118,8 +2128,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 actor_subject=actor_subject,
                 source=source,
             )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result=_mutation_result_with_ledger(
                     session=session,
                     mission_id=kluster.mission_id if kluster else None,
