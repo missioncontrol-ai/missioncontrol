@@ -12,6 +12,13 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 
 > Kubernetes orchestrates containers. MissionControl orchestrates agents, missions, and knowledge.
 
+## Enterprise Positioning
+
+- **Rust-native agent gateway (`mc`)** — a single compiled binary for MCP/CLI/runtime orchestration, designed for predictable performance and reduced local attack surface.
+- **Security-first control plane** — policy-gated mutations, approvals, mission-scoped permissions, session tokens (`mcs_*`), and auditable publication provenance.
+- **IT-operable by design** — explicit API/MCP contracts, health endpoints, environment-driven deployment, and cloud-compatible primitives (Postgres + S3 + Git projection).
+- **Built for regulated collaboration** — mission boundaries, profile isolation, and publication records help teams satisfy internal governance and change-control requirements.
+
 ## Core Capabilities
 
 - **Missions & Klusters** — organizational units that scope knowledge, tools, permissions, and governance. Agents and humans switch profiles without losing context or integrity.

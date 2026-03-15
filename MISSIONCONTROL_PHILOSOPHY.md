@@ -71,6 +71,26 @@ agents and durable system state.
 
 ------------------------------------------------------------------------
 
+# Rust-Native Trust Boundary
+
+MissionControl is intentionally Rust-forward at the agent edge.
+
+The `mc` runtime is a compiled Rust binary that carries MCP transport,
+policy context, session wiring, and local orchestration in one
+deterministic artifact.
+
+This supports enterprise requirements:
+
+-   Reduced runtime dependency drift
+-   Smaller local attack surface than ad-hoc script stacks
+-   Stronger operational predictability for IT/SRE teams
+-   Clearer audit boundaries between agent runtime and control plane
+
+Security is not bolted on. It is part of the system boundary design:
+agents request actions, MissionControl authorizes and records them.
+
+------------------------------------------------------------------------
+
 # Mission-Centric Organizational Model
 
 MissionControl organizes work around **Missions**.

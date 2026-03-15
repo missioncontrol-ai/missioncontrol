@@ -10,10 +10,19 @@ queen hosts, or local planners that need an exceptional offline/online experienc
 
 - All MCP tooling (tools/explorer/admin/approvals) lives inside a single Rust binary so we can bundle TLS, telemetry, and WASM
   booster hooks without spawning Python subprocesses on every call.
+- The compiled binary model improves enterprise operability: deterministic deploy artifacts, lower runtime dependency drift,
+  and easier endpoint hardening for security teams.
 - The daemon command keeps a live `/events/stream` connection, features reconnection/backoff, and fans the stream out via
   SSE/WebSocket so Ruflo-like swarms observe approvals/inbox events without polling.
 - The doctor command (built into the same binary) now doubles as the self-repair and diagnostics entry point for teams that
   need hardened local deployments.
+
+## Enterprise Security Posture
+
+- `mc` keeps auth/session handling, policy headers, and MCP transport in one audited binary path.
+- MissionControl enforces authorization server-side; agents request actions, they do not own control-plane credentials.
+- Profile/session isolation supports multi-agent and multi-session operation on shared hosts without global config collisions.
+- Publish provenance (ledger + publication records) provides change traceability for security and compliance reviews.
 
 ## Running the CLI
 
