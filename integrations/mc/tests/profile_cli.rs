@@ -174,3 +174,40 @@ fn profile_status_calls_get_and_pin_tools() {
     get_mock.assert();
     pin_mock.assert();
 }
+
+#[test]
+fn init_bootstraps_default_profile_when_empty() {
+    let server = MockServer::start();
+    let list_mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/mcp/call")
+            .json_body(json!({"tool":"list_profiles","args":{"limit":1}}));
+        then.status(200).json_body(json!({
+            "ok": true,
+            "result": {"profiles": []}
+        }));
+    });
+    let publish_mock = server.mock(|when, then| {
+        when.method(POST).path("/mcp/call");
+        then.status(200).json_body(json!({
+            "ok": true,
+            "result": {
+                "profile": {"name":"default","sha256":"seed-sha","is_default":true}
+            }
+        }));
+    });
+
+    let output = Command::new(mc_bin())
+        .args(["init"])
+        .env("MC_BASE_URL", server.url(""))
+        .env("MC_TOKEN", "test-token")
+        .output()
+        .expect("run mc init");
+
+    assert!(output.status.success(), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"created\": true"), "stdout={stdout}");
+    assert!(stdout.contains("\"name\": \"default\""), "stdout={stdout}");
+    list_mock.assert_hits(1);
+    let _ = publish_mock;
+}

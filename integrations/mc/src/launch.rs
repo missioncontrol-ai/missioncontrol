@@ -28,6 +28,7 @@ use crate::{
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::fs;
 use std::{
     io::{self, Write},
@@ -916,8 +917,8 @@ async fn resolve_profile_name(
     if let Some(profile) = requested {
         return Ok(profile.trim().to_string());
     }
-    let profiles = client.get_json("/me/profiles?limit=200").await?;
-    if let Some(items) = profiles.as_array() {
+    let profiles = mcp_profile_call(client, "list_profiles", json!({ "limit": 200 })).await?;
+    if let Some(items) = profiles.get("profiles").and_then(|v| v.as_array()) {
         for item in items {
             if item.get("is_default").and_then(|v| v.as_bool()).unwrap_or(false) {
                 if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
@@ -925,8 +926,61 @@ async fn resolve_profile_name(
                 }
             }
         }
+        if items.is_empty() {
+            let bootstrap_name = "default";
+            mc_info!(
+                "no remote profiles found; bootstrapping '{}' via MCP",
+                bootstrap_name
+            );
+            let tarball_b64 = empty_profile_tarball_b64()?;
+            let published = mcp_profile_call(
+                client,
+                "publish_profile",
+                json!({
+                    "name": bootstrap_name,
+                    "description": "Bootstrap profile created by mc launch",
+                    "is_default": true,
+                    "manifest": [],
+                    "tarball_b64": tarball_b64
+                }),
+            )
+            .await?;
+            if let Some(name) = published
+                .get("profile")
+                .and_then(|v| v.get("name"))
+                .and_then(|v| v.as_str())
+            {
+                return Ok(name.to_string());
+            }
+            return Ok(bootstrap_name.to_string());
+        }
     }
     Ok(agent_key.unwrap_or("default").to_string())
+}
+
+async fn mcp_profile_call(client: &MissionControlClient, tool: &str, args: Value) -> Result<Value> {
+    let response = client
+        .post_json("/mcp/call", &json!({ "tool": tool, "args": args }))
+        .await?;
+    let ok = response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !ok {
+        let err = response
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("mcp profile tool failed");
+        anyhow::bail!("{}", err);
+    }
+    Ok(response.get("result").cloned().unwrap_or_else(|| json!({})))
+}
+
+fn empty_profile_tarball_b64() -> Result<String> {
+    use base64::Engine;
+    let mut bytes = Vec::<u8>::new();
+    {
+        let mut builder = tar::Builder::new(&mut bytes);
+        builder.finish()?;
+    }
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
 fn session_index_path(base_mc_home: &Path) -> PathBuf {

@@ -59,6 +59,8 @@ pub enum McCommand {
     Daemon(DaemonArgs),
     /// Launch an agent with a fully wired MissionControl harness.
     Launch(launch::LaunchArgs),
+    /// Initialize MC profile state for first-time usage.
+    Init(InitArgs),
     /// Self-improvement loop — run agents against MC's own backlog to evolve the codebase.
     Evolve(evolve::EvolveArgs),
     /// Authenticate and create a session token stored at ~/.missioncontrol/session.json.
@@ -72,6 +74,13 @@ pub enum McCommand {
     /// Manage MissionControl user profiles.
     #[command(subcommand)]
     Profile(ProfileCommand),
+}
+
+#[derive(Args, Debug)]
+pub struct InitArgs {
+    /// Initial profile name to create when none exists.
+    #[arg(long, default_value = "default")]
+    profile: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -375,6 +384,7 @@ pub async fn run(
         McCommand::Update(cmd) => update::run(cmd, &config).await,
         McCommand::Daemon(args) => daemon::run(&args, &client, ctx).await,
         McCommand::Launch(args) => launch::run(args, &client, &config).await,
+        McCommand::Init(args) => handle_init(args, client, &config).await,
         McCommand::Evolve(args) => evolve::run(args, &client).await,
         McCommand::Login(args) => auth::login(args, &client, config.base_url.as_str()).await,
         McCommand::Logout(args) => auth::logout(args, &client).await,
@@ -382,6 +392,95 @@ pub async fn run(
         McCommand::Serve(args) => mcp_server::run(&args, &client).await,
         McCommand::Profile(cmd) => handle_profile(cmd, client).await,
     }
+}
+
+async fn handle_init(args: InitArgs, client: MissionControlClient, config: &McConfig) -> Result<()> {
+    let profile_name = args.profile.trim();
+    if profile_name.is_empty() {
+        anyhow::bail!("--profile cannot be empty");
+    }
+
+    let login_client_holder: Option<MissionControlClient> = if config.token.is_none() {
+        if auth::load_saved_session(config.base_url.as_str()).is_none() {
+            eprintln!("mc: no valid session found for {}", config.base_url.as_str());
+            eprintln!("mc: running `mc login` to authenticate...");
+            auth::login(
+                auth::LoginArgs {
+                    ttl_hours: 8,
+                    print_token: false,
+                    non_interactive: false,
+                },
+                &client,
+                config.base_url.as_str(),
+            )
+            .await
+            .context("login failed — cannot initialize profiles without authentication")?;
+        }
+        let session_token = auth::load_saved_session(config.base_url.as_str())
+            .map(|s| s.token)
+            .context("session not found after login — run `mc login` manually")?;
+        Some(
+            MissionControlClient::new_with_token(config.base_url.as_str(), &session_token)
+                .context("failed to build client with session token")?,
+        )
+    } else {
+        None
+    };
+    let effective_client: &MissionControlClient = login_client_holder.as_ref().unwrap_or(&client);
+
+    let listed = mcp_profile_call(effective_client, "list_profiles", json!({ "limit": 1 })).await?;
+    let has_profiles = listed
+        .get("profiles")
+        .and_then(|v| v.as_array())
+        .map(|arr| !arr.is_empty())
+        .unwrap_or(false);
+
+    if has_profiles {
+        let activated = mcp_profile_call(
+            effective_client,
+            "activate_profile",
+            json!({ "name": profile_name }),
+        )
+        .await;
+        if activated.is_err() {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "ok": true,
+                    "created": false,
+                    "note": "profiles already exist; no bootstrap profile created",
+                }))
+                .unwrap_or_else(|_| "{\"ok\":true}".to_string())
+            );
+            return Ok(());
+        }
+        print_json(&json!({
+            "ok": true,
+            "created": false,
+            "activated_profile": profile_name,
+        }));
+        return Ok(());
+    }
+
+    let tarball_b64 = empty_profile_tarball_b64()?;
+    let published = mcp_profile_call(
+        effective_client,
+        "publish_profile",
+        json!({
+            "name": profile_name,
+            "description": "Bootstrap profile created by mc init",
+            "is_default": true,
+            "manifest": [],
+            "tarball_b64": tarball_b64
+        }),
+    )
+    .await?;
+    print_json(&json!({
+        "ok": true,
+        "created": true,
+        "profile": published.get("profile").cloned().unwrap_or(Value::Null),
+    }));
+    Ok(())
 }
 
 async fn handle_tools(
@@ -719,6 +818,15 @@ fn read_local_pinned_sha(profile_root: &std::path::Path) -> Result<Option<String
         .get("pinned_sha256")
         .and_then(|v| v.as_str())
         .map(|v| v.to_string()))
+}
+
+fn empty_profile_tarball_b64() -> Result<String> {
+    let mut bytes = Vec::<u8>::new();
+    {
+        let mut builder = Builder::new(&mut bytes);
+        builder.finish()?;
+    }
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
 async fn handle_workspace(
