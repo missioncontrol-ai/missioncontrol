@@ -308,16 +308,20 @@ async fn read_content_length(
             // Blank line separates headers from body.
             break;
         }
-        if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
-            let val: usize = rest
-                .trim()
-                .parse()
-                .context("invalid Content-Length value")?;
-            content_length = Some(val);
+        if let Some((name, value)) = trimmed.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("Content-Length") {
+                let val: usize = value
+                    .trim()
+                    .parse()
+                    .context("invalid Content-Length value")?;
+                content_length = Some(val);
+            }
         }
         // Other headers (Content-Type etc.) are ignored.
     }
-    Ok(content_length)
+    content_length
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("missing Content-Length header"))
 }
 
 fn error_response(id: Value, code: i64, message: &str) -> Value {
