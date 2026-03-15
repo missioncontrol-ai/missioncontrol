@@ -120,6 +120,32 @@ class McpProfileToolsTests(unittest.TestCase):
         self.assertEqual((response.result or {}).get("error_code"), "unknown_tool")
         self.assertTrue((response.result or {}).get("request_id"))
 
+    def test_delete_profile(self):
+        tarball = _make_tarball({"SKILL.md": "hello"})
+        created = call_tool(
+            MCPCall(tool="publish_profile", args={"name": "delete-me", "tarball_b64": tarball}),
+            self.req,
+            Response(),
+        )
+        self.assertTrue(created.ok)
+
+        deleted = call_tool(
+            MCPCall(tool="delete_profile", args={"name": "delete-me"}),
+            self.req,
+            Response(),
+        )
+        self.assertTrue(deleted.ok)
+        self.assertTrue(deleted.result.get("request_id"))
+        self.assertEqual(deleted.result.get("deleted_profile"), "delete-me")
+
+        missing = call_tool(
+            MCPCall(tool="get_profile", args={"name": "delete-me"}),
+            self.req,
+            Response(),
+        )
+        self.assertFalse(missing.ok)
+        self.assertEqual((missing.result or {}).get("error_code"), "not_found")
+
 
 if __name__ == "__main__":
     unittest.main()

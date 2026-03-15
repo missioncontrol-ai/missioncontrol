@@ -635,6 +635,15 @@ TOOLS = [
         },
     ),
     MCPTool(
+        name="delete_profile",
+        description="Delete a profile by name",
+        input_schema={
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    ),
+    MCPTool(
         name="profile_status",
         description="Read current profile sha and optional expected-sha match",
         input_schema={
@@ -2626,6 +2635,21 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             session.commit()
             session.refresh(profile)
             return _mcp_ok(request_id=request_id, result={"profile": _profile_to_dict(profile)})
+
+        if tool == "delete_profile":
+            name = str(args.get("name") or "").strip()
+            if not name:
+                return _mcp_error(request_id=request_id, error="name is required")
+            profile = session.exec(
+                select(UserProfile)
+                .where(UserProfile.owner_subject == actor_subject)
+                .where(UserProfile.name == name)
+            ).first()
+            if not profile:
+                return _mcp_error(request_id=request_id, error="Profile not found", error_code="not_found")
+            session.delete(profile)
+            session.commit()
+            return _mcp_ok(request_id=request_id, result={"ok": True, "deleted_profile": name})
 
         if tool == "profile_status":
             name = str(args.get("name") or "").strip()

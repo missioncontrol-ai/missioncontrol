@@ -158,6 +158,15 @@ pub enum SyncCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum ProfileCommand {
+    /// Create a new profile shell on MissionControl (empty bundle).
+    Create {
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "")]
+        description: String,
+        #[arg(long)]
+        activate: bool,
+    },
     /// List current user's profiles.
     List {
         #[arg(long, default_value_t = 50)]
@@ -210,6 +219,13 @@ pub enum ProfileCommand {
         name: String,
         #[arg(long)]
         sha256: String,
+    },
+    /// Delete a profile from MissionControl (requires explicit confirmation flag).
+    Delete {
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value_t = false)]
+        confirm_delete: bool,
     },
     /// Show remote/local pin status for a profile.
     Status {
@@ -688,6 +704,40 @@ async fn handle_sync(command: SyncCommand, client: MissionControlClient) -> Resu
 
 async fn handle_profile(command: ProfileCommand, client: MissionControlClient, json_output: bool) -> Result<()> {
     match command {
+        ProfileCommand::Create {
+            name,
+            description,
+            activate,
+        } => {
+            let tarball_b64 = empty_profile_tarball_b64()?;
+            let response = mcp_profile_call(
+                &client,
+                "publish_profile",
+                json!({
+                    "name": name,
+                    "description": description,
+                    "is_default": activate,
+                    "manifest": [],
+                    "tarball_b64": tarball_b64
+                }),
+            )
+            .await?;
+            let profile = response.get("profile").cloned().unwrap_or(Value::Null);
+            if json_output {
+                print_json(&profile);
+            } else {
+                let shown = profile.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                println!(
+                    "{}{}{} created profile: {}{}{}",
+                    crate::ui::GREEN,
+                    "✓ ",
+                    crate::ui::RESET,
+                    crate::ui::CYAN,
+                    shown,
+                    crate::ui::RESET
+                );
+            }
+        }
         ProfileCommand::List { limit } => {
             let response = mcp_profile_call(&client, "list_profiles", json!({ "limit": limit })).await?;
             let profiles = response.get("profiles").cloned().unwrap_or_else(|| json!([]));
@@ -911,6 +961,28 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
                     name,
                     crate::ui::RESET,
                     sha256
+                );
+            }
+        }
+        ProfileCommand::Delete {
+            name,
+            confirm_delete,
+        } => {
+            if !confirm_delete {
+                anyhow::bail!("refusing to delete profile '{}'; rerun with --confirm-delete", name);
+            }
+            let response = mcp_profile_call(&client, "delete_profile", json!({ "name": name })).await?;
+            if json_output {
+                print_json(&response);
+            } else {
+                println!(
+                    "{}{}{} deleted profile: {}{}{}",
+                    crate::ui::GREEN,
+                    "✓ ",
+                    crate::ui::RESET,
+                    crate::ui::CYAN,
+                    name,
+                    crate::ui::RESET
                 );
             }
         }
