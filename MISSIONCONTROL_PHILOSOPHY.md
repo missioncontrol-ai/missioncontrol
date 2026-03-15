@@ -112,6 +112,10 @@ Profiles are:
 -   Synced to the local machine automatically on agent startup
 -   Applied via atomic symlink swap for clean, instant transitions
 -   Versioned, pushable, and pullable from any client or machine
+-   User-creatable and user-switchable by design (for example:
+    research, coding, security review) with fast local transitions
+-   Durable across machines through profile publish/pull/activate flows
+    in MissionControl (config + auth references + policy-relevant context)
 
 This means an agent operator can move between machines, reinstall their
 toolchain, onboard to a new mission, or hand off context to a teammate
@@ -123,6 +127,10 @@ machine.
 
 Profile switching is structured and intentional. Context drift across
 machines or sessions is eliminated.
+
+Operators should be able to create a profile once, switch profiles in
+seconds, and resume the same operational posture on any machine without
+manual re-bootstrap work.
 
 ------------------------------------------------------------------------
 

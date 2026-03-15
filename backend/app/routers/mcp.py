@@ -1704,7 +1704,7 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             try:
                 assert_mission_writer_or_admin(session=session, request=request, mission_id=mission_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             if create_payload.get("mission_id") not in {None, mission_id}:
                 return _mcp_error(
                     request_id=request_id,
@@ -1747,12 +1747,12 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             kluster_id = str(args.get("kluster_id"))
             kluster = session.get(Kluster, kluster_id)
             if not kluster:
-                return MCPResponse(ok=False, error="Kluster not found")
+                return _mcp_error(request_id=request_id, error="Kluster not found", error_code="not_found")
             if kluster.mission_id:
                 try:
                     assert_mission_writer_or_admin(session=session, request=request, mission_id=kluster.mission_id)
                 except HTTPException as exc:
-                    return MCPResponse(ok=False, error=exc.detail)
+                    return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             before = kluster.dict()
             allowed_fields = {
                 "name",
@@ -1763,7 +1763,7 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 "status",
             }
             if "mission_id" in args and args.get("mission_id") != kluster.mission_id:
-                return MCPResponse(ok=False, error="Changing mission_id is not supported")
+                return _mcp_error(request_id=request_id, error="Changing mission_id is not supported")
             update_payload = {
                 key: args.get(key)
                 for key in allowed_fields
@@ -1777,9 +1777,13 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     operation="update",
                 )
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=str(exc.detail))
+                return _mcp_error(
+                    request_id=request_id,
+                    error=str(exc.detail),
+                    error_code="schema_validation_failed",
+                )
             if "owners" in update_payload and not _owner_list(update_payload.get("owners")):
-                return MCPResponse(ok=False, error="owners must include at least one owner")
+                return _mcp_error(request_id=request_id, error="owners must include at least one owner")
             for key in allowed_fields:
                 if key in update_payload:
                     setattr(kluster, key, update_payload.get(key))
@@ -1799,8 +1803,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 actor_subject=actor_subject,
                 source=source,
             )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result=_mutation_result_with_ledger(
                     session=session,
                     mission_id=kluster.mission_id,
@@ -1816,13 +1820,17 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             kluster_id = str(args.get("kluster_id"))
             kluster = session.get(Kluster, kluster_id)
             if not kluster:
-                return MCPResponse(ok=False, error="Kluster not found")
+                return _mcp_error(request_id=request_id, error="Kluster not found", error_code="not_found")
             if not kluster.mission_id:
-                return MCPResponse(ok=False, error="Kluster is not linked to a mission")
+                return _mcp_error(
+                    request_id=request_id,
+                    error="Kluster is not linked to a mission",
+                    error_code="forbidden",
+                )
             try:
                 assert_mission_owner_or_admin(session=session, request=request, mission_id=kluster.mission_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             blockers = {
                 "tasks": len(session.exec(select(Task.id).where(Task.kluster_id == kluster_id)).all()),
                 "docs": len(session.exec(select(Doc.id).where(Doc.kluster_id == kluster_id)).all()),
@@ -1834,7 +1842,11 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             }
             blocking = {k: v for k, v in blockers.items() if v}
             if blocking:
-                return MCPResponse(ok=False, error=f"Kluster has linked entities: {blocking}")
+                return _mcp_error(
+                    request_id=request_id,
+                    error=f"Kluster has linked entities: {blocking}",
+                    error_code="conflict",
+                )
             before = kluster.dict()
             session.delete(kluster)
             session.commit()
@@ -1850,8 +1862,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 actor_subject=actor_subject,
                 source=source,
             )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result=_mutation_result_with_ledger(
                     session=session,
                     mission_id=kluster.mission_id,
@@ -1867,11 +1879,11 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             mission_id = str(args.get("mission_id"))
             mission = session.get(Mission, mission_id)
             if not mission:
-                return MCPResponse(ok=False, error="Mission not found")
+                return _mcp_error(request_id=request_id, error="Mission not found", error_code="not_found")
             try:
                 assert_mission_writer_or_admin(session=session, request=request, mission_id=mission_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             before = mission.dict()
             allowed_fields = {
                 "description",
@@ -1894,9 +1906,13 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     operation="update",
                 )
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=str(exc.detail))
+                return _mcp_error(
+                    request_id=request_id,
+                    error=str(exc.detail),
+                    error_code="schema_validation_failed",
+                )
             if "owners" in update_payload and not _owner_list(update_payload.get("owners")):
-                return MCPResponse(ok=False, error="owners must include at least one owner")
+                return _mcp_error(request_id=request_id, error="owners must include at least one owner")
             for key in allowed_fields:
                 if key in update_payload:
                     setattr(mission, key, update_payload.get(key))
@@ -1916,8 +1932,8 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 actor_subject=actor_subject,
                 source=source,
             )
-            return MCPResponse(
-                ok=True,
+            return _mcp_ok(
+                request_id=request_id,
                 result=_mutation_result_with_ledger(
                     session=session,
                     mission_id=mission.id,
@@ -1933,14 +1949,18 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             mission_id = str(args.get("mission_id"))
             mission = session.get(Mission, mission_id)
             if not mission:
-                return MCPResponse(ok=False, error="Mission not found")
+                return _mcp_error(request_id=request_id, error="Mission not found", error_code="not_found")
             try:
                 assert_mission_owner_or_admin(session=session, request=request, mission_id=mission_id)
             except HTTPException as exc:
-                return MCPResponse(ok=False, error=exc.detail)
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             linked_cluster = session.exec(select(Kluster).where(Kluster.mission_id == mission_id)).first()
             if linked_cluster:
-                return MCPResponse(ok=False, error="Mission has linked klusters; move or delete klusters first")
+                return _mcp_error(
+                    request_id=request_id,
+                    error="Mission has linked klusters; move or delete klusters first",
+                    error_code="conflict",
+                )
             before = mission.dict()
             role_rows = session.exec(
                 select(MissionRoleMembership).where(MissionRoleMembership.mission_id == mission_id)
@@ -1961,7 +1981,7 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 actor_subject=actor_subject,
                 source=source,
             )
-            return MCPResponse(ok=True, result={"ok": True, "deleted_id": mission_id})
+            return _mcp_ok(request_id=request_id, result={"ok": True, "deleted_id": mission_id})
 
         if tool == "update_doc":
             gated = ensure_action("doc.update")
