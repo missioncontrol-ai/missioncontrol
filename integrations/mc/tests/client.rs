@@ -5,7 +5,7 @@ use mc::config::McConfig;
 use serde_json::json;
 
 fn build_config(base_url: &str) -> McConfig {
-    McConfig::from_parts(base_url, None, None, 2, true, false, None).unwrap()
+    McConfig::from_parts(base_url, None, None, None, 2, true, false, None).unwrap()
 }
 
 #[tokio::test]

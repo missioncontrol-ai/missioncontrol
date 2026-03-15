@@ -8,7 +8,7 @@ use std::io::Write;
 use tempfile::NamedTempFile;
 
 fn build_client(base_url: &str) -> MissionControlClient {
-    let config = McConfig::from_parts(base_url, None, None, 2, true, false, None).unwrap();
+    let config = McConfig::from_parts(base_url, None, None, None, 2, true, false, None).unwrap();
     MissionControlClient::new(&config).unwrap()
 }
 

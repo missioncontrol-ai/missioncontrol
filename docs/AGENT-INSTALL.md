@@ -33,17 +33,17 @@ mc launch openclaw      # OpenClaw
 mc launch nanoclaw      # NanoClaw
 ```
 
-That's it. `mc launch` handles: daemon startup, auth preflight, config generation, and exec.
+That's it. `mc launch` handles: auth preflight, config generation, and exec.
 
 ---
 
 ## What `mc launch` does
 
 1. Checks agent binary is on PATH (with install hint if not)
-2. Ensures mc daemon is running on 127.0.0.1:8765 (starts it if not)
+2. Validates profile/session context and pin policy (when configured)
 3. Validates auth against the MC API
 4. Fetches agent config from the onboarding manifest
-5. Writes config to the agent's canonical location (token not embedded if using session)
+5. Writes config to an instance-local runtime home by default (token not embedded if using session)
 6. Injects `MC_TOKEN` into the agent's process environment
 7. exec's the agent
 
@@ -55,18 +55,21 @@ That's it. `mc launch` handles: daemon startup, auth preflight, config generatio
 | `--no-daemon` | Skip daemon management (daemon externally managed) |
 | `--skip-config-gen` | Use existing config, skip manifest fetch |
 | `--no-embed-token` | Omit `MC_TOKEN` from written config file (auto-implied for session tokens) |
+| `--legacy-global-config` | Write config to global agent paths (`~/.codex`, `~/.claude.json`, `~/.gemini`) for compatibility |
 | `--daemon-timeout N` | Seconds to wait for daemon ready (default: 15) |
 | `-- <args>` | Pass remaining args verbatim to the agent |
 
-## Agent Config Locations
+## Agent Config Locations (default)
 
 | Agent | Config written by `mc launch` |
 |---|---|
-| Claude Code | `~/.claude.json` (`.mcpServers.missioncontrol`) |
-| Codex | `~/.codex/config.toml` (appended, idempotent) |
-| Gemini CLI | `~/.gemini/settings.json` (`.mcpServers.missioncontrol`) |
-| OpenClaw | `~/.missioncontrol/config/openclaw.acp.json` |
-| NanoClaw | `~/.missioncontrol/config/nanoclaw.acp.json` |
+| Claude Code | `~/.missioncontrol/instances/<runtime_session_id>/home/.claude.json` |
+| Codex | `~/.missioncontrol/instances/<runtime_session_id>/home/.codex/config.toml` |
+| Gemini CLI | `~/.missioncontrol/instances/<runtime_session_id>/home/.gemini/settings.json` |
+| OpenClaw | `~/.missioncontrol/instances/<runtime_session_id>/mc/config/openclaw.acp.json` |
+| NanoClaw | `~/.missioncontrol/instances/<runtime_session_id>/mc/config/nanoclaw.acp.json` |
+
+Use `--legacy-global-config` only when you explicitly need legacy global config writes.
 
 ---
 

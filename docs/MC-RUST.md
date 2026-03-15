@@ -49,6 +49,10 @@ When no `MC_AGENT_ID` is provided, `mc` looks for `~/.missioncontrol/agent_id` a
 
 ## Command surface
 
+### Launch isolation
+- `mc launch <agent>` now writes agent config into session-local runtime paths under `~/.missioncontrol/instances/<runtime_session_id>/...` by default.
+- Use `mc launch --legacy-global-config <agent>` only for compatibility scenarios that still require mutating global files such as `~/.codex/config.toml`.
+
 ### Tools & governance
 - `mc tools list` / `mc tools call --tool <tool> --payload '{...}'` map directly to `/mcp/tools` and `/mcp/call`.
 - `mc explorer tree|node`, `mc admin active/versions/events`, and `mc approvals list/create/approve/reject` mirror the FastAPI

@@ -70,6 +70,11 @@ pub struct LaunchArgs {
     #[arg(long)]
     new_session: bool,
 
+    /// Write agent config to global locations (~/.codex, ~/.claude.json, ~/.gemini)
+    /// instead of the instance-local runtime home. Compatibility escape hatch only.
+    #[arg(long)]
+    legacy_global_config: bool,
+
     /// Allow launching when local profile pin does not match remote profile sha.
     #[arg(long)]
     allow_pin_mismatch: bool,
@@ -147,9 +152,11 @@ trait AgentDriver {
         base_url: &str,
         token: &str,
         embed_token: bool,
+        target_home: &Path,
+        target_mc_home: &Path,
     ) -> Result<()>;
     /// Build the Command to exec (binary + required flags).
-    fn command(&self, extra_args: &[String]) -> std::process::Command;
+    fn command(&self, extra_args: &[String], target_mc_home: &Path) -> std::process::Command;
 }
 
 // ── CodexDriver ──────────────────────────────────────────────────────────────
@@ -174,11 +181,10 @@ impl AgentDriver for CodexDriver {
         base_url: &str,
         token: &str,
         embed_token: bool,
+        target_home: &Path,
+        _target_mc_home: &Path,
     ) -> Result<()> {
-        let config_path = dirs::home_dir()
-            .ok_or_else(|| anyhow!("cannot determine home directory"))?
-            .join(".codex")
-            .join("config.toml");
+        let config_path = target_home.join(".codex").join("config.toml");
 
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -236,7 +242,7 @@ impl AgentDriver for CodexDriver {
         Ok(())
     }
 
-    fn command(&self, extra_args: &[String]) -> std::process::Command {
+    fn command(&self, extra_args: &[String], _target_mc_home: &Path) -> std::process::Command {
         let mut cmd = std::process::Command::new("codex");
         cmd.args(extra_args);
         cmd
@@ -340,10 +346,10 @@ impl AgentDriver for ClaudeDriver {
         base_url: &str,
         token: &str,
         embed_token: bool,
+        target_home: &Path,
+        _target_mc_home: &Path,
     ) -> Result<()> {
-        let config_path = dirs::home_dir()
-            .ok_or_else(|| anyhow!("cannot determine home directory"))?
-            .join(".claude.json");
+        let config_path = target_home.join(".claude.json");
 
         let mut root: serde_json::Value = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
@@ -374,7 +380,7 @@ impl AgentDriver for ClaudeDriver {
         Ok(())
     }
 
-    fn command(&self, extra_args: &[String]) -> std::process::Command {
+    fn command(&self, extra_args: &[String], _target_mc_home: &Path) -> std::process::Command {
         let mut cmd = std::process::Command::new("claude");
         cmd.args(extra_args);
         cmd
@@ -400,11 +406,10 @@ impl AgentDriver for GeminiDriver {
         base_url: &str,
         token: &str,
         embed_token: bool,
+        target_home: &Path,
+        _target_mc_home: &Path,
     ) -> Result<()> {
-        let config_path = dirs::home_dir()
-            .ok_or_else(|| anyhow!("cannot determine home directory"))?
-            .join(".gemini")
-            .join("settings.json");
+        let config_path = target_home.join(".gemini").join("settings.json");
 
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -439,7 +444,7 @@ impl AgentDriver for GeminiDriver {
         Ok(())
     }
 
-    fn command(&self, extra_args: &[String]) -> std::process::Command {
+    fn command(&self, extra_args: &[String], _target_mc_home: &Path) -> std::process::Command {
         let mut cmd = std::process::Command::new("gemini");
         cmd.args(extra_args);
         cmd
@@ -496,12 +501,14 @@ impl AgentDriver for OpenClawDriver {
         base_url: &str,
         token: &str,
         embed_token: bool,
+        _target_home: &Path,
+        target_mc_home: &Path,
     ) -> Result<()> {
-        install_acp_config("openclaw", base_url, token, embed_token)
+        install_acp_config("openclaw", base_url, token, embed_token, target_mc_home)
     }
 
-    fn command(&self, extra_args: &[String]) -> std::process::Command {
-        let config = mc_home_dir().join("config").join("openclaw.acp.json");
+    fn command(&self, extra_args: &[String], target_mc_home: &Path) -> std::process::Command {
+        let config = target_mc_home.join("config").join("openclaw.acp.json");
         let mut cmd = std::process::Command::new("openclaw");
         cmd.arg("--acp-config").arg(config);
         cmd.args(extra_args);
@@ -524,12 +531,14 @@ impl AgentDriver for NanoClawDriver {
         base_url: &str,
         token: &str,
         embed_token: bool,
+        _target_home: &Path,
+        target_mc_home: &Path,
     ) -> Result<()> {
-        install_acp_config("nanoclaw", base_url, token, embed_token)
+        install_acp_config("nanoclaw", base_url, token, embed_token, target_mc_home)
     }
 
-    fn command(&self, extra_args: &[String]) -> std::process::Command {
-        let config = mc_home_dir().join("config").join("nanoclaw.acp.json");
+    fn command(&self, extra_args: &[String], target_mc_home: &Path) -> std::process::Command {
+        let config = target_mc_home.join("config").join("nanoclaw.acp.json");
         let mut cmd = std::process::Command::new("nanoclaw");
         cmd.arg("--acp-config").arg(config);
         cmd.args(extra_args);
@@ -537,8 +546,14 @@ impl AgentDriver for NanoClawDriver {
     }
 }
 
-fn install_acp_config(name: &str, base_url: &str, token: &str, embed_token: bool) -> Result<()> {
-    let config_dir = mc_home_dir().join("config");
+fn install_acp_config(
+    name: &str,
+    base_url: &str,
+    token: &str,
+    embed_token: bool,
+    target_mc_home: &Path,
+) -> Result<()> {
+    let config_dir = target_mc_home.join("config");
     std::fs::create_dir_all(&config_dir)?;
     let out = config_dir.join(format!("{}.acp.json", name));
     let mut config = serde_json::json!({
@@ -714,8 +729,12 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
             .await?;
     }
 
-    // 7. Install config from staging dir to the agent's canonical location.
-    std::env::set_var("HOME", &agent_home);
+    // 7. Install config in instance-local paths by default.
+    let config_target_home = if args.legacy_global_config {
+        dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?
+    } else {
+        agent_home.clone()
+    };
     std::env::set_var("MC_HOME", &instance_mc_home);
     std::env::set_var("MC_AGENT_PROFILE", &profile_name);
     std::env::set_var("MC_RUNTIME_SESSION_ID", &runtime_session_id);
@@ -728,7 +747,14 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         );
         std::env::set_var("MC_AGENT_ID", &generated_agent);
     }
-    driver.install_config(&staging_dir, &base_url, &token, embed_token)?;
+    driver.install_config(
+        &staging_dir,
+        &base_url,
+        &token,
+        embed_token,
+        &config_target_home,
+        &instance_mc_home,
+    )?;
 
     // 8. Exec the agent (replaces the current process on Unix).
     //    Always inject MC_TOKEN into the agent environment so the MCP shim can
@@ -739,6 +765,8 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         &token,
         &runtime_session_id,
         &instance_home,
+        &agent_home,
+        &instance_mc_home,
         &profile_name,
     )
 }
@@ -977,10 +1005,12 @@ fn exec_agent(
     token: &str,
     runtime_session_id: &str,
     instance_home: &Path,
+    agent_home: &Path,
+    instance_mc_home: &Path,
     profile_name: &str,
 ) -> Result<()> {
     let binary_name = driver.binary().to_string();
-    let mut cmd = driver.command(extra_args);
+    let mut cmd = driver.command(extra_args, instance_mc_home);
 
     // Always inject MC_TOKEN into the agent's process environment. This ensures
     // the MCP shim can authenticate regardless of whether the token was embedded
@@ -989,6 +1019,8 @@ fn exec_agent(
     if !token.is_empty() {
         cmd.env("MC_TOKEN", token);
     }
+    cmd.env("HOME", agent_home);
+    cmd.env("MC_HOME", instance_mc_home);
     cmd.env("MC_RUNTIME_SESSION_ID", runtime_session_id);
     cmd.env("MC_INSTANCE_HOME", instance_home);
     cmd.env("MC_AGENT_PROFILE", profile_name);
@@ -1056,4 +1088,79 @@ async fn enforce_profile_pin(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn codex_config_writes_to_target_home() {
+        let tmp = tempdir().expect("tempdir");
+        let target_home = tmp.path().join("agent-home");
+        let target_mc_home = tmp.path().join("mc-home");
+        fs::create_dir_all(&target_home).expect("target_home");
+        fs::create_dir_all(&target_mc_home).expect("target_mc_home");
+
+        let driver = CodexDriver;
+        driver
+            .install_config(
+                tmp.path(),
+                "http://localhost:8008",
+                "tok",
+                true,
+                &target_home,
+                &target_mc_home,
+            )
+            .expect("install codex config");
+
+        assert!(target_home.join(".codex/config.toml").exists());
+    }
+
+    #[test]
+    fn claude_config_writes_to_target_home() {
+        let tmp = tempdir().expect("tempdir");
+        let target_home = tmp.path().join("agent-home");
+        let target_mc_home = tmp.path().join("mc-home");
+        fs::create_dir_all(&target_home).expect("target_home");
+        fs::create_dir_all(&target_mc_home).expect("target_mc_home");
+
+        let driver = ClaudeDriver;
+        driver
+            .install_config(
+                tmp.path(),
+                "http://localhost:8008",
+                "tok",
+                true,
+                &target_home,
+                &target_mc_home,
+            )
+            .expect("install claude config");
+
+        assert!(target_home.join(".claude.json").exists());
+    }
+
+    #[test]
+    fn gemini_config_writes_to_target_home() {
+        let tmp = tempdir().expect("tempdir");
+        let target_home = tmp.path().join("agent-home");
+        let target_mc_home = tmp.path().join("mc-home");
+        fs::create_dir_all(&target_home).expect("target_home");
+        fs::create_dir_all(&target_mc_home).expect("target_mc_home");
+
+        let driver = GeminiDriver;
+        driver
+            .install_config(
+                tmp.path(),
+                "http://localhost:8008",
+                "tok",
+                true,
+                &target_home,
+                &target_mc_home,
+            )
+            .expect("install gemini config");
+
+        assert!(target_home.join(".gemini/settings.json").exists());
+    }
 }
