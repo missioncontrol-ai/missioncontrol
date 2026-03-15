@@ -806,6 +806,9 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         &config_target_home,
         &instance_mc_home,
     )?;
+    if matches!(selected_agent, AgentKind::Codex) {
+        codex_preflight_report(&agent_home);
+    }
     if matches!(selected_agent, AgentKind::Claude) {
         claude_preflight_report(&agent_home);
     }
@@ -856,6 +859,37 @@ fn claude_preflight_report(agent_home: &Path) {
     mc_warn!("claude may prompt for theme/login if these are not initialized for this profile");
 }
 
+fn codex_preflight_report(agent_home: &Path) {
+    let checks = [
+        (
+            agent_home.join(".codex").join("config.toml"),
+            "Codex config (.codex/config.toml)",
+        ),
+        (
+            agent_home.join(".codex").join("auth.json"),
+            "Codex auth (.codex/auth.json)",
+        ),
+        (
+            agent_home.join(".codex").join("credentials.json"),
+            "Codex credentials (.codex/credentials.json)",
+        ),
+    ];
+    let mut missing: Vec<String> = Vec::new();
+    for (path, label) in checks {
+        if !path.exists() {
+            missing.push(format!("{} missing at {}", label, path.display()));
+        }
+    }
+    if missing.is_empty() {
+        mc_info!("codex preflight: auth/settings artifacts detected");
+        return;
+    }
+    for line in missing {
+        mc_warn!("codex preflight: {}", line);
+    }
+    mc_warn!("codex may prompt for login if auth artifacts are not initialized for this profile");
+}
+
 /// Determine whether to embed `MC_TOKEN` into the written agent config.
 ///
 /// Precedence (highest → lowest):
@@ -899,7 +933,11 @@ fn resolve_agent_choice(agent: Option<AgentKind>) -> Result<AgentKind> {
 
 fn managed_config_relpaths(agent: &AgentKind) -> &'static [&'static str] {
     match agent {
-        AgentKind::Codex => &[".codex/config.toml"],
+        AgentKind::Codex => &[
+            ".codex/config.toml",
+            ".codex/auth.json",
+            ".codex/credentials.json",
+        ],
         AgentKind::Claude => &[".claude.json", ".claude"],
         AgentKind::Gemini => &[".gemini/settings.json"],
         _ => &[],
@@ -1565,5 +1603,43 @@ mod tests {
                 .expect("read settings"),
             r#"{"theme":"dark"}"#
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn overlay_seeds_codex_auth_files_and_links_instance() {
+        let tmp = tempdir().expect("tempdir");
+        let global_home = tmp.path().join("global-home");
+        let profile_home = tmp.path().join("profile-home");
+        let agent_home = tmp.path().join("agent-home");
+        fs::create_dir_all(global_home.join(".codex")).expect("global codex dir");
+        fs::create_dir_all(&profile_home).expect("profile home");
+        fs::create_dir_all(&agent_home).expect("agent home");
+
+        fs::write(
+            global_home.join(".codex").join("auth.json"),
+            r#"{"provider":"openai"}"#,
+        )
+        .expect("write auth");
+        fs::write(
+            global_home.join(".codex").join("credentials.json"),
+            r#"{"key":"secret-ref"}"#,
+        )
+        .expect("write creds");
+
+        initialize_profile_overlay(&AgentKind::Codex, &agent_home, &profile_home, &global_home)
+            .expect("initialize profile overlay");
+
+        assert!(
+            profile_home.join(".codex").join("auth.json").exists(),
+            "codex auth should be seeded"
+        );
+        assert!(
+            profile_home.join(".codex").join("credentials.json").exists(),
+            "codex credentials should be seeded"
+        );
+        let instance_auth = agent_home.join(".codex").join("auth.json");
+        let meta = fs::symlink_metadata(&instance_auth).expect("instance auth metadata");
+        assert!(meta.file_type().is_symlink(), "instance auth should be symlink");
     }
 }
