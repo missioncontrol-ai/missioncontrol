@@ -131,6 +131,6 @@ Completed recently:
 Current next build sequence:
 1. `MC-PROFILE-002`: finish agent/session/profile identity propagation and validate concurrent multi-agent launches.
 2. `MC-MCP-BOOST-001`: default booster behavior must fall through to authoritative MCP backend paths.
-3. `MC-MCP-003`: publish REST vs MCP parity matrix and track remaining gaps.
+3. `MC-MCP-003`: publish REST vs MCP parity matrix and track remaining gaps (see [`docs/MCP-PARITY-MATRIX.md`](MCP-PARITY-MATRIX.md)).
 4. `MC-MCP-004`: close remaining create-flow parity gaps (`create_kluster` + critical creates) with E2E coverage.
 5. `MC-MCP-005`: standardize MCP response/error envelope and compatibility assertions before release gating.
