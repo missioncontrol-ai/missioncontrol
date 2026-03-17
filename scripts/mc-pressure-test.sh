@@ -29,6 +29,7 @@ AGENT_EXEC_TIMEOUT_SEC="${MC_PRESSURE_AGENT_EXEC_TIMEOUT_SEC:-300}"
 AGENT_DRIVER="${MC_PRESSURE_AGENT_DRIVER:-daemon}" # daemon | codex
 DIAGNOSTIC_SAMPLE_LIMIT="${MC_PRESSURE_DIAGNOSTIC_SAMPLE_LIMIT:-5}"
 AGENT_ON_429_SLEEP_MS="${MC_PRESSURE_AGENT_ON_429_SLEEP_MS:-1000}"
+PLAYBOOK_SKIP_CLEANUP="${MC_PLAYBOOK_SKIP_CLEANUP:-0}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required" >&2
@@ -75,7 +76,7 @@ collect_log_samples() {
   local pattern="$1"
   local limit="${2:-$DIAGNOSTIC_SAMPLE_LIMIT}"
   local matches
-  matches="$(rg --no-heading -e "$pattern" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' -g '*.txt' 2>/dev/null || true)"
+  matches="$(rg --no-heading -e "$pattern" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' -g '*.txt' -g '*.jsonl' 2>/dev/null || true)"
   if [[ -z "$matches" ]]; then
     echo '[]'
     return
@@ -253,6 +254,7 @@ run_playbook_worker() {
     iter_start_ms="$(date +%s%3N)"
     if MC_PLAYBOOK_RUN_ID="${RUN_ID}-w${worker_id}-i${attempts}" \
       MC_PLAYBOOK_SCENARIO_FILE="${SCENARIO_FILE}" \
+      MC_PLAYBOOK_SKIP_CLEANUP="${PLAYBOOK_SKIP_CLEANUP}" \
       MC_BASE_URL="$BASE_URL" \
       MC_TOKEN="${worker_token}" \
       "$ROOT_DIR/scripts/mcp-validation-playbook.sh" \
@@ -367,7 +369,7 @@ latency_p99=$(echo "$all_latencies_json" | jq 'if length > 0 then .[(((length * 
 
 startup_timeout_hits="$({ rg -n -e "MCP startup incomplete" -e "timed out after" "$RUN_DIR" -g '*.stderr' -g '*.txt' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 auth_config_hits="$({ rg -n -e "MC_TOKEN is required" -e "Forbidden" -e "Unauthorized" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
-rate_limit_hits="$({ rg -n -e " 429" -e "error: 429" -e "URL returned error: 429" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
+rate_limit_hits="$({ rg -n -e " 429" -e "error: 429" -e "URL returned error: 429" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; rg -n -e '"http_code":"429"' "$RUN_DIR/workers" -g '*.jsonl' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 ownership_acl_hits="$({ rg -n -e "owner required" -e "contributor or owner required" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 shim_transport_hits="$({ rg -n -e "MCP startup incomplete" -e "timed out handshaking" -e "timed out after" -e "unexpected status code" -e "Connection refused" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' -g '*.txt' 2>/dev/null || true; } | wc -l | tr -d ' ')"
 api_5xx_hits="$({ rg -n -e "HTTP 5[0-9][0-9]" "$RUN_DIR/workers" -g '*.stderr' -g '*.log' 2>/dev/null || true; } | wc -l | tr -d ' ')"
@@ -377,7 +379,7 @@ playbook_results_file="$RUN_DIR/playbook-results.jsonl"
   | sed 's/^.*PLAYBOOK_RESULT_JSON=//' > "$playbook_results_file"
 
 diag_startup_samples="$(collect_log_samples 'MCP startup incomplete|timed out handshaking|timed out after|unexpected status code|Connection refused')"
-diag_rate_limit_samples="$(collect_log_samples ' 429|error: 429|URL returned error: 429|too many requests')"
+diag_rate_limit_samples="$(collect_log_samples ' 429|error: 429|URL returned error: 429|too many requests|http_code.*429')"
 diag_auth_samples="$(collect_log_samples 'MC_TOKEN is required|Forbidden|Unauthorized')"
 diag_ownership_samples="$(collect_log_samples 'owner required|contributor or owner required')"
 diag_shim_samples="$(collect_log_samples 'MCP startup incomplete|timed out handshaking|timed out after|unexpected status code|Connection refused')"
@@ -483,7 +485,7 @@ fi
 if [[ "$(jq -r '.end_state.task_counts_match' "$RUN_DIR/summary.json")" != "true" ]]; then
   pass=false
 fi
-if [[ "$MODE" == "playbook" ]] && [[ "$(jq -r '.end_state.all_cleanup_succeeded' "$RUN_DIR/summary.json")" != "true" ]]; then
+if [[ "$MODE" == "playbook" ]] && [[ "$PLAYBOOK_SKIP_CLEANUP" != "1" ]] && [[ "$(jq -r '.end_state.all_cleanup_succeeded' "$RUN_DIR/summary.json")" != "true" ]]; then
   pass=false
 fi
 if [[ "$MODE" == "playbook" ]] && [[ "$(jq -r '.end_state.playbook_results_count' "$RUN_DIR/summary.json")" -eq 0 ]]; then

@@ -6,6 +6,7 @@ TOKEN="${MC_TOKEN:-}"
 ACTOR="${MC_PLAYBOOK_ACTOR:-token-client}"
 RUN_ID="${MC_PLAYBOOK_RUN_ID:-$(date +%Y%m%d%H%M%S)}"
 SCENARIO_FILE="${MC_PLAYBOOK_SCENARIO_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/pressure-scenarios/reliability-trio.json}"
+SKIP_CLEANUP="${MC_PLAYBOOK_SKIP_CLEANUP:-0}"
 
 if [[ -z "$TOKEN" ]]; then
   echo "MC_TOKEN is required" >&2
@@ -103,25 +104,33 @@ kluster_name="mcp-playbook-kluster-${RUN_ID}"
 scenario_name="$(jq -r '.name // "reliability-trio"' "$SCENARIO_FILE")"
 scenario_version="$(jq -r '.version // "1.0.0"' "$SCENARIO_FILE")"
 expected_task_count="$(jq -r '.expected.task_count // 3' "$SCENARIO_FILE")"
+mission_desc="$(jq -r '.mission.description // "MCP validation mission"' "$SCENARIO_FILE")"
+kluster_desc="$(jq -r '.kluster.description // "MCP validation kluster"' "$SCENARIO_FILE")"
 
-echo "== MCP validation playbook run_id=${RUN_ID} base_url=${BASE_URL} scenario=${scenario_name}"
+echo "== MCP validation playbook run_id=${RUN_ID} base_url=${BASE_URL} scenario=${scenario_name} skip_cleanup=${SKIP_CLEANUP}"
 
-create_mission_resp="$(mcp_call create_mission "$(jq -cn --arg name "$mission_name" --arg owners "$ACTOR" '{name:$name,owners:$owners,description:"MCP validation mission"}')")"
+create_mission_resp="$(mcp_call create_mission "$(jq -cn --arg name "$mission_name" --arg owners "$ACTOR" --arg description "$mission_desc" '{name:$name,owners:$owners,description:$description}')")"
 assert_ok "create_mission" "$create_mission_resp"
 mission_id="$(jq -r '.result.mission.id' <<<"$create_mission_resp")"
 echo "mission_id=${mission_id}"
 
-create_kluster_resp="$(mcp_call create_kluster "$(jq -cn --arg mission_id "$mission_id" --arg name "$kluster_name" --arg owners "$ACTOR" '{mission_id:$mission_id,name:$name,owners:$owners,description:"MCP validation kluster"}')")"
+create_kluster_resp="$(mcp_call create_kluster "$(jq -cn --arg mission_id "$mission_id" --arg name "$kluster_name" --arg owners "$ACTOR" --arg description "$kluster_desc" '{mission_id:$mission_id,name:$name,owners:$owners,description:$description}')")"
 assert_ok "create_kluster" "$create_kluster_resp"
 kluster_id="$(jq -r '.result.kluster.id' <<<"$create_kluster_resp")"
 echo "kluster_id=${kluster_id}"
 
 declare -a task_ids=()
-while IFS=$'\t' read -r title description; do
+while IFS=$'\t' read -r title description status; do
   create_task_resp="$(mcp_call create_task "$(jq -cn --arg kluster_id "$kluster_id" --arg title "$title" --arg owner "$ACTOR" --arg description "$description" '{kluster_id:$kluster_id,title:$title,description:$description,owner:$owner}')")"
   assert_ok "create_task:${title}" "$create_task_resp"
-  task_ids+=("$(jq -r '.result.task.id' <<<"$create_task_resp")")
-done < <(jq -r '.tasks[] | [.title, (.description // "")] | @tsv' "$SCENARIO_FILE")
+  tid="$(jq -r '.result.task.id' <<<"$create_task_resp")"
+  task_ids+=("$tid")
+  # Apply status if not default
+  if [[ -n "$status" && "$status" != "todo" && "$status" != "null" ]]; then
+    mcp_call update_task "$(jq -cn --arg task_id "$tid" --arg status "$status" '{task_id:$task_id,status:$status}')" >/dev/null
+    echo "[OK] set_task_status:${title} → ${status}"
+  fi
+done < <(jq -r '.tasks[] | [.title, (.description // ""), (.status // "todo")] | @tsv' "$SCENARIO_FILE")
 echo "task_ids=${task_ids[*]}"
 
 list_tasks_resp="$(mcp_call list_tasks "$(jq -cn --arg kluster_id "$kluster_id" '{kluster_id:$kluster_id}')")"
@@ -132,24 +141,48 @@ if [[ "$actual_task_count" -lt "$expected_task_count" ]]; then
   exit 1
 fi
 
-update_task_resp="$(mcp_call update_task "$(jq -cn --arg task_id "${task_ids[0]}" '{task_id:$task_id,status:"in_progress",description:"updated by playbook"}')")"
+update_task_resp="$(mcp_call update_task "$(jq -cn --arg task_id "${task_ids[0]}" '{task_id:$task_id,status:"in_progress"}')")"
 assert_ok "update_task" "$update_task_resp"
 
-create_doc_resp="$(mcp_call create_doc "$(jq -cn --arg kluster_id "$kluster_id" '{kluster_id:$kluster_id,title:"playbook-doc",body:"# playbook\ndoc body",doc_type:"narrative"}')")"
-assert_ok "create_doc" "$create_doc_resp"
-doc_id="$(jq -r '.result.doc.id' <<<"$create_doc_resp")"
-echo "doc_id=${doc_id}"
+# Create docs from scenario (falls back to a single default doc if none defined)
+declare -a doc_ids=()
+doc_count="$(jq '.docs | length // 0' "$SCENARIO_FILE")"
+if [[ "$doc_count" -gt 0 ]]; then
+  while IFS=$'\t' read -r title doc_type body; do
+    create_doc_resp="$(mcp_call create_doc "$(jq -cn --arg kluster_id "$kluster_id" --arg title "$title" --arg doc_type "$doc_type" --arg body "$body" '{kluster_id:$kluster_id,title:$title,doc_type:$doc_type,body:$body,status:"draft"}')")"
+    assert_ok "create_doc:${title}" "$create_doc_resp"
+    doc_ids+=("$(jq -r '.result.doc.id' <<<"$create_doc_resp")")
+    echo "doc_id=${doc_ids[-1]} type=${doc_type}"
+  done < <(jq -r '.docs[] | [.title, (.doc_type // "narrative"), (.body // "# doc")] | @tsv' "$SCENARIO_FILE")
+else
+  create_doc_resp="$(mcp_call create_doc "$(jq -cn --arg kluster_id "$kluster_id" '{kluster_id:$kluster_id,title:"playbook-doc",body:"# playbook\ndoc body",doc_type:"narrative",status:"draft"}')")"
+  assert_ok "create_doc" "$create_doc_resp"
+  doc_ids+=("$(jq -r '.result.doc.id' <<<"$create_doc_resp")")
+  echo "doc_id=${doc_ids[0]}"
+fi
+doc_id="${doc_ids[0]}"
 
-doc_patch_resp="$(api_call PATCH "/docs/${doc_id}" '{"status":"review","body":"# playbook\nupdated body"}')"
-echo "[OK] update_doc_api status=$(jq -r '.status' <<<"$doc_patch_resp")"
-
-create_artifact_resp="$(mcp_call create_artifact "$(jq -cn --arg kluster_id "$kluster_id" '{kluster_id:$kluster_id,name:"playbook-artifact",artifact_type:"file",uri:"https://example.com/playbook",status:"draft"}')")"
-assert_ok "create_artifact" "$create_artifact_resp"
-artifact_id="$(jq -r '.result.artifact.id' <<<"$create_artifact_resp")"
-echo "artifact_id=${artifact_id}"
-
-artifact_patch_resp="$(api_call PATCH "/artifacts/${artifact_id}" '{"status":"review"}')"
-echo "[OK] update_artifact_api status=$(jq -r '.status' <<<"$artifact_patch_resp")"
+# Create artifacts from scenario (falls back to a single default if none defined)
+declare -a artifact_ids=()
+artifact_count="$(jq '.artifacts | length // 0' "$SCENARIO_FILE")"
+if [[ "$artifact_count" -gt 0 ]]; then
+  while IFS=$'\t' read -r name artifact_type uri mime_type provenance; do
+    create_artifact_resp="$(mcp_call create_artifact "$(jq -cn \
+      --arg kluster_id "$kluster_id" --arg name "$name" \
+      --arg artifact_type "$artifact_type" --arg uri "$uri" \
+      --arg mime_type "$mime_type" --arg provenance "$provenance" \
+      '{kluster_id:$kluster_id,name:$name,artifact_type:$artifact_type,uri:$uri,mime_type:$mime_type,provenance:$provenance,status:"draft"}')")"
+    assert_ok "create_artifact:${name}" "$create_artifact_resp"
+    artifact_ids+=("$(jq -r '.result.artifact.id' <<<"$create_artifact_resp")")
+    echo "artifact_id=${artifact_ids[-1]} type=${artifact_type}"
+  done < <(jq -r '.artifacts[] | [.name, (.artifact_type // "file"), (.uri // ""), (.mime_type // ""), (.provenance // "")] | @tsv' "$SCENARIO_FILE")
+else
+  create_artifact_resp="$(mcp_call create_artifact "$(jq -cn --arg kluster_id "$kluster_id" '{kluster_id:$kluster_id,name:"playbook-artifact",artifact_type:"file",uri:"https://example.com/playbook",status:"draft"}')")"
+  assert_ok "create_artifact" "$create_artifact_resp"
+  artifact_ids+=("$(jq -r '.result.artifact.id' <<<"$create_artifact_resp")")
+  echo "artifact_id=${artifact_ids[0]}"
+fi
+artifact_id="${artifact_ids[0]}"
 
 load_ws_resp="$(mcp_call load_kluster_workspace "$(jq -cn --arg kluster_id "$kluster_id" '{kluster_id:$kluster_id}')")"
 assert_ok "load_kluster_workspace" "$load_ws_resp"
@@ -162,38 +195,49 @@ fi
 release_ws_resp="$(mcp_call release_kluster_workspace "$(jq -cn --arg lease_id "$lease_id" '{lease_id:$lease_id,reason:"playbook done"}')")"
 assert_ok "release_kluster_workspace" "$release_ws_resp"
 
-for task_id in "${task_ids[@]}"; do
-  delete_task_resp="$(mcp_call delete_task "$(jq -cn --arg task_id "$task_id" '{task_id:$task_id}')")"
-  assert_ok "delete_task:${task_id}" "$delete_task_resp"
-done
-
-echo "== Cleanup attempt"
-delete_doc_resp="$(api_call DELETE "/docs/${doc_id}")"
-echo "[OK] delete_doc_api id=$(jq -r '.deleted_id // empty' <<<"$delete_doc_resp")"
-
-delete_artifact_resp="$(api_call DELETE "/artifacts/${artifact_id}")"
-echo "[OK] delete_artifact_api id=$(jq -r '.deleted_id // empty' <<<"$delete_artifact_resp")"
-
-cleanup_err_file="$(mktemp)"
-set +e
-delete_kluster_resp="$(api_call DELETE "/missions/${mission_id}/k/${kluster_id}" 2>"$cleanup_err_file")"
-cleanup_rc=$?
-set -e
 kluster_deleted=false
 mission_deleted=false
-if [[ $cleanup_rc -eq 0 ]]; then
-  echo "[OK] delete_kluster"
-  kluster_deleted=true
-  api_call DELETE "/missions/${mission_id}" >/dev/null
-  echo "[OK] delete_mission"
-  mission_deleted=true
+
+if [[ "$SKIP_CLEANUP" == "1" ]]; then
+  echo "== Cleanup skipped (MC_PLAYBOOK_SKIP_CLEANUP=1) — objects preserved for review"
 else
-  echo "[WARN] cleanup blocked"
-  echo "[WARN] delete_kluster stderr: $(tr '\n' ' ' <"$cleanup_err_file")"
+  for task_id in "${task_ids[@]}"; do
+    delete_task_resp="$(mcp_call delete_task "$(jq -cn --arg task_id "$task_id" '{task_id:$task_id}')")"
+    assert_ok "delete_task:${task_id}" "$delete_task_resp"
+  done
+
+  echo "== Cleanup attempt"
+  for did in "${doc_ids[@]}"; do
+    delete_doc_resp="$(api_call DELETE "/docs/${did}")"
+    echo "[OK] delete_doc_api id=$(jq -r '.deleted_id // empty' <<<"$delete_doc_resp")"
+  done
+
+  for aid in "${artifact_ids[@]}"; do
+    delete_artifact_resp="$(api_call DELETE "/artifacts/${aid}")"
+    echo "[OK] delete_artifact_api id=$(jq -r '.deleted_id // empty' <<<"$delete_artifact_resp")"
+  done
+
+  cleanup_err_file="$(mktemp)"
+  set +e
+  delete_kluster_resp="$(api_call DELETE "/missions/${mission_id}/k/${kluster_id}" 2>"$cleanup_err_file")"
+  cleanup_rc=$?
+  set -e
+  if [[ $cleanup_rc -eq 0 ]]; then
+    echo "[OK] delete_kluster"
+    kluster_deleted=true
+    api_call DELETE "/missions/${mission_id}" >/dev/null
+    echo "[OK] delete_mission"
+    mission_deleted=true
+  else
+    echo "[WARN] cleanup blocked"
+    echo "[WARN] delete_kluster stderr: $(tr '\n' ' ' <"$cleanup_err_file")"
+  fi
+  rm -f "$cleanup_err_file"
 fi
-rm -f "$cleanup_err_file"
 
 task_id_csv="$(IFS=,; echo "${task_ids[*]}")"
+doc_id_csv="$(IFS=,; echo "${doc_ids[*]}")"
+artifact_id_csv="$(IFS=,; echo "${artifact_ids[*]}")"
 result_json="$(
   jq -cn \
     --arg run_id "$RUN_ID" \
@@ -203,6 +247,8 @@ result_json="$(
     --arg kluster_id "$kluster_id" \
     --arg doc_id "$doc_id" \
     --arg artifact_id "$artifact_id" \
+    --arg doc_ids_csv "$doc_id_csv" \
+    --arg artifact_ids_csv "$artifact_id_csv" \
     --arg task_ids_csv "$task_id_csv" \
     --argjson expected_task_count "$expected_task_count" \
     --argjson actual_task_count "$actual_task_count" \
@@ -216,6 +262,8 @@ result_json="$(
       kluster_id:$kluster_id,
       doc_id:$doc_id,
       artifact_id:$artifact_id,
+      doc_ids: ($doc_ids_csv | split(",") | map(select(length > 0))),
+      artifact_ids: ($artifact_ids_csv | split(",") | map(select(length > 0))),
       task_ids: ($task_ids_csv | split(",") | map(select(length > 0))),
       expected_task_count:$expected_task_count,
       actual_task_count:$actual_task_count,
@@ -228,10 +276,9 @@ cat <<EOF
 run_id=${RUN_ID}
 mission_id=${mission_id}
 kluster_id=${kluster_id}
-doc_id=${doc_id}
-artifact_id=${artifact_id}
+doc_ids=${doc_id_csv}
+artifact_ids=${artifact_id_csv}
 task_ids=${task_id_csv}
 scenario=${scenario_name}
-notes=playbook now performs explicit doc/artifact delete before kluster delete
 PLAYBOOK_RESULT_JSON=${result_json}
 EOF

@@ -25,7 +25,7 @@ class MissionCreate(BaseModel):
     owners: str = ""
     contributors: str = ""
     tags: str = ""
-    visibility: str = "internal"
+    visibility: str = "public"
     status: str = "active"
 
 

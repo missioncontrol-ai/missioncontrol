@@ -1383,6 +1383,20 @@ fn exec_agent(
         cmd.env("MC_TOKEN", token);
     }
     cmd.env("HOME", agent_home);
+
+    // Claude Code checks that $HOME/.local/bin is in PATH to confirm its install
+    // method. Since we override HOME to the isolated instance home, prepend the
+    // instance's .local/bin so that check passes.
+    let instance_local_bin = agent_home.join(".local").join("bin");
+    if let Some(current_path) = std::env::var_os("PATH") {
+        let new_path = std::env::join_paths(
+            std::iter::once(instance_local_bin.clone())
+                .chain(std::env::split_paths(&current_path)),
+        )
+        .unwrap_or(current_path);
+        cmd.env("PATH", new_path);
+    }
+
     cmd.env("MC_HOME", instance_mc_home);
     cmd.env("MC_RUNTIME_SESSION_ID", runtime_session_id);
     cmd.env("MC_INSTANCE_HOME", instance_home);

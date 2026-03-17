@@ -1890,7 +1890,7 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 "owners": str(args.get("owners") or ""),
                 "contributors": str(args.get("contributors") or ""),
                 "tags": str(args.get("tags") or ""),
-                "visibility": str(args.get("visibility") or "internal"),
+                "visibility": str(args.get("visibility") or "public"),
                 "status": str(args.get("status") or "active"),
             }
             try:
