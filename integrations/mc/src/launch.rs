@@ -837,6 +837,12 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         claude_preflight_report(&agent_home);
     }
 
+    // 7b. MCP connectivity preflight — verify backend is reachable and tools
+    //     are available before handing off to the agent. A failure here is
+    //     non-fatal (warn only): the MCP server's retry loop will recover if
+    //     the backend comes up after the agent starts.
+    mcp_connectivity_preflight(effective_client).await;
+
     // 8. Exec the agent (replaces the current process on Unix).
     //    Always inject MC_TOKEN into the agent environment so the MCP shim can
     //    authenticate even when the token was NOT embedded in the config file.
@@ -912,6 +918,45 @@ fn codex_preflight_report(agent_home: &Path) {
         mc_warn!("codex preflight: {}", line);
     }
     mc_warn!("codex may prompt for login if auth artifacts are not initialized for this profile");
+}
+
+/// Verify MCP backend connectivity and tool availability before exec.
+///
+/// Non-fatal: prints status either way. The MCP server's retry loop handles
+/// recovery if the backend is temporarily unavailable at agent start time.
+async fn mcp_connectivity_preflight(client: &MissionControlClient) {
+    // Health check.
+    match client.get_json("/mcp/health").await {
+        Err(e) => {
+            mc_warn!("MCP preflight: backend unreachable ({})", e);
+            mc_warn!("MCP preflight: tools will load once backend is available (retry loop active)");
+            return;
+        }
+        Ok(_) => {}
+    }
+
+    // Tools count.
+    match client.get_json("/mcp/tools").await {
+        Ok(resp) => {
+            let count = match &resp {
+                serde_json::Value::Array(arr) => arr.len(),
+                serde_json::Value::Object(obj) => obj
+                    .get("tools")
+                    .and_then(|t| t.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0),
+                _ => 0,
+            };
+            if count > 0 {
+                mc_ok!("MCP preflight: backend reachable, {} tools available", count);
+            } else {
+                mc_warn!("MCP preflight: backend reachable but returned 0 tools");
+            }
+        }
+        Err(e) => {
+            mc_warn!("MCP preflight: tools fetch failed ({})", e);
+        }
+    }
 }
 
 /// Determine whether to embed `MC_TOKEN` into the written agent config.

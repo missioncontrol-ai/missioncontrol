@@ -2,6 +2,26 @@ use crate::{booster::AgentBooster, client::MissionControlClient, schema_pack::Sc
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
+/// Fetch the raw tools list from the backend's /mcp/tools endpoint.
+/// Shared by the MCP server cache and background warm-up.
+pub async fn fetch_tools_from_backend(client: &MissionControlClient) -> Result<Vec<Value>> {
+    let response = client
+        .get_json("/mcp/tools")
+        .await
+        .context("failed to fetch tools from backend")?;
+
+    let tools: Vec<Value> = match response {
+        Value::Array(arr) => arr,
+        Value::Object(ref obj) => obj
+            .get("tools")
+            .and_then(|t| t.as_array())
+            .cloned()
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    Ok(tools)
+}
+
 pub async fn call_tool(
     client: &MissionControlClient,
     booster: Option<&AgentBooster>,

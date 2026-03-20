@@ -235,8 +235,19 @@ TOOLS = [
         },
     ),
     MCPTool(
+        name="claim_task",
+        description="Atomically claim a proposed task. Sets status to in_progress and assigns ownership to the caller. Returns conflict if the task is already claimed by another agent.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    ),
+    MCPTool(
         name="update_task",
-        description="Update a task by id",
+        description="Update a task by id. Pass expected_status to guard against concurrent overwrites (returns conflict if current status differs).",
         input_schema={
             "type": "object",
             "properties": {
@@ -249,6 +260,7 @@ TOOLS = [
                 "dependencies": {"type": "string"},
                 "definition_of_done": {"type": "string"},
                 "related_artifacts": {"type": "string"},
+                "expected_status": {"type": "string", "description": "If provided, the update fails with conflict if the task's current status does not match."},
             },
         },
     ),
@@ -1454,6 +1466,60 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 ),
             )
 
+        if tool == "claim_task":
+            gated = ensure_action("task.update")
+            if gated:
+                return gated
+            task_ref = str(args.get("task_id") or "")
+            if not task_ref:
+                return _mcp_error(request_id=request_id, error="task_id is required", error_code="invalid_request")
+            task = resolve_task_by_ref(session=session, task_ref=task_ref)
+            if not task:
+                return _mcp_error(request_id=request_id, error="Task not found", error_code="not_found")
+            kluster = session.get(Kluster, task.kluster_id)
+            if kluster and kluster.mission_id:
+                try:
+                    assert_mission_writer_or_admin(session=session, request=request, mission_id=kluster.mission_id)
+                except HTTPException as exc:
+                    return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
+            # Atomic claim: only succeed if task is proposed, or already owned by this actor
+            if task.status != "proposed":
+                if task.owner and task.owner != actor_subject:
+                    return _mcp_error(
+                        request_id=request_id,
+                        error=f"Task is already claimed (status={task.status}, owner={task.owner})",
+                        error_code="conflict",
+                        result={"current_status": task.status, "current_owner": task.owner},
+                    )
+            before = task.dict()
+            task.status = "in_progress"
+            task.owner = actor_subject
+            task.updated_at = datetime.utcnow()
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+            enqueue_ledger_event(
+                session=session,
+                mission_id=kluster.mission_id if kluster else None,
+                kluster_id=task.kluster_id,
+                entity_type="task",
+                entity_id=task.public_id or str(task.id),
+                action="claim",
+                before=before,
+                after=task.dict(),
+                actor_subject=actor_subject,
+                source=source,
+            )
+            return _mcp_ok(
+                request_id=request_id,
+                result=_mutation_result_with_ledger(
+                    session=session,
+                    mission_id=kluster.mission_id if kluster else None,
+                    payload={"task": task_to_public_dict(task)},
+                    approval_trace=None,
+                ),
+            )
+
         if tool == "update_task":
             gated = ensure_action("task.update")
             if gated:
@@ -1462,6 +1528,15 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             task = resolve_task_by_ref(session=session, task_ref=task_ref)
             if not task:
                 return _mcp_error(request_id=request_id, error="Task not found", error_code="not_found")
+            # Optimistic locking: if expected_status is provided, reject if current status differs
+            expected_status = args.get("expected_status")
+            if expected_status is not None and task.status != expected_status:
+                return _mcp_error(
+                    request_id=request_id,
+                    error=f"Task status conflict: expected '{expected_status}' but current status is '{task.status}'",
+                    error_code="conflict",
+                    result={"current_status": task.status, "expected_status": expected_status},
+                )
             before = task.dict()
             kluster = session.get(Kluster, task.kluster_id)
             if kluster and kluster.mission_id:
@@ -1469,6 +1544,16 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     assert_mission_writer_or_admin(session=session, request=request, mission_id=kluster.mission_id)
                 except HTTPException as exc:
                     return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
+            # Owner guard: status transitions require ownership (unless admin or task is unowned)
+            new_status = args.get("status")
+            if new_status and new_status != task.status and task.owner and task.owner != actor_subject:
+                if not is_platform_admin(request):
+                    return _mcp_error(
+                        request_id=request_id,
+                        error=f"Task is owned by '{task.owner}'; only the owner can change its status",
+                        error_code="forbidden",
+                        result={"current_owner": task.owner},
+                    )
             allowed_fields = {
                 "title",
                 "description",

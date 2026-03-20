@@ -8,6 +8,7 @@ class McpToolsCatalogTests(unittest.TestCase):
         names = {tool.name for tool in TOOLS}
         self.assertIn("create_doc", names)
         self.assertIn("create_artifact", names)
+        self.assertIn("claim_task", names)
         self.assertIn("get_artifact_download_url", names)
         self.assertIn("load_kluster_workspace", names)
         self.assertIn("commit_kluster_workspace", names)

@@ -468,6 +468,8 @@ class UserSession(SQLModel, table=True):
     # Optional: user-agent string from the client that created the session
     user_agent: str = Field(default="")
     revoked: bool = Field(default=False, index=True)
+    # Optional: comma-separated capability restrictions for scoped tokens
+    capability_scope: str = Field(default="", sa_column=Column("capability_scope", Text))
 
 
 class EvolveMission(SQLModel, table=True):
@@ -575,3 +577,45 @@ class ScheduledAgentJob(SQLModel, table=True):
     last_session_id: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class RemoteTarget(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("owner_subject", "name", name="uq_remotetarget_owner_name"),)
+    id: str = Field(primary_key=True)
+    owner_subject: str = Field(index=True)
+    name: str = Field(index=True)
+    host: str
+    user: str = Field(default="")
+    port: int = Field(default=22)
+    transport: str = Field(default="ssh")   # "ssh" | "k8s"
+    ssh_pubkey: str = Field(default="", sa_column=Column(Text))
+    key_fingerprint: str = Field(default="")
+    last_used_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RemoteLaunchRecord(SQLModel, table=True):
+    id: str = Field(primary_key=True)
+    owner_subject: str = Field(index=True)
+    transport: str                               # "ssh" | "k8s"
+    target_id: Optional[str] = Field(default=None, index=True)
+    target_host: str = Field(default="")
+    target_namespace: str = Field(default="")
+    agent_kind: str
+    agent_profile: str = Field(default="")
+    runtime_session_id: str = Field(default="", index=True)
+    session_token_id: Optional[int] = Field(default=None)
+    capability_scope: str = Field(default="", sa_column=Column(Text))
+    status: str = Field(default="launching", index=True)
+    # "launching" | "running" | "heartbeat_lost" | "completed" | "failed"
+    last_heartbeat_at: Optional[datetime] = None
+    exit_code: Optional[int] = None
+    error_message: str = ""
+    log_tail: str = Field(default="", sa_column=Column(Text))
+    mc_binary_path: str = Field(default="")
+    agent_binary_path: str = Field(default="")
+    k8s_job_name: str = Field(default="")
+    mc_version: str = Field(default="")
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)

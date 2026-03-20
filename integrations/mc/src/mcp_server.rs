@@ -17,6 +17,20 @@
 //! - JSON-RPC 2.0 over stdio with Content-Length framing (same as LSP)
 //! - Protocol version: "2024-11-05"
 //! - Methods: initialize, initialized, tools/list, tools/call, ping
+//!
+//! ## Reliability design
+//!
+//! 1. Cache is warmed *synchronously* inside the `initialized` handler before
+//!    `notifications/tools/list_changed` is sent. This eliminates the race
+//!    where Claude Code calls `tools/list` before the (formerly background)
+//!    warm-up task completes.
+//!
+//! 2. If the backend is down at init time, a retry task runs with exponential
+//!    backoff. When tools become available it sends a fresh `listChanged`
+//!    notification through an mpsc channel that the main loop writes out.
+//!
+//! 3. `fetch_tools` returns an empty list on transient errors rather than
+//!    propagating them as JSON-RPC errors to the client.
 
 use crate::{client::MissionControlClient, mcp_stdio, mcp_tools};
 use anyhow::{Context, Result};
@@ -27,6 +41,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::io::BufReader;
+use tokio::sync::mpsc;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
@@ -97,41 +112,62 @@ pub async fn run(args: &ServeMcpArgs, client: &MissionControlClient) -> Result<(
     let cache = Arc::new(Mutex::new(ToolsCache::new(args.tools_cache_ttl)));
     let debug = args.debug_protocol;
 
+    // Channel for background tasks (retry warm-up) to push outbound notifications.
+    let (notif_tx, mut notif_rx) = mpsc::channel::<Value>(8);
+
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);
     let mut stdout = tokio::io::stdout();
 
+    // Track the framing format negotiated during the session (default CL).
+    let mut session_format = mcp_stdio::MessageFormat::ContentLength;
+
     loop {
-        // 1. Read either JSONL body or Content-Length framed body.
-        let (raw, format) = match mcp_stdio::read_next_message(&mut reader).await {
-            Ok(Some(msg)) => msg,
-            Ok(None) => break, // EOF — host closed the pipe
-            Err(e) => {
-                tracing::warn!("mcp_server: failed to read message: {}", e);
-                break;
+        tokio::select! {
+            // Outbound notifications sent by background retry task.
+            Some(notif) = notif_rx.recv() => {
+                let serialized = serde_json::to_string(&notif)?;
+                if debug {
+                    eprintln!("mc serve --> (bg) {}", serialized);
+                }
+                mcp_stdio::write_message(&mut stdout, &serialized, session_format).await?;
             }
-        };
-        if debug {
-            eprintln!("mc serve <-- {}", raw);
-        }
 
-        // 3. Parse and dispatch.
-        let response = match serde_json::from_str::<Value>(&raw) {
-            Ok(msg) => dispatch(msg, client, &cache).await,
-            Err(e) => Some(error_response(
-                Value::Null,
-                -32700,
-                &format!("parse error: {}", e),
-            )),
-        };
+            // Inbound messages from the agent host.
+            result = mcp_stdio::read_next_message(&mut reader) => {
+                let (raw, format) = match result {
+                    Ok(Some(msg)) => msg,
+                    Ok(None) => break, // EOF — host closed the pipe
+                    Err(e) => {
+                        tracing::warn!("mcp_server: failed to read message: {}", e);
+                        break;
+                    }
+                };
 
-        // 4. Notifications produce no response; everything else is framed and flushed.
-        if let Some(resp) = response {
-            let serialized = serde_json::to_string(&resp)?;
-            if debug {
-                eprintln!("mc serve --> {}", serialized);
+                // Remember framing format for outbound notifications.
+                session_format = format;
+
+                if debug {
+                    eprintln!("mc serve <-- {}", raw);
+                }
+
+                let response = match serde_json::from_str::<Value>(&raw) {
+                    Ok(msg) => dispatch(msg, client, &cache, &notif_tx).await,
+                    Err(e) => Some(error_response(
+                        Value::Null,
+                        -32700,
+                        &format!("parse error: {}", e),
+                    )),
+                };
+
+                if let Some(resp) = response {
+                    let serialized = serde_json::to_string(&resp)?;
+                    if debug {
+                        eprintln!("mc serve --> {}", serialized);
+                    }
+                    mcp_stdio::write_message(&mut stdout, &serialized, format).await?;
+                }
             }
-            mcp_stdio::write_message(&mut stdout, &serialized, format).await?;
         }
     }
 
@@ -144,6 +180,7 @@ async fn dispatch(
     msg: Value,
     client: &MissionControlClient,
     cache: &Arc<Mutex<ToolsCache>>,
+    notif_tx: &mpsc::Sender<Value>,
 ) -> Option<Value> {
     let id = msg.get("id").cloned().unwrap_or(Value::Null);
     let method = msg
@@ -166,7 +203,7 @@ async fn dispatch(
                 "result": {
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {
-                        "tools": {}
+                        "tools": { "listChanged": true }
                     },
                     "serverInfo": {
                         "name": "missioncontrol",
@@ -176,8 +213,88 @@ async fn dispatch(
             }))
         }
 
-        // No-op notifications.
-        "initialized" | "notifications/initialized" | "notifications/cancelled" => None,
+        // After the client acknowledges initialization:
+        // 1. Warm the cache synchronously so tools/list hits cache on first call.
+        // 2. If warm fails (backend down), spawn a retry task that will send
+        //    another listChanged once the backend becomes available.
+        // 3. Send listChanged to trigger the client to call tools/list.
+        "initialized" | "notifications/initialized" => {
+            let warmed = match crate::mcp_tools::fetch_tools_from_backend(client).await {
+                Ok(tools) if !tools.is_empty() => {
+                    let count = tools.len();
+                    let mut c = cache.lock().unwrap();
+                    c.set(tools);
+                    tracing::debug!("mcp_server: cache warmed ({} tools)", count);
+                    true
+                }
+                Ok(_) => {
+                    tracing::warn!("mcp_server: backend returned 0 tools at init; will retry");
+                    false
+                }
+                Err(e) => {
+                    tracing::warn!("mcp_server: cache warm failed: {}; will retry", e);
+                    false
+                }
+            };
+
+            // If warm failed, kick off a background retry with exponential backoff.
+            // The retry task sends a fresh listChanged through the channel when
+            // tools become available, prompting Claude Code to re-fetch the list.
+            if !warmed {
+                let client_clone = client.clone();
+                let cache_clone = Arc::clone(cache);
+                let tx = notif_tx.clone();
+                tokio::spawn(async move {
+                    let mut delay = Duration::from_secs(2);
+                    for attempt in 1..=6u32 {
+                        tokio::time::sleep(delay).await;
+                        tracing::debug!("mcp_server: retry warm attempt {}", attempt);
+                        match crate::mcp_tools::fetch_tools_from_backend(&client_clone).await {
+                            Ok(tools) if !tools.is_empty() => {
+                                let count = tools.len();
+                                {
+                                    let mut c = cache_clone.lock().unwrap();
+                                    c.set(tools);
+                                }
+                                tracing::info!(
+                                    "mcp_server: retry warm succeeded ({} tools); sending listChanged",
+                                    count
+                                );
+                                let _ = tx
+                                    .send(json!({
+                                        "jsonrpc": "2.0",
+                                        "method": "notifications/tools/list_changed",
+                                        "params": {}
+                                    }))
+                                    .await;
+                                return;
+                            }
+                            Ok(_) => {
+                                tracing::warn!("mcp_server: retry {}: 0 tools", attempt);
+                            }
+                            Err(e) => {
+                                tracing::warn!("mcp_server: retry {}: {}", attempt, e);
+                            }
+                        }
+                        delay = (delay * 2).min(Duration::from_secs(30));
+                    }
+                    tracing::error!(
+                        "mcp_server: all retry attempts exhausted; tools unavailable"
+                    );
+                });
+            }
+
+            // Always send listChanged immediately. If warm succeeded, tools/list
+            // will hit the hot cache. If not, the retry task will send another
+            // listChanged later when the backend is ready.
+            Some(json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/tools/list_changed",
+                "params": {}
+            }))
+        }
+
+        "notifications/cancelled" => None,
 
         "tools/list" => match fetch_tools(client, cache).await {
             Ok(tools) => Some(json!({
@@ -256,30 +373,21 @@ async fn fetch_tools(
         }
     }
 
-    // Cache miss — fetch from backend.
-    let response = client
-        .get_json("/mcp/tools")
-        .await
-        .context("failed to fetch tools from backend")?;
-
-    let tools: Vec<Value> = match response {
-        Value::Array(arr) => arr,
-        Value::Object(ref obj) => {
-            // Backend may wrap the list: {"tools": [...]}
-            obj.get("tools")
-                .and_then(|t| t.as_array())
-                .cloned()
-                .unwrap_or_default()
+    // Cache miss — fetch from backend. Return empty list on transient failures
+    // rather than propagating the error, which would cause Claude Code to see
+    // a JSON-RPC error instead of an empty tool list. The retry task (spawned
+    // during initialized) will send a fresh listChanged when ready.
+    match mcp_tools::fetch_tools_from_backend(client).await {
+        Ok(tools) => {
+            let mut c = cache.lock().unwrap();
+            c.set(tools.clone());
+            Ok(tools)
         }
-        _ => Vec::new(),
-    };
-
-    {
-        let mut c = cache.lock().unwrap();
-        c.set(tools.clone());
+        Err(e) => {
+            tracing::warn!("mcp_server: fetch_tools error: {}; returning empty list", e);
+            Ok(Vec::new())
+        }
     }
-
-    Ok(tools)
 }
 
 // ── I/O helpers ───────────────────────────────────────────────────────────────

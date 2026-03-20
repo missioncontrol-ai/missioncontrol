@@ -1,6 +1,6 @@
 # MCP Parity Matrix
 
-Updated: `2026-03-15`
+Updated: `2026-03-20`
 Owner: `merlin`
 
 This matrix tracks parity between core REST operations and MCP tools. The MCP path is the primary integration boundary for agents.
@@ -33,14 +33,14 @@ This matrix tracks parity between core REST operations and MCP tools. The MCP pa
 
 | Area | Status | Remaining |
 | --- | --- | --- |
-| Error envelope consistency | Partial | Normalize tool error codes/envelope + compatibility tests (`MC-MCP-005`). |
-| Mutation idempotency/replay safety | Partial | Add deterministic/idempotent behavior and replay coverage (`MC-MCP-007`). |
+| Error envelope consistency | **Done** | 50+ tool sites normalized; 13 error codes; request_id propagation + `x-request-id` header; 16+ envelope assertions across test suite. Completed 2026-03-15. |
+| Mutation idempotency/replay safety | **Done** | `claim_task` tool (atomic `proposed→in_progress`, `conflict` if already owned); `expected_status` optimistic lock on `update_task`; owner guard blocks status transitions by non-owners. 11 new tests. Completed 2026-03-20. |
 | Security adversarial regression coverage | Partial | Expand cross-mission/authz/tamper tests (`MC-MCP-012`). |
 | Doctor operational diagnostics | Partial | Expand connectivity/auth/tool-surface/snapshot categories in doctor (`MC-MCP-011`). |
 
 ## Immediate implementation sequence
 
-1. `MC-MCP-005`: standardize MCP response/error envelope and compatibility tests.
-2. `MC-MCP-007`: add mutation idempotency + replay-safety coverage on critical writes.
+1. ~~`MC-MCP-005`: standardize MCP response/error envelope and compatibility tests.~~ **Done.**
+2. ~~`MC-MCP-007`: add mutation idempotency + replay-safety coverage on critical writes.~~ **Done.**
 3. `MC-MCP-012`: complete adversarial security regression suite for MCP critical path.
 4. `MC-MCP-013`: enforce release gate on parity/security/doctor/E2E checks.

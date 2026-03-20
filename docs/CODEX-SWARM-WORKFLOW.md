@@ -66,12 +66,47 @@ Recommended role split:
 
 ## 3) Collaboration protocol
 
-- Claim: update task status to `in_progress` + ownership note.
+- Claim: update task status to `in_progress` + ownership note **before doing any work**.
 - Work: append concrete findings/changes (not generic notes).
 - Handoff: if blocked, set `blocked` + explicit unblock requirement.
 - Complete: set `done` + short outcome summary.
 
 Keep writes intentional; do not spam status flaps.
+
+### Task coordination: avoid double-claiming
+
+There is currently **no server-side atomic claim** on tasks. Two agents can both call `update_task` on the same task ID without conflict — the last write wins. This is a known gap (see [Known coordination gap](#known-coordination-gap) below).
+
+Safe claim pattern until a `claim_task` tool exists:
+
+1. Call `list_tasks` and filter for `status == "proposed"`.
+2. Pick the task you intend to claim and **immediately** call `update_task` setting `status: in_progress` and `owner: <agent_id>`.
+3. Re-read the task and verify `owner` matches your agent ID before proceeding. If another agent claimed it first, pick a different task.
+
+For scripted/parallel launches, assign task IDs explicitly per session using `MC_COLLAB_TASK_ID` or equivalent env vars rather than relying on agents to self-coordinate from `list_tasks`.
+
+## Known coordination gap
+
+**Problem:** `update_task` is protected by mission-level write authz but has no per-task ownership lock or optimistic concurrency check. Multiple agents targeting the same kluster can silently overwrite each other's status transitions.
+
+**Observed in swarm run `20260320050257`:** sessions B and C both claimed task `58a0b952a9b9` — B moved it to `done`, then C overwrote the description (still `done`, so outcome was harmless but work was duplicated).
+
+**Implications for real workloads:**
+
+| Scenario | Risk | Severity |
+|----------|------|----------|
+| Two agents claim same task | Duplicate work, one agent's description overwritten | Medium |
+| Agent A sets `done`, agent B sets `in_progress` (race) | Task appears regressed; ledger shows false state transition | High |
+| Agent writes stale `owner` field after another agent claimed | Ownership tracking corrupted | Medium |
+| High-frequency concurrent writes to same task | Last-write-wins; intermediate states lost from ledger | High |
+
+**What's needed (tracked under MC-MCP-007 idempotency work):**
+
+- `claim_task` MCP tool: atomic `proposed → in_progress` transition that fails if the task is already owned — backend enforces with a DB-level check on `(status == proposed OR owner == requester)`.
+- Optimistic locking on `update_task`: accept an optional `expected_status` or `version` field; return `error_code: conflict` if current state doesn't match.
+- Owner guard: `update_task` should reject status transitions from agents that don't own the task (unless platform admin or mission owner).
+
+Until these are in place, coordinate task assignment out-of-band (pre-assigned IDs per session) for any workload where correctness matters.
 
 ## 4) Acceptance criteria
 
