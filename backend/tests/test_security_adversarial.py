@@ -39,7 +39,7 @@ class SecurityAdversarialTests(unittest.TestCase):
         SQLModel.metadata.create_all(engine)
         with get_session() as session:
             session.add(Mission(id="mission-a", name="mission-a", owners="owner-a@example.com"))
-            session.add(Mission(id="mission-b", name="mission-b", owners="owner-b@example.com"))
+            session.add(Mission(id="mission-b", name="mission-b", owners="owner-b@example.com", visibility="private"))
             session.add(Kluster(id="kluster-a", mission_id="mission-a", name="kluster-a", owners="owner-a@example.com"))
             session.add(Kluster(id="kluster-b", mission_id="mission-b", name="kluster-b", owners="owner-b@example.com"))
             session.add(MissionRoleMembership(mission_id="mission-a", subject="viewer@example.com", role="mission_viewer"))

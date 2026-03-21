@@ -23,7 +23,7 @@ class ReadAuthorizationRouteTests(unittest.TestCase):
         SQLModel.metadata.create_all(engine)
         with get_session() as session:
             session.add(Mission(id="mission-a", name="mission-a", owners="owner-a@example.com"))
-            session.add(Mission(id="mission-b", name="mission-b", owners="owner-b@example.com"))
+            session.add(Mission(id="mission-b", name="mission-b", owners="owner-b@example.com", visibility="private"))
             session.add(
                 Kluster(
                     id="kluster-a",

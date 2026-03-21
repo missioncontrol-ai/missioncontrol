@@ -20,8 +20,8 @@ class ReadIsolationTests(unittest.TestCase):
         self._orig_query_docs = search_router.query_docs
 
         with get_session() as session:
-            mission_a = Mission(id="mission-a", name="mission-a", owners="owner-a@example.com")
-            mission_b = Mission(id="mission-b", name="mission-b", owners="owner-b@example.com")
+            mission_a = Mission(id="mission-a", name="mission-a", owners="owner-a@example.com", visibility="private")
+            mission_b = Mission(id="mission-b", name="mission-b", owners="owner-b@example.com", visibility="private")
             session.add(mission_a)
             session.add(mission_b)
 
