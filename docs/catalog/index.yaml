@@ -35,3 +35,7 @@ domains:
     title: External integrations and platform hooks
     file: docs/catalog/integrations.yaml
     status: partial
+  - id: remotectl
+    title: Remote agent launch control
+    file: docs/catalog/remotectl.yaml
+    status: active

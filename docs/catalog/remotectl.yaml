@@ -1,0 +1,68 @@
+id: remotectl
+title: Remote agent launch control
+status: active
+maturity: alpha
+owners:
+  - platform
+summary: >
+  REST API for registering SSH/K8s targets and orchestrating remote agent launches.
+  MC issues scoped session tokens per launch; Claude uses those tokens + connection
+  info to SSH to targets and bootstrap remote mc agents. Lifecycle tracked via
+  heartbeat and completion callbacks.
+
+source_of_truth:
+  docs:
+    - README.md
+    - docs/MC-RUST.md
+  code_paths:
+    - backend/app/routers/remotectl.py
+    - backend/app/models.py
+
+entrypoints:
+  verify:
+    - command: 'curl http://localhost:8008/remotectl/targets -H "Authorization: Bearer $MC_TOKEN"'
+      purpose: List registered targets (returns empty list if none)
+
+interfaces:
+  mcp_tools:
+    - register_remote_target
+    - list_remote_targets
+    - delete_remote_target
+    - create_remote_launch
+    - list_remote_launches
+    - get_remote_launch
+    - kill_remote_launch
+  key_endpoints:
+    - POST /remotectl/targets
+    - GET  /remotectl/targets
+    - POST /remotectl/launches
+    - GET  /remotectl/launches/{id}
+    - POST /remotectl/launches/{id}/heartbeat
+    - POST /remotectl/launches/{id}/complete
+
+implemented:
+  - target registration (SSH and K8s transport models)
+  - launch record creation with scoped session token issuance
+  - heartbeat and log tail tracking
+  - launch completion and token revocation
+  - kill/abort with automatic token revocation
+  - MCP tools for full target and launch lifecycle
+
+gaps:
+  - mc binary has no MC_LAUNCH_ID awareness for automatic heartbeat reporting
+  - no K8s job dispatch (transport=k8s model exists, no actual Job creation)
+
+todos:
+  - add MC_LAUNCH_ID env var support to mc so remote agents auto-report heartbeats
+  - implement K8s job dispatch
+
+dependencies:
+  - api
+  - auth
+
+read_next:
+  - docs/MC-RUST.md
+  - docs/DEPLOYMENT.md
+
+last_reviewed: 2026-03-21
+confidence: medium
