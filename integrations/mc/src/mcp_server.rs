@@ -151,17 +151,17 @@ pub async fn run(args: &ServeMcpArgs, client: &MissionControlClient) -> Result<(
                     eprintln!("mc serve <-- {}", raw);
                 }
 
-                let response = match serde_json::from_str::<Value>(&raw) {
+                let (response, follow_up) = match serde_json::from_str::<Value>(&raw) {
                     Ok(msg) => dispatch(msg, client, &cache, &notif_tx).await,
-                    Err(e) => Some(error_response(
+                    Err(e) => (Some(error_response(
                         Value::Null,
                         -32700,
                         &format!("parse error: {}", e),
-                    )),
+                    )), None),
                 };
 
-                if let Some(resp) = response {
-                    let serialized = serde_json::to_string(&resp)?;
+                for msg in [response, follow_up].into_iter().flatten() {
+                    let serialized = serde_json::to_string(&msg)?;
                     if debug {
                         eprintln!("mc serve --> {}", serialized);
                     }
@@ -181,7 +181,7 @@ async fn dispatch(
     client: &MissionControlClient,
     cache: &Arc<Mutex<ToolsCache>>,
     notif_tx: &mpsc::Sender<Value>,
-) -> Option<Value> {
+) -> (Option<Value>, Option<Value>) {
     let id = msg.get("id").cloned().unwrap_or(Value::Null);
     let method = msg
         .get("method")
@@ -193,11 +193,18 @@ async fn dispatch(
     // Notifications (no "id" field) receive no response.
     let is_notification = msg.get("id").is_none();
 
+    // Helper: wrap a single response with no follow-up.
+    macro_rules! resp {
+        ($v:expr) => {
+            (Some($v), None)
+        };
+    }
+
     match method.as_str() {
         "initialize" => {
             // Client hello — return server capabilities.
             let _client_info = params.get("clientInfo");
-            Some(json!({
+            resp!(json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
@@ -291,7 +298,9 @@ async fn dispatch(
             // Important protocol nuance: some hosts send `initialized` as a request
             // with an id (instead of a pure notification). In that case we must
             // return a regular JSON-RPC result response, and emit listChanged as a
-            // separate outbound notification.
+            // separate outbound notification.  We return it as the second element of
+            // the tuple so the main loop writes result first, then notification —
+            // deterministically, with no spawned-task race.
             let list_changed = json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/tools/list_changed",
@@ -299,29 +308,24 @@ async fn dispatch(
             });
 
             if msg.get("id").is_some() {
-                let tx = notif_tx.clone();
-                tokio::spawn(async move {
-                    let _ = tx.send(list_changed).await;
-                });
-                Some(json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {}
-                }))
+                (
+                    Some(json!({ "jsonrpc": "2.0", "id": id, "result": {} })),
+                    Some(list_changed),
+                )
             } else {
-                Some(list_changed)
+                (Some(list_changed), None)
             }
         }
 
-        "notifications/cancelled" => None,
+        "notifications/cancelled" => (None, None),
 
         "tools/list" => match fetch_tools(client, cache).await {
-            Ok(tools) => Some(json!({
+            Ok(tools) => resp!(json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": { "tools": tools }
             })),
-            Err(e) => Some(error_response(
+            Err(e) => resp!(error_response(
                 id,
                 -32603,
                 &format!("tools/list failed: {}", e),
@@ -339,7 +343,7 @@ async fn dispatch(
             match mcp_tools::call_tool(client, None, None, &tool_name, tool_args).await {
                 Ok(result) => {
                     let text = result_to_text(&result);
-                    Some(json!({
+                    resp!(json!({
                         "jsonrpc": "2.0",
                         "id": id,
                         "result": {
@@ -350,7 +354,7 @@ async fn dispatch(
                 }
                 Err(e) => {
                     let text = format!("tool '{}' failed: {}", tool_name, e);
-                    Some(json!({
+                    resp!(json!({
                         "jsonrpc": "2.0",
                         "id": id,
                         "result": {
@@ -362,13 +366,13 @@ async fn dispatch(
             }
         }
 
-        "ping" => Some(json!({ "jsonrpc": "2.0", "id": id, "result": {} })),
+        "ping" => resp!(json!({ "jsonrpc": "2.0", "id": id, "result": {} })),
 
         _ => {
             if is_notification {
-                None
+                (None, None)
             } else {
-                Some(error_response(
+                resp!(error_response(
                     id,
                     -32601,
                     &format!("method not found: {}", method),

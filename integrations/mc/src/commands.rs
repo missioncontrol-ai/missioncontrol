@@ -1064,10 +1064,31 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
             // 4. Write state.
             write_synced_profile_state(&name)?;
 
+            // 5. Notify any live sessions using this profile.
+            let marker_json = serde_json::to_string(&json!({
+                "additionalContext": format!(
+                    "⚠ Profile '{}' was updated (sha256: {}). \
+                     File-based config (CLAUDE.md, agents) is live now via symlinks. \
+                     MCP server changes require a restart — type /exit and relaunch with `mc launch`.",
+                    name, sha
+                )
+            }))?;
+            let active_sessions = crate::launch::sessions_for_profile(&name);
+            let mut notified = 0usize;
+            for session in &active_sessions {
+                let mc_dir = PathBuf::from(&session.instance_home).join("mc");
+                if mc_dir.exists() {
+                    if fs::write(mc_dir.join("profile-updated"), &marker_json).is_ok() {
+                        notified += 1;
+                    }
+                }
+            }
+
             let payload = json!({
                 "ok": true,
                 "profile": name,
                 "sha256": sha,
+                "sessions_notified": notified,
             });
             if json_output {
                 print_json(&payload);
@@ -1081,6 +1102,12 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
                     name,
                     crate::ui::RESET
                 );
+                if notified > 0 {
+                    println!(
+                        "{}  {} session(s) will be prompted to restart on next message{}",
+                        crate::ui::YELLOW, notified, crate::ui::RESET
+                    );
+                }
             }
         }
     }

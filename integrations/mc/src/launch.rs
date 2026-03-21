@@ -130,12 +130,12 @@ impl AgentKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct LaunchSessionRecord {
-    runtime_session_id: String,
-    agent: String,
-    profile: String,
-    instance_home: String,
-    created_at: String,
+pub(crate) struct LaunchSessionRecord {
+    pub(crate) runtime_session_id: String,
+    pub(crate) agent: String,
+    pub(crate) profile: String,
+    pub(crate) instance_home: String,
+    pub(crate) created_at: String,
 }
 
 // ── AgentDriver trait ────────────────────────────────────────────────────────
@@ -364,6 +364,12 @@ impl AgentDriver for ClaudeDriver {
         write_json_missioncontrol_entry(&config_path, mc_entry.clone())?;
         mc_ok!("claude MCP config written → {}", config_path.display());
 
+        // Inject the profile-update notification hook into settings.json.
+        let settings_path = target_home.join(".claude").join("settings.json");
+        if let Err(e) = inject_profile_update_hook(&settings_path) {
+            mc_warn!("could not inject profile-update hook: {}", e);
+        }
+
         if let Some(global_home) = dirs::home_dir() {
             let global_path = global_home.join(".claude.json");
             if global_path != config_path {
@@ -407,6 +413,65 @@ impl AgentDriver for ClaudeDriver {
         cmd.args(extra_args);
         cmd
     }
+}
+
+/// Ensure a `UserPromptSubmit` hook is present in the profile's settings.json
+/// that checks for and emits the profile-updated marker file.  Idempotent.
+fn inject_profile_update_hook(settings_path: &Path) -> Result<()> {
+    let mut root: Value = if settings_path.exists() {
+        let content = fs::read_to_string(settings_path)?;
+        serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+
+    let hooks = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("settings.json is not an object"))?
+        .entry("hooks")
+        .or_insert_with(|| json!({}));
+
+    let ups = hooks
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("hooks is not an object"))?
+        .entry("UserPromptSubmit")
+        .or_insert_with(|| json!([]));
+
+    let arr = ups
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("UserPromptSubmit is not an array"))?;
+
+    // Idempotent: skip if our hook is already there.
+    let already = arr.iter().any(|h| {
+        h.get("hooks")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|h| h.get("command"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.contains("profile-updated"))
+            .unwrap_or(false)
+    });
+    if already {
+        return Ok(());
+    }
+
+    // Shell snippet: emit marker JSON as additionalContext then delete it.
+    let cmd = concat!(
+        "sh -c '",
+        r#"f="${MC_INSTANCE_HOME}/mc/profile-updated"; "#,
+        r#"[ -f "$f" ] && cat "$f" && rm -f "$f"; "#,
+        "exit 0'"
+    );
+    arr.push(json!({
+        "matcher": "",
+        "hooks": [{"type": "command", "command": cmd}]
+    }));
+
+    if let Some(parent) = settings_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(settings_path, serde_json::to_string_pretty(&root)?)?;
+    Ok(())
 }
 
 fn write_json_missioncontrol_entry(
@@ -1255,6 +1320,14 @@ fn empty_profile_tarball_b64() -> Result<String> {
 
 fn session_index_path(base_mc_home: &Path) -> PathBuf {
     base_mc_home.join("sessions").join("launch-index.jsonl")
+}
+
+pub(crate) fn sessions_for_profile(profile: &str) -> Vec<LaunchSessionRecord> {
+    read_launch_sessions(&mc_home_dir())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| s.profile == profile)
+        .collect()
 }
 
 fn read_launch_sessions(base_mc_home: &Path) -> Result<Vec<LaunchSessionRecord>> {
