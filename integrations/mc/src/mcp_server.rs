@@ -6,7 +6,7 @@
 //!
 //! ## Usage
 //!
-//! ```
+//! ```text
 //! mc serve
 //! # or with debug logging:
 //! mc serve --debug-protocol

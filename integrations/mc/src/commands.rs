@@ -232,6 +232,11 @@ pub enum ProfileCommand {
         #[arg(long)]
         name: String,
     },
+    /// Activate a profile as default and apply its bundle locally in one step.
+    Use {
+        #[arg(long)]
+        name: String,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -894,19 +899,14 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
             fs::create_dir_all(&bundles)?;
             let tar_path = bundles.join(format!("{}.tar", sha));
             fs::write(&tar_path, bytes)?;
-            let applied_dir = profile_root.join("applied");
             if apply {
-                if applied_dir.exists() {
-                    fs::remove_dir_all(&applied_dir)?;
-                }
-                fs::create_dir_all(&applied_dir)?;
-                extract_tar_to_dir(&tar_path, &applied_dir)?;
+                extract_tar_to_dir(&tar_path, &profile_root)?;
             }
             let state = json!({
                 "profile": name,
                 "last_pulled_sha256": sha,
                 "bundle_path": tar_path.display().to_string(),
-                "applied_dir": if apply { applied_dir.display().to_string() } else { String::new() },
+                "applied": apply,
                 "pulled_at": chrono::Utc::now().to_rfc3339(),
             });
             fs::write(
@@ -919,7 +919,6 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
                 "last_pulled_sha256": sha,
                 "bundle_path": tar_path.display().to_string(),
                 "applied": apply,
-                "applied_dir": if apply { applied_dir.display().to_string() } else { String::new() }
             });
             if json_output {
                 print_json(&payload);
@@ -1032,6 +1031,56 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
                 print_json(&payload);
             } else {
                 print_profile_status_human(&payload);
+            }
+        }
+        ProfileCommand::Use { name } => {
+            // 1. Mark as default on the backend.
+            mcp_profile_call(&client, "activate_profile", json!({ "name": name })).await?;
+
+            // 2. Download bundle.
+            let response =
+                mcp_profile_call(&client, "download_profile", json!({ "name": name })).await?;
+            let tarball = response
+                .get("tarball_b64")
+                .and_then(|v| v.as_str())
+                .context("profile download response missing tarball_b64")?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(tarball)
+                .context("tarball_b64 is not valid base64")?;
+            let sha = response
+                .get("profile")
+                .and_then(|v| v.get("sha256"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+
+            // 3. Store bundle tarball and extract into the live profile directory.
+            let profile_root = crate::config::mc_home_dir().join("profiles").join(&name);
+            let bundles = profile_root.join("bundles");
+            fs::create_dir_all(&bundles)?;
+            let tar_path = bundles.join(format!("{}.tar", sha));
+            fs::write(&tar_path, &bytes)?;
+            extract_tar_to_dir(&tar_path, &profile_root)?;
+
+            // 4. Write state.
+            write_synced_profile_state(&name)?;
+
+            let payload = json!({
+                "ok": true,
+                "profile": name,
+                "sha256": sha,
+            });
+            if json_output {
+                print_json(&payload);
+            } else {
+                println!(
+                    "{}{}{} switched to profile: {}{}{}",
+                    crate::ui::GREEN,
+                    "✓ ",
+                    crate::ui::RESET,
+                    crate::ui::CYAN,
+                    name,
+                    crate::ui::RESET
+                );
             }
         }
     }

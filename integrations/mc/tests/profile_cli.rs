@@ -56,6 +56,7 @@ fn profile_publish_uses_mcp_call() {
 
     let output = Command::new(mc_bin())
         .args([
+            "--json",
             "profile",
             "publish",
             "--name",
@@ -160,7 +161,7 @@ fn profile_status_calls_get_and_pin_tools() {
     });
 
     let output = Command::new(mc_bin())
-        .args(["profile", "status", "--name", "research"])
+        .args(["--json", "profile", "status", "--name", "research"])
         .env("MC_BASE_URL", server.url(""))
         .env("MC_TOKEN", "test-token")
         .env("MC_HOME", &mc_home)
@@ -198,7 +199,7 @@ fn init_bootstraps_default_profile_when_empty() {
     });
 
     let output = Command::new(mc_bin())
-        .args(["init"])
+        .args(["--json", "init"])
         .env("MC_BASE_URL", server.url(""))
         .env("MC_TOKEN", "test-token")
         .output()

@@ -684,7 +684,6 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     let instance_home = base_mc_home.join("instances").join(&runtime_session_id);
     let profile_home = base_mc_home
         .join("profiles")
-        .join(selected_agent.config_key())
         .join(&profile_name);
     fs::create_dir_all(&instance_home)?;
     fs::create_dir_all(&profile_home)?;
