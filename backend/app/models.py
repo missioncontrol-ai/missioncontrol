@@ -141,6 +141,9 @@ class AgentSession(SQLModel, table=True):
     context: str = ""
     started_at: datetime = Field(default_factory=datetime.utcnow)
     ended_at: Optional[datetime] = None
+    claude_session_id: Optional[str] = Field(default=None, index=True)
+    end_reason: Optional[str] = None
+    audit_log: str = Field(default="", sa_column=Column("audit_log", Text))
 
 
 class TaskAssignment(SQLModel, table=True):

@@ -37,6 +37,8 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde_json::{json, Value};
 use std::{
+    fs,
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -342,6 +344,7 @@ async fn dispatch(
 
             match mcp_tools::call_tool(client, None, None, &tool_name, tool_args).await {
                 Ok(result) => {
+                    maybe_update_context_json(&result);
                     let text = result_to_text(&result);
                     resp!(json!({
                         "jsonrpc": "2.0",
@@ -378,6 +381,66 @@ async fn dispatch(
                     &format!("method not found: {}", method),
                 ))
             }
+        }
+    }
+}
+
+// ── Context file update ───────────────────────────────────────────────────────
+
+/// After a successful tool call, check if the result contains mission_id or
+/// kluster_id and update `$MC_INSTANCE_HOME/mc/context.json` accordingly.
+///
+/// This keeps the context file current so the PreCompact hook script can
+/// re-inject the agent's active mission/kluster after compaction.
+fn maybe_update_context_json(result: &Value) {
+    let instance_home = match std::env::var("MC_INSTANCE_HOME") {
+        Ok(v) if !v.is_empty() => PathBuf::from(v),
+        _ => return,
+    };
+    let context_path = instance_home.join("mc").join("context.json");
+
+    // Read existing context (best-effort; skip on error).
+    let mut ctx: Value = if context_path.exists() {
+        match fs::read_to_string(&context_path).ok().and_then(|s| serde_json::from_str(&s).ok()) {
+            Some(v) => v,
+            None => return,
+        }
+    } else {
+        return;
+    };
+
+    let obj = match ctx.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+
+    let mut changed = false;
+
+    // Extract mission_id from common response shapes.
+    let mission_id = result.get("mission_id")
+        .or_else(|| result.get("id").filter(|_| result.get("northstar_md").is_some()))
+        .and_then(|v| v.as_str());
+    if let Some(mid) = mission_id {
+        obj.insert("active_mission_id".to_string(), Value::String(mid.to_string()));
+        changed = true;
+    }
+
+    // Extract kluster_id from common response shapes.
+    let kluster_id = result.get("kluster_id")
+        .or_else(|| result.get("id").filter(|_| result.get("workstream_md").is_some()))
+        .and_then(|v| v.as_str());
+    if let Some(kid) = kluster_id {
+        obj.insert("active_kluster_id".to_string(), Value::String(kid.to_string()));
+        changed = true;
+    }
+
+    if changed {
+        obj.insert(
+            "last_sync_at".to_string(),
+            Value::String(chrono::Utc::now().to_rfc3339()),
+        );
+        if let Ok(serialized) = serde_json::to_string_pretty(&ctx) {
+            let _ = fs::write(&context_path, serialized);
         }
     }
 }

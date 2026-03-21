@@ -364,10 +364,15 @@ impl AgentDriver for ClaudeDriver {
         write_json_missioncontrol_entry(&config_path, mc_entry.clone())?;
         mc_ok!("claude MCP config written → {}", config_path.display());
 
-        // Inject the profile-update notification hook into settings.json.
+        // Inject MC lifecycle hooks (profile-update, session registration, audit) into settings.json.
         let settings_path = target_home.join(".claude").join("settings.json");
-        if let Err(e) = inject_profile_update_hook(&settings_path) {
-            mc_warn!("could not inject profile-update hook: {}", e);
+        if let Err(e) = inject_mc_lifecycle_hooks(&settings_path, base_url) {
+            mc_warn!("could not inject MC lifecycle hooks: {}", e);
+        }
+
+        // Write hook shell scripts into the instance home.
+        if let Err(e) = write_hook_scripts(target_home) {
+            mc_warn!("could not write hook scripts: {}", e);
         }
 
         if let Some(global_home) = dirs::home_dir() {
@@ -415,9 +420,18 @@ impl AgentDriver for ClaudeDriver {
     }
 }
 
-/// Ensure a `UserPromptSubmit` hook is present in the profile's settings.json
-/// that checks for and emits the profile-updated marker file.  Idempotent.
-fn inject_profile_update_hook(settings_path: &Path) -> Result<()> {
+/// Inject all MC lifecycle hooks into the Claude Code settings.json.
+///
+/// Injects:
+/// - UserPromptSubmit: emit profile-updated marker (existing behaviour)
+/// - SessionStart (startup/resume): HTTP POST to /hooks/claude/session-start
+/// - SessionStart (compact): re-inject mission context via shell script
+/// - SessionEnd: HTTP POST to /hooks/claude/session-end
+/// - PostToolUse (mcp__missioncontrol__.*): HTTP POST to /hooks/claude/tool-audit
+/// - PreCompact: dump current context summary to stdout
+///
+/// Idempotent — safe to call on every launch.
+fn inject_mc_lifecycle_hooks(settings_path: &Path, backend_url: &str) -> Result<()> {
     let mut root: Value = if settings_path.exists() {
         let content = fs::read_to_string(settings_path)?;
         serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
@@ -425,52 +439,237 @@ fn inject_profile_update_hook(settings_path: &Path) -> Result<()> {
         json!({})
     };
 
-    let hooks = root
+    let hooks_obj = root
         .as_object_mut()
         .ok_or_else(|| anyhow!("settings.json is not an object"))?
         .entry("hooks")
-        .or_insert_with(|| json!({}));
-
-    let ups = hooks
+        .or_insert_with(|| json!({}))
         .as_object_mut()
         .ok_or_else(|| anyhow!("hooks is not an object"))?
-        .entry("UserPromptSubmit")
-        .or_insert_with(|| json!([]));
+        .clone();
 
-    let arr = ups
-        .as_array_mut()
-        .ok_or_else(|| anyhow!("UserPromptSubmit is not an array"))?;
+    // We'll rebuild the hooks object completely from the current state.
+    let mut hooks_map = hooks_obj;
 
-    // Idempotent: skip if our hook is already there.
-    let already = arr.iter().any(|h| {
-        h.get("hooks")
-            .and_then(|v| v.as_array())
-            .and_then(|a| a.first())
-            .and_then(|h| h.get("command"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.contains("profile-updated"))
-            .unwrap_or(false)
-    });
-    if already {
-        return Ok(());
+    // ── UserPromptSubmit: profile-update marker (existing) ────────────────
+    {
+        let ups = hooks_map
+            .entry("UserPromptSubmit".to_string())
+            .or_insert_with(|| json!([]));
+        let arr = ups
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("UserPromptSubmit is not an array"))?;
+
+        let already = arr.iter().any(|h| {
+            h.get("hooks")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|h| h.get("command"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.contains("profile-updated"))
+                .unwrap_or(false)
+        });
+        if !already {
+            let cmd = concat!(
+                "sh -c '",
+                r#"f="${MC_INSTANCE_HOME}/mc/profile-updated"; "#,
+                r#"[ -f "$f" ] && cat "$f" && rm -f "$f"; "#,
+                "exit 0'"
+            );
+            arr.push(json!({
+                "matcher": "",
+                "hooks": [{"type": "command", "command": cmd}]
+            }));
+        }
     }
 
-    // Shell snippet: emit marker JSON as additionalContext then delete it.
-    let cmd = concat!(
-        "sh -c '",
-        r#"f="${MC_INSTANCE_HOME}/mc/profile-updated"; "#,
-        r#"[ -f "$f" ] && cat "$f" && rm -f "$f"; "#,
-        "exit 0'"
-    );
-    arr.push(json!({
-        "matcher": "",
-        "hooks": [{"type": "command", "command": cmd}]
-    }));
+    // ── SessionStart: HTTP registration + compact context re-injection ────
+    {
+        let session_start = hooks_map
+            .entry("SessionStart".to_string())
+            .or_insert_with(|| json!([]));
+        let arr = session_start
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("SessionStart is not an array"))?;
+
+        let already_http = arr.iter().any(|h| {
+            h.get("hooks")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|h| h.get("url"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.contains("/hooks/claude/session-start"))
+                .unwrap_or(false)
+        });
+        if !already_http {
+            let url = format!("{}/hooks/claude/session-start", backend_url);
+            arr.push(json!({
+                "matcher": "startup|resume",
+                "hooks": [{
+                    "type": "http",
+                    "url": url,
+                    "headers": {"Authorization": "Bearer $MC_AGENT_TOKEN"},
+                    "allowedEnvVars": ["MC_AGENT_TOKEN"],
+                    "timeout": 10
+                }]
+            }));
+        }
+
+        let already_compact = arr.iter().any(|h| {
+            h.get("hooks")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|h| h.get("command"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.contains("mc-recompact-context.sh"))
+                .unwrap_or(false)
+        });
+        if !already_compact {
+            arr.push(json!({
+                "matcher": "compact",
+                "hooks": [{
+                    "type": "command",
+                    "command": "\"${MC_INSTANCE_HOME}\"/.claude/hooks/mc-recompact-context.sh"
+                }]
+            }));
+        }
+    }
+
+    // ── SessionEnd: HTTP close ────────────────────────────────────────────
+    {
+        let session_end = hooks_map
+            .entry("SessionEnd".to_string())
+            .or_insert_with(|| json!([]));
+        let arr = session_end
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("SessionEnd is not an array"))?;
+
+        let already = arr.iter().any(|h| {
+            h.get("hooks")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|h| h.get("url"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.contains("/hooks/claude/session-end"))
+                .unwrap_or(false)
+        });
+        if !already {
+            let url = format!("{}/hooks/claude/session-end", backend_url);
+            arr.push(json!({
+                "hooks": [{
+                    "type": "http",
+                    "url": url,
+                    "headers": {"Authorization": "Bearer $MC_AGENT_TOKEN"},
+                    "allowedEnvVars": ["MC_AGENT_TOKEN"],
+                    "timeout": 10
+                }]
+            }));
+        }
+    }
+
+    // ── PostToolUse: audit MCP tool calls ────────────────────────────────
+    {
+        let post_tool = hooks_map
+            .entry("PostToolUse".to_string())
+            .or_insert_with(|| json!([]));
+        let arr = post_tool
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("PostToolUse is not an array"))?;
+
+        let already = arr.iter().any(|h| {
+            h.get("hooks")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|h| h.get("url"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.contains("/hooks/claude/tool-audit"))
+                .unwrap_or(false)
+        });
+        if !already {
+            let url = format!("{}/hooks/claude/tool-audit", backend_url);
+            arr.push(json!({
+                "matcher": "mcp__missioncontrol__.*",
+                "hooks": [{
+                    "type": "http",
+                    "url": url,
+                    "headers": {"Authorization": "Bearer $MC_AGENT_TOKEN"},
+                    "allowedEnvVars": ["MC_AGENT_TOKEN"],
+                    "timeout": 5
+                }]
+            }));
+        }
+    }
+
+    // ── PreCompact: dump context summary ─────────────────────────────────
+    {
+        let pre_compact = hooks_map
+            .entry("PreCompact".to_string())
+            .or_insert_with(|| json!([]));
+        let arr = pre_compact
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("PreCompact is not an array"))?;
+
+        let already = arr.iter().any(|h| {
+            h.get("hooks")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|h| h.get("command"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.contains("mc-precompact.sh"))
+                .unwrap_or(false)
+        });
+        if !already {
+            arr.push(json!({
+                "hooks": [{
+                    "type": "command",
+                    "command": "\"${MC_INSTANCE_HOME}\"/.claude/hooks/mc-precompact.sh"
+                }]
+            }));
+        }
+    }
+
+    // Write back.
+    root.as_object_mut()
+        .unwrap()
+        .insert("hooks".to_string(), Value::Object(hooks_map.into_iter().collect()));
 
     if let Some(parent) = settings_path.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::write(settings_path, serde_json::to_string_pretty(&root)?)?;
+    Ok(())
+}
+
+/// Write the MC hook shell scripts into `<target_home>/.claude/hooks/`.
+/// Scripts are embedded at compile time from `distribution/hooks/`.
+fn write_hook_scripts(target_home: &Path) -> Result<()> {
+    const PRECOMPACT: &str =
+        include_str!("../../../distribution/hooks/mc-precompact.sh");
+    const RECOMPACT: &str =
+        include_str!("../../../distribution/hooks/mc-recompact-context.sh");
+
+    let hooks_dir = target_home.join(".claude").join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let scripts: &[(&str, &str)] = &[
+        ("mc-precompact.sh", PRECOMPACT),
+        ("mc-recompact-context.sh", RECOMPACT),
+    ];
+
+    for (name, content) in scripts {
+        let path = hooks_dir.join(name);
+        fs::write(&path, content)?;
+        // Make executable on Unix.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&path)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&path, perms)?;
+        }
+        mc_info!("hook script written → {}", path.display());
+    }
+
     Ok(())
 }
 
@@ -764,6 +963,14 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         &profile_name,
         &profile_home,
     )?;
+    if let Err(e) = write_mc_context_json(
+        &instance_mc_home,
+        config.base_url.as_str(),
+        &profile_name,
+        &runtime_session_id,
+    ) {
+        mc_warn!("could not write mc/context.json: {}", e);
+    }
     upsert_launch_session(
         &base_mc_home,
         LaunchSessionRecord {
@@ -1404,6 +1611,44 @@ fn find_resume_session(
     Ok(Some(candidates[picked_idx].clone()))
 }
 
+/// Write (or refresh) `$MC_INSTANCE_HOME/mc/context.json` with the current
+/// agent context. Called at launch and patched live by the MCP server after
+/// tool calls that return mission/kluster IDs.
+///
+/// The file is read by the PreCompact and SessionStart(compact) hook scripts
+/// to re-inject mission context into Claude's window after compaction.
+pub fn write_mc_context_json(
+    instance_mc_home: &Path,
+    base_url: &str,
+    active_profile: &str,
+    runtime_session_id: &str,
+) -> Result<()> {
+    // Load existing file so we can preserve active_mission_id / active_kluster_id
+    // written by the MCP server between launch invocations.
+    let existing: Value = if instance_mc_home.join("context.json").exists() {
+        let raw = fs::read_to_string(instance_mc_home.join("context.json"))?;
+        serde_json::from_str(&raw).unwrap_or(json!({}))
+    } else {
+        json!({})
+    };
+
+    let payload = json!({
+        "runtime_session_id": runtime_session_id,
+        "base_url": base_url,
+        "active_profile": active_profile,
+        "active_mission_id": existing.get("active_mission_id").cloned().unwrap_or(Value::Null),
+        "active_kluster_id": existing.get("active_kluster_id").cloned().unwrap_or(Value::Null),
+        "last_sync_at": chrono::Utc::now().to_rfc3339(),
+    });
+
+    fs::create_dir_all(instance_mc_home)?;
+    fs::write(
+        instance_mc_home.join("context.json"),
+        serde_json::to_string_pretty(&payload)?,
+    )?;
+    Ok(())
+}
+
 fn persist_runtime_context(
     instance_home: &Path,
     runtime_session_id: &str,
@@ -1496,8 +1741,13 @@ fn exec_agent(
     // the MCP shim can authenticate regardless of whether the token was embedded
     // in the config file — covering session tokens, --no-embed-token, and the
     // standard embedded-token path uniformly.
+    //
+    // MC_AGENT_TOKEN is an alias used by Claude Code native hooks (SessionStart,
+    // SessionEnd, PostToolUse). It is listed in `allowedEnvVars` in the hook
+    // config so Claude Code will forward it in HTTP hook Authorization headers.
     if !token.is_empty() {
         cmd.env("MC_TOKEN", token);
+        cmd.env("MC_AGENT_TOKEN", token);
     }
     cmd.env("HOME", agent_home);
 
