@@ -1,0 +1,55 @@
+id: swarm
+title: Codex multi-session swarm workflow
+status: active
+maturity: experimental
+owners:
+  - platform
+summary: >
+  Multi-session Codex swarm workflow where a driver session orchestrates worker sessions
+  via MissionControl tasks and klusters. A collaboration driver script coordinates
+  fan-out, task claiming, and result aggregation. Currently experimental.
+
+source_of_truth:
+  docs:
+    - docs/CODEX-SWARM-WORKFLOW.md
+    - README.md
+  code_paths:
+    - scripts/mc-collab-driver.sh
+
+entrypoints:
+  run:
+    - command: bash scripts/mc-collab-driver.sh
+      purpose: Start swarm collaboration driver session
+  verify:
+    - description: Healthy run has all worker tasks claimed and completed within timeout
+
+interfaces:
+  env_vars:
+    - MC_BASE_URL
+    - MC_TOKEN
+    - MC_AGENT_ID
+    - CODEX_WORKERS      # Number of parallel Codex worker sessions
+
+implemented:
+  - driver script for multi-session coordination
+  - task claim/update/complete cycle
+  - kluster-scoped workspace leases
+  - results aggregation via task artifacts
+
+gaps:
+  - worker failure recovery not documented
+  - no automated acceptance test for healthy swarm run
+
+todos:
+  - add swarm smoke test
+  - document worker task retry behavior
+
+dependencies:
+  - api
+  - mc-rust
+
+read_next:
+  - docs/CODEX-SWARM-WORKFLOW.md
+
+last_reviewed: 2026-03-21
+confidence: medium

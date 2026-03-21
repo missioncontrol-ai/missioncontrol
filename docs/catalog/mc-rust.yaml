@@ -1,0 +1,80 @@
+id: mc-rust
+title: Rust mc CLI and daemon
+status: active
+maturity: beta
+owners:
+  - platform
+summary: >
+  Rust-native local agent gateway. The mc binary connects agents to MissionControl
+  via MCP tool calls, manages the local daemon for SSE stream fan-out, and provides
+  profile management. Canonical entry point for Codex and Claude Code agents.
+
+source_of_truth:
+  docs:
+    - docs/MC-RUST.md
+    - docs/REAL-TIME.md
+    - README.md
+  code_paths:
+    - distribution/
+
+entrypoints:
+  run:
+    - command: mc daemon
+      purpose: Start local mc daemon (SSE fan-out, tool dispatch)
+    - command: mc launch claude
+      purpose: Launch Claude Code agent with mc integration
+    - command: mc launch codex
+      purpose: Launch Codex agent with mc integration
+  verify:
+    - command: mc doctor
+      purpose: Health check (backend connectivity, token, daemon)
+
+interfaces:
+  env_vars:
+    - MC_BASE_URL        # MissionControl backend URL
+    - MC_TOKEN           # Agent bearer token
+    - MC_AGENT_ID        # Agent identity
+    - MC_SCHEMA_PACK_FILE  # Optional schema pack override
+  commands:
+    - mc doctor
+    - mc daemon
+    - mc launch <agent>
+    - mc tools list
+    - mc tools call <tool> <args>
+    - mc profile list
+    - mc profile use <name>
+    - mc profile show <name>
+    - mc profile create <name>
+    - mc profile push <name>
+    - mc profile pull <name>
+    - mc profile delete <name>
+    - mc profile setup-shims
+    - mc evolve
+
+implemented:
+  - MCP tool dispatch over HTTP
+  - SSE stream fan-out via daemon
+  - agent launch with proper startup layering
+  - profile management (list/use/push/pull/delete)
+  - atomic symlink swap for profile activation (~/.missioncontrol/profiles/active)
+  - mc doctor health diagnostics
+  - env file loading on mc launch
+
+gaps:
+  - mc binary not checked into repo (installed separately via scripts/install-mc.sh)
+  - daemon restart behavior on backend disconnect not fully documented
+
+todos:
+  - document daemon resilience and reconnect behavior
+
+dependencies:
+  - api
+  - auth
+
+read_next:
+  - docs/MC-RUST.md
+  - docs/REAL-TIME.md
+  - docs/DEPLOYMENT.md
+
+last_reviewed: 2026-03-21
+confidence: high
