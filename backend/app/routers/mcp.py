@@ -726,6 +726,90 @@ TOOLS = [
             "required": ["name", "sha256"],
         },
     ),
+    MCPTool(
+        name="register_remote_target",
+        description="Register a remote SSH or K8s host as a named target for agent launches.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Short identifier (e.g. 'dev-box')"},
+                "host": {"type": "string", "description": "Hostname or IP"},
+                "user": {"type": "string", "description": "SSH username"},
+                "port": {"type": "integer", "description": "SSH port (default: 22)"},
+                "transport": {"type": "string", "enum": ["ssh", "k8s"]},
+                "ssh_pubkey": {"type": "string", "description": "SSH public key of target host"},
+                "key_fingerprint": {"type": "string"},
+            },
+            "required": ["name", "host", "transport"],
+        },
+    ),
+    MCPTool(
+        name="list_remote_targets",
+        description="List registered remote targets for the current user.",
+        input_schema={"type": "object", "properties": {}, "required": []},
+    ),
+    MCPTool(
+        name="delete_remote_target",
+        description="Delete a registered remote target by ID.",
+        input_schema={
+            "type": "object",
+            "properties": {"target_id": {"type": "string"}},
+            "required": ["target_id"],
+        },
+    ),
+    MCPTool(
+        name="create_remote_launch",
+        description=(
+            "Create a remote agent launch record and receive a scoped session token. "
+            "Returns launch_id, session_token, target_host, target_user, and mc_base_url. "
+            "After calling this: SSH to target_host and run: "
+            "MC_TOKEN=<session_token> MC_BASE_URL=<mc_base_url> MC_LAUNCH_ID=<launch_id> mc launch <agent_kind>"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "target_id": {"type": "string", "description": "Registered target ID"},
+                "target_host": {"type": "string", "description": "Ad-hoc hostname (if no target_id)"},
+                "target_user": {"type": "string"},
+                "transport": {"type": "string", "enum": ["ssh", "k8s"]},
+                "agent_kind": {"type": "string", "description": "Agent type: claude, codex, etc."},
+                "agent_profile": {"type": "string"},
+                "capability_scope": {"type": "string", "description": "Comma-separated capability scopes"},
+                "ttl_hours": {"type": "integer", "description": "Token TTL in hours (default: 8)"},
+            },
+            "required": ["transport", "agent_kind"],
+        },
+    ),
+    MCPTool(
+        name="list_remote_launches",
+        description="List remote agent launches, optionally filtered by status.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string",
+                           "description": "Filter: launching|running|heartbeat_lost|completed|failed"},
+            },
+            "required": [],
+        },
+    ),
+    MCPTool(
+        name="get_remote_launch",
+        description="Get status, heartbeat age, and log tail for a specific remote launch.",
+        input_schema={
+            "type": "object",
+            "properties": {"launch_id": {"type": "string"}},
+            "required": ["launch_id"],
+        },
+    ),
+    MCPTool(
+        name="kill_remote_launch",
+        description="Kill a running remote launch: revokes its session token and marks it failed.",
+        input_schema={
+            "type": "object",
+            "properties": {"launch_id": {"type": "string"}},
+            "required": ["launch_id"],
+        },
+    ),
 ]
 
 
@@ -3058,5 +3142,68 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     "matches": matches,
                 },
             )
+
+        elif tool == "register_remote_target":
+            from app.routers.remotectl import TargetCreate, create_target
+            body = TargetCreate(
+                name=args["name"],
+                host=args["host"],
+                user=args.get("user", ""),
+                port=args.get("port", 22),
+                transport=args.get("transport", "ssh"),
+                ssh_pubkey=args.get("ssh_pubkey", ""),
+                key_fingerprint=args.get("key_fingerprint", ""),
+            )
+            result = create_target(body=body, request=request)
+            return _mcp_ok(request_id=request_id, result=dict(result))
+
+        elif tool == "list_remote_targets":
+            from app.routers.remotectl import list_targets
+            data = list_targets(request=request)
+            return _mcp_ok(request_id=request_id, result={
+                "targets": [dict(t) for t in data["targets"]]
+            })
+
+        elif tool == "delete_remote_target":
+            from app.routers.remotectl import delete_target
+            delete_target(target_id=args["target_id"], request=request)
+            return _mcp_ok(request_id=request_id, result={"deleted": args["target_id"]})
+
+        elif tool == "create_remote_launch":
+            from app.routers.remotectl import LaunchCreate, create_launch
+            # capability_scope: MCP sends a comma-separated string; LaunchCreate expects list[str]
+            scope_raw = args.get("capability_scope", "")
+            scope_list = [s.strip() for s in scope_raw.split(",") if s.strip()] if scope_raw else []
+            body = LaunchCreate(
+                transport=args["transport"],
+                target_id=args.get("target_id"),
+                target_host=args.get("target_host", ""),
+                agent_kind=args["agent_kind"],
+                agent_profile=args.get("agent_profile", ""),
+                capability_scope=scope_list,
+                ttl_hours=args.get("ttl_hours", 8),
+            )
+            result = create_launch(body=body, request=request)
+            result["launch_id"] = result["id"]
+            result["mc_base_url"] = os.environ.get("MC_BASE_URL", "")
+            return _mcp_ok(request_id=request_id, result=result)
+
+        elif tool == "list_remote_launches":
+            from app.routers.remotectl import list_launches
+            data = list_launches(request=request)
+            launches = [dict(l) for l in data.get("launches", [])]
+            if args.get("status"):
+                launches = [l for l in launches if l.get("status") == args["status"]]
+            return _mcp_ok(request_id=request_id, result={"launches": launches})
+
+        elif tool == "get_remote_launch":
+            from app.routers.remotectl import get_launch
+            result = get_launch(launch_id=args["launch_id"], request=request)
+            return _mcp_ok(request_id=request_id, result=result)
+
+        elif tool == "kill_remote_launch":
+            from app.routers.remotectl import delete_launch
+            delete_launch(launch_id=args["launch_id"], request=request)
+            return _mcp_ok(request_id=request_id, result={"killed": args["launch_id"]})
 
     return _mcp_error(request_id=request_id, error=f"Unknown tool: {tool}", error_code="unknown_tool")
