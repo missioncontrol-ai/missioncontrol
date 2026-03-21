@@ -1,0 +1,67 @@
+id: web
+title: AI-first web console and UI shell
+status: active
+maturity: beta
+owners:
+  - platform
+summary: >
+  SvelteKit 2 frontend at /ui/. Default experience is a chat-first AI console
+  with a prompt composer. Mission/kluster explorer, governance policy editor,
+  and matrix dashboard are accessible as secondary views. Write tools create
+  pending approval actions before execution.
+
+source_of_truth:
+  docs:
+    - docs/AI-CONSOLE.md
+    - docs/MC-RUST.md
+    - README.md
+  code_paths:
+    - web/src/
+
+entrypoints:
+  run:
+    - command: cd web && npm run dev
+      purpose: Start frontend dev server
+    - command: cd web && npm run build
+      purpose: Build production bundle
+  verify:
+    - command: curl http://localhost:5173/ui/
+      purpose: Dev server liveness (or prod at /ui/)
+
+interfaces:
+  routes:
+    - /ui/                   # AI Console (chat-first)
+    - /ui/explorer           # Mission/kluster navigator
+    - /ui/matrix             # Kubernetes-style status matrix
+    - /ui/governance         # Policy editor
+    - /ui/onboarding         # Initial setup wizard
+  auth:
+    - OIDC PKCE flow via backend /auth/oidc/start
+    - Token login for local testing
+
+implemented:
+  - chat-first AI Console with transcript view
+  - prompt composer
+  - mission/kluster explorer
+  - real-time event streaming for AI turns and approvals
+  - dark mode default with toggle
+  - OIDC + token login
+  - governance policy editor
+  - matrix/status view
+
+gaps:
+  - admin UI for mission memberships not implemented
+  - mobile layout not explicitly documented
+
+todos:
+  - document recommended iframe/embed approach for agent-embedded use
+
+dependencies:
+  - api
+  - auth
+
+read_next:
+  - docs/AI-CONSOLE.md
+
+last_reviewed: 2026-03-21
+confidence: high

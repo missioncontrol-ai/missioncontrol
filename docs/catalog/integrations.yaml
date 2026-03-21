@@ -1,0 +1,54 @@
+id: integrations
+title: External integrations and platform hooks
+status: partial
+maturity: alpha
+owners:
+  - platform
+summary: >
+  Platform integrations for Slack, Google Chat, cloud providers, and scheduled
+  agent jobs. Each integration binds a MissionControl mission to an external channel
+  or trigger. Currently Slack and Google Chat are the primary chat integrations.
+
+source_of_truth:
+  docs:
+    - README.md
+    - docs/CLOUD-INTEGRATION.md
+  code_paths:
+    - backend/app/routers/slack_integrations.py
+    - backend/app/routers/google_chat_integrations.py
+    - backend/app/routers/remotectl.py
+    - integrations/
+
+entrypoints:
+  verify:
+    - description: Check /readyz after configuring SLACK_BOT_TOKEN — backend validates connectivity
+
+interfaces:
+  env_vars:
+    - SLACK_BOT_TOKEN
+    - SLACK_SIGNING_SECRET
+    - GOOGLE_CHAT_CREDENTIALS
+
+implemented:
+  - Slack channel binding per mission
+  - Slack task creation from messages
+  - Google Chat integration (routing and message handling)
+  - Remote SSH/K8s target registration
+  - Scheduled agent job support (cron-based)
+
+gaps:
+  - cloud provider integrations (AWS/GCP/Azure) partially documented
+  - no integration test suite for Slack or Google Chat webhooks
+
+todos:
+  - add Slack integration smoke test or mock webhook test
+
+dependencies:
+  - api
+
+read_next:
+  - docs/CLOUD-INTEGRATION.md
+  - README.md
+
+last_reviewed: 2026-03-21
+confidence: low

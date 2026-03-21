@@ -1,0 +1,58 @@
+id: storage
+title: Artifact persistence via S3 and RustFS
+status: partial
+maturity: beta
+owners:
+  - platform
+summary: >
+  S3-compatible object storage for mission artifacts, docs, and file blobs.
+  RustFS is the default local-dev object store. Production deployments target
+  any S3-compatible endpoint. Metadata and provenance live in PostgreSQL;
+  binary content lives in the object store.
+
+source_of_truth:
+  docs:
+    - README.md
+    - docs/DEPLOYMENT.md
+    - docs/architecture.md
+  code_paths:
+    - backend/app/services/object_storage.py
+    - backend/app/routers/artifacts.py
+
+entrypoints:
+  run:
+    - command: bash scripts/dev-up.sh
+      purpose: Starts RustFS alongside backend and database
+  verify:
+    - description: Check readiness endpoint — backend returns 503 if object storage is misconfigured when required
+
+interfaces:
+  env_vars:
+    - OBJECT_STORAGE_URL     # S3-compatible endpoint URL
+    - OBJECT_STORAGE_KEY
+    - OBJECT_STORAGE_SECRET
+    - OBJECT_STORAGE_BUCKET
+    - OBJECT_STORAGE_REQUIRED  # true = 503 if unavailable
+
+implemented:
+  - S3-compatible artifact upload and download
+  - SHA256 content addressing
+  - signed download URLs
+  - RustFS local dev container
+  - readiness gate (optional)
+
+gaps:
+  - bucket bootstrapping not automated in scripts (manual step documented in DEPLOYMENT.md)
+  - no lifecycle/expiry policy configured
+
+todos:
+  - document bucket bootstrap steps in a runbook or script
+
+dependencies:
+  - api
+
+read_next:
+  - docs/DEPLOYMENT.md
+
+last_reviewed: 2026-03-21
+confidence: medium
