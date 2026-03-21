@@ -1,0 +1,37 @@
+version: 1
+kind: missioncontrol-domain
+description: >
+  Schema contract for all docs/catalog/*.yaml domain files.
+  The validate-doc-catalog.py script enforces these rules.
+
+required_fields:
+  - id
+  - title
+  - status
+  - maturity
+  - summary
+  - source_of_truth
+  - entrypoints
+  - implemented
+  - gaps
+  - todos
+  - last_reviewed
+  - confidence
+
+enums:
+  status:
+    - planned
+    - stub
+    - partial
+    - active
+    - deprecated
+    - experimental
+  maturity:
+    - experimental
+    - alpha
+    - beta
+    - productionish
+  confidence:
+    - low
+    - medium
+    - high

@@ -1,0 +1,37 @@
+version: 1
+project: missioncontrol
+last_reviewed: 2026-03-21
+read_first:
+  - README.md
+  - docs/architecture.md
+  - docs/catalog/index.yaml
+
+domains:
+  - id: auth
+    title: Authentication and session model
+    file: docs/catalog/auth.yaml
+    status: partial
+  - id: api
+    title: FastAPI backend and MCP surface
+    file: docs/catalog/api.yaml
+    status: active
+  - id: mc-rust
+    title: Rust mc CLI and daemon
+    file: docs/catalog/mc-rust.yaml
+    status: active
+  - id: swarm
+    title: Codex multi-session swarm workflow
+    file: docs/catalog/swarm.yaml
+    status: experimental
+  - id: storage
+    title: Artifact persistence via S3 and RustFS
+    file: docs/catalog/storage.yaml
+    status: partial
+  - id: web
+    title: AI-first web console and UI shell
+    file: docs/catalog/web.yaml
+    status: active
+  - id: integrations
+    title: External integrations and platform hooks
+    file: docs/catalog/integrations.yaml
+    status: partial
