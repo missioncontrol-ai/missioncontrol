@@ -53,6 +53,7 @@ from app.routers import (
     ai,
     scheduled_jobs,
     persistence,
+    remotectl,
 )
 
 app = FastAPI(
@@ -550,6 +551,7 @@ app.include_router(scheduled_jobs.router)
 app.include_router(persistence.router)
 app.include_router(auth_sessions.router)
 app.include_router(oidc_web.router)
+app.include_router(remotectl.router)
 
 
 def _web_dir() -> Path | None:
