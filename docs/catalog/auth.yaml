@@ -1,0 +1,69 @@
+id: auth
+title: Authentication and session model
+status: partial
+maturity: beta
+owners:
+  - platform
+summary: >
+  Supports token, OIDC, and dual auth flows for API, MCP, and browser sessions.
+  Token mode uses MC_TOKEN header. OIDC uses PKCE browser flow with one-time exchange
+  into an mcs session token. Dual mode allows both.
+
+source_of_truth:
+  docs:
+    - README.md
+    - docs/OIDC.md
+    - docs/DEPLOYMENT.md
+  code_paths:
+    - backend/app/services/authz.py
+    - backend/app/routers/
+
+entrypoints:
+  run:
+    - command: bash scripts/dev-up.sh
+      purpose: Start local stack with default token auth
+  verify:
+    - command: curl http://localhost:8008/healthz
+      purpose: Liveness check
+    - command: curl http://localhost:8008/readyz
+      purpose: Readiness check
+
+interfaces:
+  env_vars:
+    - AUTH_MODE          # token | oidc | dual
+    - OIDC_REQUIRED      # true | false
+    - MC_TOKEN           # bearer token for token auth
+    - OIDC_ISSUER_URL    # OIDC provider URL
+    - OIDC_CLIENT_ID
+    - OIDC_CLIENT_SECRET
+  endpoints:
+    - /auth/oidc/start
+    - /auth/oidc/callback
+    - /auth/oidc/exchange
+    - /mcp/health
+
+implemented:
+  - token auth mode
+  - oidc auth mode (PKCE browser flow)
+  - dual auth mode (token + oidc both accepted)
+  - one-time code exchange into mcs session token
+  - actor_subject_from_request extraction (email or OIDC subject)
+  - platform admin via service-token
+
+gaps:
+  - auth failure mode matrix not centrally documented
+  - local agent auth vs browser auth boundaries need a single authoritative summary
+
+todos:
+  - add auth sequence diagram
+  - document service-account auth future state
+
+dependencies:
+  - api
+
+read_next:
+  - docs/OIDC.md
+  - docs/DEPLOYMENT.md
+
+last_reviewed: 2026-03-21
+confidence: medium

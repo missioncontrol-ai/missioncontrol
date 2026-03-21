@@ -1,0 +1,87 @@
+id: api
+title: FastAPI backend and MCP surface
+status: active
+maturity: productionish
+owners:
+  - platform
+summary: >
+  FastAPI backend exposing REST endpoints for missions, tasks, docs, artifacts,
+  profiles, search, and governance. Also serves the MCP protocol surface at /mcp/
+  for agent tool calls. 50+ MCP tools available to agents without a custom SDK.
+
+source_of_truth:
+  docs:
+    - README.md
+    - docs/architecture.md
+    - docs/AI-CONSOLE.md
+    - docs/DEPLOYMENT.md
+  code_paths:
+    - backend/app/main.py
+    - backend/app/routers/
+    - backend/app/models.py
+    - backend/app/schemas.py
+  openapi: http://localhost:8008/api/docs
+
+entrypoints:
+  run:
+    - command: bash scripts/dev-up.sh
+      purpose: Start full local stack
+    - command: cd backend && uvicorn app.main:app --reload --port 8008
+      purpose: Start backend only
+  verify:
+    - command: curl http://localhost:8008/healthz
+      purpose: Liveness check
+    - command: curl http://localhost:8008/readyz
+      purpose: Readiness check
+    - command: curl http://localhost:8008/mcp/health
+      purpose: MCP surface health
+    - command: curl http://localhost:8008/api/docs
+      purpose: OpenAPI schema
+
+interfaces:
+  env_vars:
+    - DATABASE_URL       # PostgreSQL (prod) or SQLite (dev)
+    - AUTH_MODE
+    - MC_TOKEN
+    - OBJECT_STORAGE_URL
+  key_endpoints:
+    - /healthz
+    - /readyz
+    - /mcp/health
+    - /mcp/call          # MCP tool dispatch
+    - /search/tasks
+    - /search/docs
+    - /docs
+    - /me/profiles/
+
+implemented:
+  - missions, klusters, tasks, docs, artifacts CRUD
+  - semantic vector search (pgvector or Chroma fallback)
+  - MCP tool surface (50+ tools)
+  - user profile bundles
+  - S3-backed artifact storage
+  - governance/approval workflows
+  - git-backed audit ledger
+  - AI console chat protocol
+  - role-based access control (Admin/Contributor/Viewer)
+  - Slack channel bindings
+  - remote agent launch and heartbeat
+
+gaps:
+  - OpenAPI doc not yet fully reviewed for completeness
+  - no dedicated admin UI for managing mission memberships
+
+todos:
+  - validate OpenAPI schema coverage against full endpoint list
+
+dependencies:
+  - auth
+  - storage
+
+read_next:
+  - docs/architecture.md
+  - docs/AI-CONSOLE.md
+  - docs/DEPLOYMENT.md
+
+last_reviewed: 2026-03-21
+confidence: high
