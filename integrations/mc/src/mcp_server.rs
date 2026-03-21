@@ -287,11 +287,30 @@ async fn dispatch(
             // Always send listChanged immediately. If warm succeeded, tools/list
             // will hit the hot cache. If not, the retry task will send another
             // listChanged later when the backend is ready.
-            Some(json!({
+            //
+            // Important protocol nuance: some hosts send `initialized` as a request
+            // with an id (instead of a pure notification). In that case we must
+            // return a regular JSON-RPC result response, and emit listChanged as a
+            // separate outbound notification.
+            let list_changed = json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/tools/list_changed",
                 "params": {}
-            }))
+            });
+
+            if msg.get("id").is_some() {
+                let tx = notif_tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(list_changed).await;
+                });
+                Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {}
+                }))
+            } else {
+                Some(list_changed)
+            }
         }
 
         "notifications/cancelled" => None,

@@ -1,6 +1,6 @@
 [package]
 name = "mc"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 authors = ["MissionControl Engineers <support@missioncontrol.ai>"]
 description = "Rust-native MCP bridge for Mission Control"
