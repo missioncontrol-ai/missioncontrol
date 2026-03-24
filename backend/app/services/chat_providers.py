@@ -1,6 +1,8 @@
 import hmac
 import json
 import os
+import time
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
@@ -175,6 +177,16 @@ class GoogleChatProvider(ChatProvider):
         super().__init__(name="google_chat")
 
     def verify(self, *, headers: Mapping[str, str], body: bytes) -> tuple[bool, str]:
+        signing_secret = (os.getenv("GOOGLE_CHAT_SIGNING_SECRET") or "").strip()
+        if signing_secret:
+            ok, reason = _verify_hmac_webhook(
+                headers=headers,
+                body=body,
+                signing_secret=signing_secret,
+                timestamp_header="x-mc-timestamp",
+                signature_header="x-mc-signature",
+            )
+            return ok, reason
         expected = (os.getenv("GOOGLE_CHAT_VERIFICATION_TOKEN") or "").strip()
         if not expected:
             return False, "google_chat_verification_token_missing"
@@ -252,6 +264,16 @@ class TeamsProvider(ChatProvider):
         super().__init__(name="teams")
 
     def verify(self, *, headers: Mapping[str, str], body: bytes) -> tuple[bool, str]:
+        signing_secret = (os.getenv("TEAMS_SIGNING_SECRET") or "").strip()
+        if signing_secret:
+            ok, reason = _verify_hmac_webhook(
+                headers=headers,
+                body=body,
+                signing_secret=signing_secret,
+                timestamp_header="x-mc-timestamp",
+                signature_header="x-mc-signature",
+            )
+            return ok, reason
         expected = (os.getenv("TEAMS_VERIFICATION_TOKEN") or "").strip()
         if not expected:
             return False, "teams_verification_token_missing"
@@ -328,6 +350,41 @@ def _header(headers: Mapping[str, str], key: str) -> str:
         if str(name).lower() == lower:
             return str(value)
     return ""
+
+
+def _signature_tolerance_seconds() -> int:
+    raw = (os.getenv("MC_CHAT_SIGNATURE_TOLERANCE_SEC") or "300").strip()
+    try:
+        return max(60, min(int(raw), 3600))
+    except ValueError:
+        return 300
+
+
+def _verify_hmac_webhook(
+    *,
+    headers: Mapping[str, str],
+    body: bytes,
+    signing_secret: str,
+    timestamp_header: str,
+    signature_header: str,
+) -> tuple[bool, str]:
+    timestamp = _header(headers, timestamp_header)
+    signature = _header(headers, signature_header)
+    if not timestamp or not signature:
+        return False, "signature_headers_missing"
+    try:
+        ts = int(timestamp)
+    except ValueError:
+        return False, "signature_timestamp_invalid"
+    tolerance = _signature_tolerance_seconds()
+    now = int(time.time())
+    if abs(now - ts) > tolerance:
+        return False, "signature_timestamp_out_of_range"
+    expected_base = f"v1:{timestamp}:{body.decode('utf-8')}".encode("utf-8")
+    expected_sig = "v1=" + hmac.new(signing_secret.encode("utf-8"), expected_base, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected_sig, signature):
+        return False, "signature_invalid"
+    return True, "ok"
 
 
 def get_chat_provider(name: str) -> ChatProvider | None:
