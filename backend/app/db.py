@@ -160,6 +160,26 @@ def _migrate_schema() -> None:
                 conn.execute(text("ALTER TABLE artifact ADD COLUMN size_bytes INTEGER DEFAULT 0"))
             if "mime_type" not in artifact_columns:
                 conn.execute(text("ALTER TABLE artifact ADD COLUMN mime_type TEXT DEFAULT ''"))
+            if "storage_class" not in artifact_columns:
+                conn.execute(text("ALTER TABLE artifact ADD COLUMN storage_class TEXT DEFAULT ''"))
+            if "content_b64" not in artifact_columns:
+                conn.execute(text("ALTER TABLE artifact ADD COLUMN content_b64 TEXT"))
+            if "external_pointer" not in artifact_columns:
+                conn.execute(text("ALTER TABLE artifact ADD COLUMN external_pointer BOOLEAN DEFAULT 0"))
+            if "external_uri" not in artifact_columns:
+                conn.execute(text("ALTER TABLE artifact ADD COLUMN external_uri TEXT DEFAULT ''"))
+
+    if "userprofile" in tables:
+        profile_columns = {c["name"] for c in inspect(engine).get_columns("userprofile")}
+        with engine.begin() as conn:
+            if "mirror_uri" not in profile_columns:
+                conn.execute(text("ALTER TABLE userprofile ADD COLUMN mirror_uri TEXT DEFAULT ''"))
+            if "mirror_sha256" not in profile_columns:
+                conn.execute(text("ALTER TABLE userprofile ADD COLUMN mirror_sha256 TEXT DEFAULT ''"))
+            if "mirror_size_bytes" not in profile_columns:
+                conn.execute(text("ALTER TABLE userprofile ADD COLUMN mirror_size_bytes INTEGER DEFAULT 0"))
+            if "mirrored_at" not in profile_columns:
+                conn.execute(text("ALTER TABLE userprofile ADD COLUMN mirrored_at TIMESTAMP"))
 
     # AI session runtime columns (added in migration 20260315_0010)
     if "aisession" in tables:

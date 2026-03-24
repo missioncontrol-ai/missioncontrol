@@ -67,6 +67,10 @@ class Artifact(SQLModel, table=True):
     content_sha256: str = ""
     size_bytes: int = 0
     mime_type: str = ""
+    storage_class: str = ""
+    content_b64: Optional[str] = Field(default=None, sa_column=Column("content_b64", Text))
+    external_pointer: bool = False
+    external_uri: str = ""
     status: str = "draft"
     version: int = 1
     provenance: str = ""
@@ -433,6 +437,10 @@ class UserProfile(SQLModel, table=True):
     is_default: bool = False
     manifest_json: str = "[]"
     tarball_b64: Optional[str] = Field(default=None, sa_column=Column("tarball_b64", Text))
+    mirror_uri: str = ""
+    mirror_sha256: str = ""
+    mirror_size_bytes: int = 0
+    mirrored_at: Optional[datetime] = None
     sha256: Optional[str] = None
     size_bytes: int = 0
     created_at: datetime = Field(default_factory=datetime.utcnow)

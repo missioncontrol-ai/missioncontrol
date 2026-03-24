@@ -90,11 +90,15 @@ class ArtifactCreate(BaseModel):
     kluster_id: str
     name: str
     artifact_type: str = "file"
-    uri: str
+    uri: str = ""
     storage_backend: str = "inline"
     content_sha256: str = ""
     size_bytes: int = 0
     mime_type: str = ""
+    storage_class: str = ""
+    content_b64: Optional[str] = None
+    external_pointer: bool = False
+    external_uri: str = ""
     status: str = "draft"
     provenance: str = ""
 
@@ -107,6 +111,10 @@ class ArtifactUpdate(BaseModel):
     content_sha256: Optional[str] = None
     size_bytes: Optional[int] = None
     mime_type: Optional[str] = None
+    storage_class: Optional[str] = None
+    content_b64: Optional[str] = None
+    external_pointer: Optional[bool] = None
+    external_uri: Optional[str] = None
     status: Optional[str] = None
     provenance: Optional[str] = None
 
@@ -602,6 +610,10 @@ class UserProfileRead(BaseModel):
     manifest: List[dict]
     sha256: Optional[str]
     size_bytes: int
+    mirror_uri: str = ""
+    mirror_sha256: str = ""
+    mirror_size_bytes: int = 0
+    mirrored_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

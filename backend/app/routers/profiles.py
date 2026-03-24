@@ -16,6 +16,7 @@ from app.schemas import (
     UserProfileUpdate,
 )
 from app.services.authz import actor_subject_from_request
+from app.services.object_storage import get_bytes_from_uri, object_storage_enabled, put_bytes
 from app.services.pagination import bounded_limit, limit_query
 
 router = APIRouter(tags=["profiles"])
@@ -41,9 +42,24 @@ def _profile_read(p: UserProfile) -> UserProfileRead:
         manifest=json.loads(p.manifest_json or "[]"),
         sha256=p.sha256,
         size_bytes=p.size_bytes,
+        mirror_uri=p.mirror_uri or "",
+        mirror_sha256=p.mirror_sha256 or "",
+        mirror_size_bytes=p.mirror_size_bytes or 0,
+        mirrored_at=p.mirrored_at,
         created_at=p.created_at,
         updated_at=p.updated_at,
     )
+
+
+def _mirror_profile_bundle(*, owner_subject: str, name: str, raw: bytes) -> tuple[str, int, str, datetime] | None:
+    if not object_storage_enabled():
+        return None
+    owner_slug = re.sub(r"[^a-z0-9]+", "-", (owner_subject or "").strip().lower()).strip("-") or "owner"
+    name_slug = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-") or "profile"
+    key = f"profiles/{owner_slug}/{name_slug}/{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.tar"
+    uri, size = put_bytes(key=key, body=raw, content_type="application/x-tar")
+    sha = hashlib.sha256(raw).hexdigest()
+    return uri, size, sha, datetime.utcnow()
 
 
 def _get_owned_profile(session, owner_subject: str, name: str) -> UserProfile:
@@ -126,6 +142,9 @@ def create_profile(payload: UserProfileCreate, request: Request):
             size_bytes=size_bytes,
         )
         session.add(profile)
+        mirror = _mirror_profile_bundle(owner_subject=owner_subject, name=payload.name, raw=base64.b64decode(payload.tarball_b64))
+        if mirror:
+            profile.mirror_uri, profile.mirror_size_bytes, profile.mirror_sha256, profile.mirrored_at = mirror
         session.commit()
         session.refresh(profile)
         return _profile_read(profile)
@@ -158,6 +177,9 @@ def replace_profile(name: str, payload: UserProfileCreate, request: Request):
         profile.size_bytes = size_bytes
         profile.updated_at = datetime.utcnow()
         session.add(profile)
+        mirror = _mirror_profile_bundle(owner_subject=owner_subject, name=name, raw=base64.b64decode(payload.tarball_b64))
+        if mirror:
+            profile.mirror_uri, profile.mirror_size_bytes, profile.mirror_sha256, profile.mirrored_at = mirror
         session.commit()
         session.refresh(profile)
         return _profile_read(profile)
@@ -181,6 +203,9 @@ def patch_profile(name: str, payload: UserProfileUpdate, request: Request):
         if payload.tarball_b64 is not None:
             profile.sha256, profile.size_bytes = _compute_tarball_fields(payload.tarball_b64)
             profile.tarball_b64 = payload.tarball_b64
+            mirror = _mirror_profile_bundle(owner_subject=owner_subject, name=name, raw=base64.b64decode(payload.tarball_b64))
+            if mirror:
+                profile.mirror_uri, profile.mirror_size_bytes, profile.mirror_sha256, profile.mirrored_at = mirror
 
         profile.updated_at = datetime.utcnow()
         session.add(profile)
@@ -204,7 +229,14 @@ def download_profile(name: str, request: Request, if_sha256: str | None = None):
     with get_session() as session:
         profile = _get_owned_profile(session, owner_subject, name)
         _enforce_expected_sha(profile, if_sha256)
-        if not profile.tarball_b64:
+        tarball_b64 = profile.tarball_b64 or ""
+        if not tarball_b64 and profile.mirror_uri:
+            try:
+                body, _ = get_bytes_from_uri(profile.mirror_uri)
+                tarball_b64 = base64.b64encode(body).decode("ascii")
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"Profile mirror fetch failed: {exc}") from exc
+        if not tarball_b64:
             raise HTTPException(status_code=404, detail="Profile has no bundle")
         return UserProfileDownloadRead(
             id=profile.id,
@@ -217,7 +249,7 @@ def download_profile(name: str, request: Request, if_sha256: str | None = None):
             size_bytes=profile.size_bytes,
             created_at=profile.created_at,
             updated_at=profile.updated_at,
-            tarball_b64=profile.tarball_b64,
+            tarball_b64=tarball_b64,
         )
 
 

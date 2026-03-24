@@ -139,10 +139,14 @@ TOOLS = [
                 "name": {"type": "string"},
                 "artifact_type": {"type": "string"},
                 "uri": {"type": "string"},
+                "content_b64": {"type": "string"},
                 "storage_backend": {"type": "string"},
+                "storage_class": {"type": "string"},
                 "content_sha256": {"type": "string"},
                 "size_bytes": {"type": "integer"},
                 "mime_type": {"type": "string"},
+                "external_pointer": {"type": "boolean"},
+                "external_uri": {"type": "string"},
                 "status": {"type": "string"},
                 "provenance": {"type": "string"},
             },
@@ -842,6 +846,10 @@ def _profile_to_dict(profile: UserProfile) -> dict:
         "manifest": json.loads(profile.manifest_json or "[]"),
         "sha256": profile.sha256,
         "size_bytes": profile.size_bytes,
+        "mirror_uri": profile.mirror_uri or "",
+        "mirror_sha256": profile.mirror_sha256 or "",
+        "mirror_size_bytes": profile.mirror_size_bytes or 0,
+        "mirrored_at": profile.mirrored_at,
         "created_at": profile.created_at,
         "updated_at": profile.updated_at,
     }
@@ -1128,10 +1136,14 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 "name": str(args.get("name") or ""),
                 "artifact_type": str(args.get("artifact_type") or "file"),
                 "uri": str(args.get("uri") or ""),
+                "content_b64": str(args.get("content_b64") or ""),
                 "storage_backend": str(args.get("storage_backend") or "inline"),
+                "storage_class": str(args.get("storage_class") or ""),
                 "content_sha256": str(args.get("content_sha256") or ""),
                 "size_bytes": int(args.get("size_bytes") or 0),
                 "mime_type": str(args.get("mime_type") or ""),
+                "external_pointer": bool(args.get("external_pointer") or False),
+                "external_uri": str(args.get("external_uri") or ""),
                 "status": str(args.get("status") or "draft"),
                 "provenance": str(args.get("provenance") or ""),
             }
@@ -1152,7 +1164,16 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 )
             except HTTPException as exc:
                 return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="schema_validation_failed")
-            for key in ("storage_backend", "content_sha256", "size_bytes", "mime_type"):
+            for key in (
+                "storage_backend",
+                "storage_class",
+                "content_sha256",
+                "size_bytes",
+                "mime_type",
+                "content_b64",
+                "external_pointer",
+                "external_uri",
+            ):
                 payload_data[key] = raw_payload.get(key)
             if payload_data["uri"].startswith("s3://") and not args.get("storage_backend"):
                 payload_data["storage_backend"] = "s3"
@@ -1166,30 +1187,62 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             except HTTPException as exc:
                 return _mcp_error(request_id=request_id, error=str(exc.detail), error_code="forbidden")
             artifact = Artifact(**payload_data)
-            if object_storage_enabled() and artifact.uri and not artifact.uri.startswith("s3://"):
-                safe_name = (artifact.name or "artifact").strip().lower().replace(" ", "-")[:48] or "artifact"
-                key = build_scoped_key(
-                    mission_id=kluster.mission_id,
-                    kluster_id=artifact.kluster_id,
-                    entity="artifacts",
-                    filename=f"{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{safe_name}.json",
+            content_b64 = str(artifact.content_b64 or "").strip()
+            if content_b64 and artifact.external_pointer:
+                return _mcp_error(
+                    request_id=request_id,
+                    error="content_b64 and external_pointer cannot both be set",
+                    error_code="invalid_request",
                 )
-                blob = json.dumps(
-                    {
-                        "name": artifact.name,
-                        "artifact_type": artifact.artifact_type,
-                        "source_uri": artifact.uri,
-                        "status": artifact.status,
-                        "provenance": artifact.provenance,
-                    },
-                    separators=(",", ":"),
-                ).encode("utf-8")
-                persisted_uri, size_bytes = put_bytes(key=key, body=blob, content_type="application/json")
-                artifact.uri = persisted_uri
+            if content_b64:
+                try:
+                    body = base64.b64decode(content_b64, validate=True)
+                except Exception as exc:
+                    return _mcp_error(request_id=request_id, error=f"Invalid content_b64: {exc}", error_code="invalid_request")
+                mime_type = str(artifact.mime_type or "application/octet-stream")
+                artifact.size_bytes = len(body)
+                artifact.content_sha256 = hashlib.sha256(body).hexdigest()
+                inline_threshold = 512 * 1024
+                use_s3 = object_storage_enabled() and (len(body) > inline_threshold or mime_type.startswith("image/"))
+                if use_s3:
+                    safe_name = (artifact.name or "artifact").strip().lower().replace(" ", "-")[:48] or "artifact"
+                    key = build_scoped_key(
+                        mission_id=kluster.mission_id,
+                        kluster_id=artifact.kluster_id,
+                        entity="artifacts",
+                        filename=f"{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{safe_name}",
+                    )
+                    persisted_uri, size_bytes = put_bytes(key=key, body=body, content_type=mime_type)
+                    artifact.uri = persisted_uri
+                    artifact.storage_backend = "s3"
+                    artifact.storage_class = "s3_primary"
+                    artifact.size_bytes = size_bytes
+                    artifact.content_b64 = None
+                    artifact.external_pointer = False
+                    artifact.external_uri = ""
+                else:
+                    artifact.uri = artifact.uri or f"db-inline://artifacts/{artifact.content_sha256}"
+                    artifact.storage_backend = "inline"
+                    artifact.storage_class = "db_inline"
+                    artifact.external_pointer = False
+                    artifact.external_uri = ""
+            elif artifact.external_pointer or artifact.external_uri:
+                resolved_uri = (artifact.external_uri or artifact.uri or "").strip()
+                if not resolved_uri:
+                    return _mcp_error(
+                        request_id=request_id,
+                        error="external pointer mode requires external_uri or uri",
+                        error_code="invalid_request",
+                    )
+                artifact.uri = resolved_uri
+                artifact.external_pointer = True
+                artifact.external_uri = resolved_uri
+                artifact.storage_class = "external_pointer"
+                artifact.storage_backend = artifact.storage_backend or "external"
+                artifact.content_b64 = None
+            elif object_storage_enabled() and artifact.uri and artifact.uri.startswith("s3://"):
                 artifact.storage_backend = "s3"
-                artifact.size_bytes = size_bytes
-                artifact.mime_type = "application/json"
-                artifact.content_sha256 = hashlib.sha256(blob).hexdigest()
+                artifact.storage_class = artifact.storage_class or "s3_primary"
             session.add(artifact)
             session.commit()
             session.refresh(artifact)
@@ -1357,18 +1410,29 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 return _mcp_error(request_id=request_id, error="Artifact not found", error_code="not_found")
             if artifact.kluster_id != lease.kluster_id:
                 return _mcp_error(request_id=request_id, error="Artifact is outside lease kluster scope", error_code="forbidden")
-            if artifact.storage_backend != "s3" or not artifact.uri.startswith("s3://"):
-                return _mcp_error(
-                    request_id=request_id,
-                    error="Artifact is not S3-backed and cannot be lazily fetched",
-                    error_code="invalid_request",
-                )
-            expected = scoped_prefix(mission_id=lease.mission_id, kluster_id=lease.kluster_id)
             if mode == "content":
-                try:
-                    body, content_type = get_bytes_from_uri(artifact.uri, expected_prefix=expected)
-                except Exception as exc:
-                    return _mcp_error(request_id=request_id, error=f"S3 fetch failed: {exc}", error_code="storage_error")
+                if artifact.storage_backend == "s3" and artifact.uri.startswith("s3://"):
+                    expected = scoped_prefix(mission_id=lease.mission_id, kluster_id=lease.kluster_id)
+                    try:
+                        body, content_type = get_bytes_from_uri(artifact.uri, expected_prefix=expected)
+                    except Exception as exc:
+                        return _mcp_error(request_id=request_id, error=f"S3 fetch failed: {exc}", error_code="storage_error")
+                elif artifact.content_b64:
+                    try:
+                        body = base64.b64decode(str(artifact.content_b64), validate=True)
+                    except Exception as exc:
+                        return _mcp_error(
+                            request_id=request_id,
+                            error=f"Inline content decode failed: {exc}",
+                            error_code="storage_error",
+                        )
+                    content_type = artifact.mime_type or "application/octet-stream"
+                else:
+                    return _mcp_error(
+                        request_id=request_id,
+                        error="Artifact does not have managed retrievable content",
+                        error_code="invalid_request",
+                    )
                 return _mcp_ok(
                     request_id=request_id,
                     result={
@@ -1380,6 +1444,13 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     },
                 )
             expires_seconds = int(args.get("expires_seconds") or 60)
+            if artifact.storage_backend != "s3" or not artifact.uri.startswith("s3://"):
+                return _mcp_error(
+                    request_id=request_id,
+                    error="Artifact is not S3-backed and cannot generate download_url",
+                    error_code="invalid_request",
+                )
+            expected = scoped_prefix(mission_id=lease.mission_id, kluster_id=lease.kluster_id)
             try:
                 download_url = presign_get_uri(
                     artifact.uri,
@@ -2957,6 +3028,19 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             except Exception:
                 return _mcp_error(request_id=request_id, error="tarball_b64 is not valid base64")
             computed_sha = hashlib.sha256(raw).hexdigest()
+            mirror_uri = ""
+            mirror_sha = ""
+            mirror_size = 0
+            mirrored_at = None
+            if object_storage_enabled():
+                owner_slug = "".join(ch if ch.isalnum() else "-" for ch in actor_subject.lower()).strip("-") or "owner"
+                name_slug = "".join(ch if ch.isalnum() else "-" for ch in name.lower()).strip("-") or "profile"
+                key = f"profiles/{owner_slug}/{name_slug}/{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.tar"
+                persisted_uri, persisted_size = put_bytes(key=key, body=raw, content_type="application/x-tar")
+                mirror_uri = persisted_uri
+                mirror_size = persisted_size
+                mirror_sha = computed_sha
+                mirrored_at = datetime.utcnow()
             profile = session.exec(
                 select(UserProfile)
                 .where(UserProfile.owner_subject == actor_subject)
@@ -2980,6 +3064,11 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                 profile.tarball_b64 = tarball_b64
                 profile.sha256 = computed_sha
                 profile.size_bytes = len(raw)
+                if mirror_uri:
+                    profile.mirror_uri = mirror_uri
+                    profile.mirror_size_bytes = mirror_size
+                    profile.mirror_sha256 = mirror_sha
+                    profile.mirrored_at = mirrored_at
                 profile.updated_at = datetime.utcnow()
                 session.add(profile)
             else:
@@ -2992,6 +3081,10 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     tarball_b64=tarball_b64,
                     sha256=computed_sha,
                     size_bytes=len(raw),
+                    mirror_uri=mirror_uri,
+                    mirror_sha256=mirror_sha,
+                    mirror_size_bytes=mirror_size,
+                    mirrored_at=mirrored_at,
                 )
                 session.add(profile)
             if is_default:
@@ -3033,11 +3126,22 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                         "name": name,
                     },
                 )
+            tarball_b64 = profile.tarball_b64 or ""
+            if not tarball_b64 and profile.mirror_uri:
+                try:
+                    body, _ = get_bytes_from_uri(profile.mirror_uri)
+                    tarball_b64 = base64.b64encode(body).decode("ascii")
+                except Exception as exc:
+                    return _mcp_error(
+                        request_id=request_id,
+                        error=f"profile mirror fetch failed: {exc}",
+                        error_code="storage_error",
+                    )
             return _mcp_ok(
                 request_id=request_id,
                 result={
                     "profile": _profile_to_dict(profile),
-                    "tarball_b64": profile.tarball_b64 or "",
+                    "tarball_b64": tarball_b64,
                 },
             )
 

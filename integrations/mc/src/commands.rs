@@ -234,6 +234,9 @@ pub enum WorkspaceCommand {
         mode: String,
         #[arg(long, default_value_t = 60)]
         expires_seconds: u64,
+        /// When mode=content, decode and write bytes to this local path.
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Commit workspace changes with a JSON change_set.
     Commit {
@@ -1947,6 +1950,7 @@ async fn handle_workspace(
             artifact_id,
             mode,
             expires_seconds,
+            out,
         } => {
             let args = json!({
                 "lease_id": lease_id,
@@ -1954,7 +1958,7 @@ async fn handle_workspace(
                 "mode": mode,
                 "expires_seconds": expires_seconds,
             });
-            let response = call_mcp_tool(
+            let mut response = call_mcp_tool(
                 &client,
                 booster,
                 schema_pack,
@@ -1962,6 +1966,28 @@ async fn handle_workspace(
                 args,
             )
             .await?;
+            if let Some(out_path) = out {
+                if mode.trim().eq_ignore_ascii_case("content") {
+                    let content_b64 = response
+                        .get("content_b64")
+                        .and_then(|v| v.as_str())
+                        .context("artifact content response missing content_b64")?;
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(content_b64)
+                        .context("artifact content_b64 is not valid base64")?;
+                    if let Some(parent) = out_path.parent() {
+                        fs::create_dir_all(parent).with_context(|| {
+                            format!("failed to create parent directory {}", parent.display())
+                        })?;
+                    }
+                    fs::write(&out_path, &bytes)
+                        .with_context(|| format!("failed to write {}", out_path.display()))?;
+                    response["written_path"] = json!(out_path.display().to_string());
+                    response["written_size_bytes"] = json!(bytes.len());
+                } else {
+                    anyhow::bail!("--out requires --mode content");
+                }
+            }
             if json_output {
                 print_json(&response);
             } else {
