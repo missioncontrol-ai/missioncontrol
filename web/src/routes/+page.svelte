@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
-  import { authStore, loginWithToken, token, startOidcLogin } from '$lib/auth';
+  import { authStore, bootstrapAuth, loginWithCookieSession, loginWithToken, token, startOidcLogin } from '$lib/auth';
   import {
     fetchTree,
     fetchPolicy,
@@ -385,7 +385,8 @@
     if (grant) {
       exchangeOidcGrant(grant)
         .then((res) => {
-          loginWithToken(res.token);
+          void res;
+          loginWithCookieSession();
           hashParams.delete('oidc_grant');
           params.delete('oidc_grant');
           const query = params.toString();
@@ -400,6 +401,8 @@
           showToast(err instanceof Error ? err.message : 'OIDC login failed');
         });
     }
+
+    bootstrapAuth();
 
     const unsubscribe = authStore.subscribe(async ($auth) => {
       if ($auth.loggedIn) {

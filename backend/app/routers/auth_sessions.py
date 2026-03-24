@@ -11,7 +11,7 @@ import os
 import secrets
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlmodel import select
 
@@ -22,6 +22,7 @@ from app.services.authz import actor_subject_from_request
 router = APIRouter(tags=["auth"])
 
 SESSION_TOKEN_PREFIX = "mcs_"
+SESSION_COOKIE_NAME = "mc_session_token"
 _DEFAULT_TTL_HOURS = 8
 _MAX_TTL_HOURS = 720  # 30 days hard cap
 
@@ -133,8 +134,9 @@ def refresh_session(request: Request):
 
 
 @router.delete("/auth/sessions/current", status_code=204)
-def revoke_session(request: Request):
+def revoke_session(request: Request, response: Response):
     """Revoke the current session token. No-op for non-session auth."""
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
     principal = getattr(request.state, "principal", None)
     if not isinstance(principal, dict) or principal.get("auth_type") != "session":
         # Non-session auth: nothing to revoke, succeed silently

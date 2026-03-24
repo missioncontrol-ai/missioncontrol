@@ -266,12 +266,12 @@ async def require_auth(request, call_next):
         return _finalize_response(request, response, start)
 
     auth_header = request.headers.get("authorization")
-    token = _extract_bearer_token(auth_header)
+    token = _extract_bearer_token(auth_header) or _extract_session_cookie_token(request)
     if not token:
         return _unauthorized(
             request,
             "missing_token",
-            "Unauthorized: bearer token is required",
+            "Unauthorized: bearer token or session cookie is required",
             start=start,
         )
 
@@ -341,6 +341,13 @@ def _extract_bearer_token(auth_header: str | None) -> str | None:
         return None
     token = parts[1].strip()
     return token if token else None
+
+
+def _extract_session_cookie_token(request: Request) -> str | None:
+    token = str(request.cookies.get("mc_session_token") or "").strip()
+    if token.startswith("mcs_"):
+        return token
+    return None
 
 
 async def _require_oidc_token(request, token: str, call_next, start: float):

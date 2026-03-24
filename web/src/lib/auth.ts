@@ -1,44 +1,54 @@
-import { browser } from '$app/environment';
 import { derived, writable } from 'svelte/store';
 
-const STORAGE_KEY = 'missioncontrol:token';
+const tokenStore = writable<string | null>(null);
+const cookieSessionStore = writable<boolean>(false);
 
-function loadToken(): string | null {
-  if (!browser) return null;
-  return localStorage.getItem(STORAGE_KEY);
-}
-
-const tokenStore = writable<string | null>(loadToken());
-
-const authStore = derived(tokenStore, ($token) => ({
+const authStore = derived([tokenStore, cookieSessionStore], ([$token, $cookieSession]) => ({
   token: $token,
-  loggedIn: Boolean($token)
+  loggedIn: Boolean($token) || $cookieSession
 }));
-
-function persistToken(value: string | null) {
-  if (!browser) return;
-  if (value) {
-    localStorage.setItem(STORAGE_KEY, value);
-  } else {
-    localStorage.removeItem(STORAGE_KEY);
-  }
-}
 
 export function loginWithToken(value: string) {
   tokenStore.set(value);
-  persistToken(value);
+  cookieSessionStore.set(false);
 }
 
-export function logout() {
+export function loginWithCookieSession() {
   tokenStore.set(null);
-  persistToken(null);
+  cookieSessionStore.set(true);
+}
+
+export async function bootstrapAuth() {
+  try {
+    const res = await fetch('/auth/me', { credentials: 'include' });
+    if (res.ok) {
+      cookieSessionStore.set(true);
+      return;
+    }
+  } catch {
+    // Ignore and keep logged out.
+  }
+  cookieSessionStore.set(false);
+}
+
+export async function logout() {
+  try {
+    await fetch('/auth/sessions/current', {
+      method: 'DELETE',
+      credentials: 'include'
+    });
+  } catch {
+    // Local logout still proceeds.
+  }
+  tokenStore.set(null);
+  cookieSessionStore.set(false);
 }
 
 export function startOidcLogin(redirect = window?.location?.href) {
   const path = (() => {
     try {
       const parsed = new URL(redirect, window.location.origin);
-      return `${parsed.pathname}${parsed.search}`;
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`;
     } catch {
       return '/ui/';
     }

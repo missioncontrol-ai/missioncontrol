@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -23,6 +23,7 @@ from app.services.ids import new_hash_id
 
 router = APIRouter(prefix="/auth/oidc", tags=["auth"])
 OIDC_HTTP_HEADERS = {"User-Agent": "MissionControl-OIDC/1.0 (+https://missioncontrolai.app)"}
+SESSION_COOKIE_NAME = "mc_session_token"
 
 
 def _now_utc() -> datetime:
@@ -93,6 +94,16 @@ def _oidc_validator() -> OidcValidator:
         audience=settings.oidc_audience or "",
         jwks_url=settings.oidc_jwks_url,
     )
+
+
+def _session_cookie_secure(request: Request) -> bool:
+    explicit = (os.getenv("MC_SESSION_COOKIE_SECURE") or "").strip().lower()
+    if explicit in {"1", "true", "yes", "on"}:
+        return True
+    if explicit in {"0", "false", "no", "off"}:
+        return False
+    host = (request.url.hostname or "").lower()
+    return host not in {"localhost", "127.0.0.1"}
 
 
 class OidcCliInitiateResponse(BaseModel):
@@ -360,7 +371,7 @@ class OidcGrantExchangeResponse(BaseModel):
 
 
 @router.post("/exchange", response_model=OidcGrantExchangeResponse)
-def exchange_oidc_grant(payload: OidcGrantExchangeRequest, request: Request):
+def exchange_oidc_grant(payload: OidcGrantExchangeRequest, request: Request, response: Response):
     now = _now_utc()
     with get_session() as db:
         grant = db.get(OidcLoginGrant, (payload.grant_id or "").strip())
@@ -378,6 +389,14 @@ def exchange_oidc_grant(payload: OidcGrantExchangeRequest, request: Request):
         session = issue_session_token(
             subject=session_subject,
             user_agent=request.headers.get("user-agent", ""),
+        )
+        response.set_cookie(
+            key=SESSION_COOKIE_NAME,
+            value=session.token,
+            httponly=True,
+            secure=_session_cookie_secure(request),
+            samesite="lax",
+            path="/",
         )
         payload = session.model_dump()
         payload["email"] = (grant.email or "").strip() or None
