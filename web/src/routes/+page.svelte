@@ -380,14 +380,21 @@
     syncOnboardingEndpoint().finally(() => loadManifest());
 
     const params = new URLSearchParams(window.location.search);
-    const grant = params.get('oidc_grant');
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const grant = hashParams.get('oidc_grant') || params.get('oidc_grant');
     if (grant) {
       exchangeOidcGrant(grant)
         .then((res) => {
           loginWithToken(res.token);
+          hashParams.delete('oidc_grant');
           params.delete('oidc_grant');
           const query = params.toString();
-          window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+          const hash = hashParams.toString();
+          window.history.replaceState(
+            {},
+            '',
+            `${window.location.pathname}${query ? `?${query}` : ''}${hash ? `#${hash}` : ''}`
+          );
         })
         .catch((err) => {
           showToast(err instanceof Error ? err.message : 'OIDC login failed');

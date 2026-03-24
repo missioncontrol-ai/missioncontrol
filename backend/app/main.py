@@ -123,6 +123,13 @@ def _token_fallback_path_prefixes() -> tuple[str, ...]:
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
+def _trusted_proxy_ips() -> set[str]:
+    raw = (os.getenv("MC_TRUSTED_PROXY_IPS") or "").strip()
+    if not raw:
+        return set()
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
 @dataclass(frozen=True)
 class RateLimitPolicy:
     capacity: int
@@ -181,11 +188,13 @@ def _rate_limit_key(request: Request) -> str:
         subject = str(principal.get("email") or principal.get("subject") or "").strip().lower()
         if subject:
             return f"principal:{subject}"
+    client_host = getattr(getattr(request, "client", None), "host", None) or "unknown"
     forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded.strip():
+    trusted_proxies = _trusted_proxy_ips()
+    if trusted_proxies and client_host in trusted_proxies and forwarded.strip():
         ip = forwarded.split(",", 1)[0].strip()
     else:
-        ip = getattr(getattr(request, "client", None), "host", None) or "unknown"
+        ip = client_host
     return f"ip:{ip}"
 
 

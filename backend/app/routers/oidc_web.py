@@ -292,7 +292,8 @@ def oidc_callback(request: Request, code: str = Query(default=""), state: str = 
                 url=f"/auth/oidc/cli-success?grant_id={urllib_parse.quote(grant.id or '')}",
                 status_code=302,
             )
-        separator = "&" if "?" in auth_req.redirect_path else "?"
+        # Use URL fragment so grant does not traverse server-side logs/referrers.
+        separator = "&" if "#" in auth_req.redirect_path else "#"
         return RedirectResponse(
             url=f"{auth_req.redirect_path}{separator}oidc_grant={urllib_parse.quote(grant.id or '')}",
             status_code=302,
