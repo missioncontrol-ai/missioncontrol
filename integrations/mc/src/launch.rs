@@ -42,6 +42,9 @@ const CODEX_APPROVAL_RULES: &[&str] = &[
     r#"prefix_rule(pattern=["mc"], decision="allow")"#,
     // Common absolute invocation path on developer workstations.
     r#"prefix_rule(pattern=["/home/merlin/.local/bin/mc"], decision="allow")"#,
+    // Shell-wrapper invocation forms used by Codex runtimes.
+    r#"prefix_rule(pattern=["zsh", "-lc", "mc"], decision="allow")"#,
+    r#"prefix_rule(pattern=["/usr/bin/zsh", "-lc", "mc"], decision="allow")"#,
     r#"prefix_rule(pattern=["mc", "whoami"], decision="allow")"#,
     r#"prefix_rule(pattern=["mc", "auth"], decision="allow")"#,
     r#"prefix_rule(pattern=["mc", "data"], decision="allow")"#,
