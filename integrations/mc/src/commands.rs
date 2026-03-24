@@ -20,6 +20,8 @@ use serde_json::{json, Value};
 use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tar::{Archive, Builder};
 use url::form_urlencoded;
 
@@ -226,6 +228,19 @@ pub enum ArtifactCommand {
         /// Write bytes to local path instead of printing text.
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+    /// Edit a text artifact in your local editor, then save back.
+    Edit {
+        #[arg(long)]
+        id: i32,
+        /// Optional active lease for workspace-scoped authorization check.
+        #[arg(long)]
+        lease_id: Option<String>,
+        #[arg(long)]
+        mime: Option<String>,
+        /// Confirm cross-kluster mutation without explicit --lease-id.
+        #[arg(short = 'y', long, default_value_t = false)]
+        yes: bool,
     },
     /// Replace artifact bytes from a local file.
     Replace {
@@ -939,6 +954,127 @@ async fn handle_artifact(
             } else {
                 anyhow::bail!("binary/non-text artifact requires --out for safe viewing");
             }
+        }
+        ArtifactCommand::Edit {
+            id,
+            lease_id,
+            mime,
+            yes,
+        } => {
+            let artifact = client.get_json(&format!("/artifacts/{id}")).await?;
+            let artifact_kluster = artifact
+                .get("kluster_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let active = load_active_workspace();
+            if lease_id.is_none() {
+                if let Some(active_kluster) = active.kluster_id.as_deref() {
+                    if !artifact_kluster.is_empty() && active_kluster != artifact_kluster && !yes {
+                        anyhow::bail!(
+                            "cross-kluster mutation without --lease-id requires -y (active={}, target={})",
+                            active_kluster,
+                            artifact_kluster
+                        );
+                    }
+                }
+            }
+            let detected_mime = artifact
+                .get("mime_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("application/octet-stream");
+            let resolved_mime = mime.unwrap_or_else(|| detected_mime.to_string());
+            if !is_text_like_mime(&resolved_mime) {
+                anyhow::bail!(
+                    "mc artifact edit only supports text-like MIME; got {} (use `mc artifact replace --id {} --from-file ...`)",
+                    resolved_mime,
+                    id
+                );
+            }
+
+            let content_b64 = if let Some(lease_id) = lease_id.as_ref() {
+                let response = mcp_tools::call_tool(
+                    &client,
+                    None,
+                    None,
+                    "fetch_workspace_artifact",
+                    json!({"lease_id": lease_id, "artifact_id": id, "mode": "content"}),
+                )
+                .await?;
+                response
+                    .get("content_b64")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .context("workspace artifact fetch did not return content_b64")?
+            } else {
+                let resp = client
+                    .request_builder(reqwest::Method::GET, &format!("/artifacts/{id}/content"))?
+                    .header("accept", "*/*")
+                    .send()
+                    .await
+                    .context("artifact content request failed")?
+                    .error_for_status()
+                    .context("artifact content request returned error status")?;
+                let bytes = resp.bytes().await.context("failed reading artifact content body")?;
+                base64::engine::general_purpose::STANDARD.encode(bytes)
+            };
+            let original_bytes = base64::engine::general_purpose::STANDARD
+                .decode(content_b64)
+                .context("artifact content decode failed")?;
+            let original_text = String::from_utf8(original_bytes.clone())
+                .context("artifact content is not UTF-8 text; use `mc artifact replace --from-file`")?;
+
+            let editor = std::env::var("VISUAL")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .or_else(|| std::env::var("EDITOR").ok().filter(|v| !v.trim().is_empty()))
+                .unwrap_or_else(|| "vi".to_string());
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let mut tmp = std::env::temp_dir();
+            tmp.push(format!("mc-artifact-{}-{}.tmp", id, stamp));
+            fs::write(&tmp, original_text.as_bytes())
+                .with_context(|| format!("failed writing temp file {}", tmp.display()))?;
+
+            let status = ProcessCommand::new(&editor)
+                .arg(&tmp)
+                .status()
+                .with_context(|| format!("failed launching editor `{editor}`"))?;
+            if !status.success() {
+                anyhow::bail!("editor exited with non-zero status: {}", status);
+            }
+            let new_bytes = fs::read(&tmp)
+                .with_context(|| format!("failed reading edited file {}", tmp.display()))?;
+            let _ = fs::remove_file(&tmp);
+
+            if new_bytes == original_bytes {
+                output::print_value(output_mode, &json!({"ok": true, "artifact_id": id, "changed": false}));
+                return Ok(());
+            }
+            let content_b64 = base64::engine::general_purpose::STANDARD.encode(&new_bytes);
+            if let Some(lease_id) = lease_id.as_ref() {
+                let _ = mcp_tools::call_tool(
+                    &client,
+                    None,
+                    None,
+                    "fetch_workspace_artifact",
+                    json!({"lease_id": lease_id, "artifact_id": id, "mode": "content"}),
+                )
+                .await
+                .context("lease scope check failed for artifact edit")?;
+            }
+            let response = client
+                .put_json(
+                    &format!("/artifacts/{id}"),
+                    &json!({"content_b64": content_b64, "mime_type": resolved_mime}),
+                )
+                .await?;
+            output::print_value(
+                output_mode,
+                &json!({"ok": true, "artifact_id": id, "changed": true, "mode": "editor_update", "artifact": response}),
+            );
         }
         ArtifactCommand::Replace {
             id,
