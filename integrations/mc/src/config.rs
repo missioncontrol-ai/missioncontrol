@@ -45,13 +45,14 @@ impl McConfig {
         }
 
         let base_url = Url::parse(base_url)?;
+        let resolved_agent_id = resolve_agent_id(agent_id, base_url.as_str());
         Ok(Self {
             base_url,
             token,
             timeout: Duration::from_secs(timeout_secs),
             allow_insecure,
             agent_context: AgentContext::new(
-                resolve_agent_id(agent_id),
+                resolved_agent_id,
                 runtime_session_id.filter(|value| !value.trim().is_empty()),
                 profile_name.filter(|value| !value.trim().is_empty()),
             ),
@@ -69,9 +70,26 @@ impl McConfig {
     }
 }
 
-fn resolve_agent_id(arg: Option<String>) -> Option<String> {
+fn resolve_agent_id(arg: Option<String>, base_url: &str) -> Option<String> {
     arg.filter(|value| !value.trim().is_empty())
         .or_else(read_agent_id_from_disk)
+        .or_else(|| default_agent_id_from_session(base_url))
+}
+
+pub fn default_agent_id_from_session(base_url: &str) -> Option<String> {
+    let session = crate::auth::load_saved_session(base_url)?;
+    if let Some(email) = session.email {
+        let value = email.trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    let subject = session.subject.trim();
+    if subject.is_empty() {
+        None
+    } else {
+        Some(subject.to_string())
+    }
 }
 
 /// Load a session token from `~/.missioncontrol/session.json` if one exists,

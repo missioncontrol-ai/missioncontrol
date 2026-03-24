@@ -4,6 +4,15 @@ This is the authoritative `mc` CLI command hierarchy.
 
 ## Top Level
 
+- `mc status`
+- `mc doctor`
+- `mc health`
+- `mc version`
+- `mc config`
+- `mc use`
+- `mc release`
+- `mc logs`
+- `mc completion`
 - `mc auth`
 - `mc admin`
 - `mc data`
@@ -17,6 +26,20 @@ This is the authoritative `mc` CLI command hierarchy.
 - `mc init`
 - `mc serve`
 - `mc profile`
+
+## quick verbs
+
+- `mc status [--verify-lease]` — combined auth/runtime/attached-workspace status; optional lease validation heartbeat.
+- `mc doctor` — shortcut to `mc system doctor`.
+- `mc health` — backend MCP health probe.
+- `mc version` — local CLI version + backend reachability.
+- `mc config` — effective local runtime config (redacted).
+- `mc use --profile <name>` — activate/apply profile (API-backed profile flow).
+- `mc use --kluster-id <id> [--lease-seconds N] [--workspace-label <label>]` — acquire workspace lease lock (API-backed).
+- `mc use --release` — release current active lease.
+- `mc release [--reason <text>] [--ignore-missing]` — top-level lease release shortcut.
+- `mc logs` — local log tail helper (local-only utility).
+- `mc completion <shell>` — shell completion generator (local-only utility).
 
 ## auth
 

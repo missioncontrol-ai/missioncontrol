@@ -12,11 +12,25 @@ impl OutputMode {
     pub fn is_machine(self) -> bool {
         matches!(self, Self::Json | Self::Jsonl)
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Json => "json",
+            Self::Jsonl => "jsonl",
+        }
+    }
 }
 
 pub fn print_value(mode: OutputMode, value: &Value) {
     match mode {
-        OutputMode::Human | OutputMode::Json => {
+        OutputMode::Human => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+            );
+        }
+        OutputMode::Json => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())

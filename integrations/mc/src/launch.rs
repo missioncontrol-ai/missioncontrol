@@ -1103,14 +1103,19 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     std::env::set_var("MC_AGENT_PROFILE", &profile_name);
     std::env::set_var("MC_RUNTIME_SESSION_ID", &runtime_session_id);
     std::env::set_var("MC_INSTANCE_HOME", &instance_home);
-    if config.agent_context.agent_id.is_none() {
-        let generated_agent = format!(
-            "{}-{}",
-            selected_agent.config_key(),
-            Uuid::new_v4().simple()
-        );
-        std::env::set_var("MC_AGENT_ID", &generated_agent);
-    }
+    let launch_agent_base = config
+        .agent_context
+        .agent_id
+        .clone()
+        .or_else(|| crate::config::default_agent_id_from_session(config.base_url.as_str()))
+        .unwrap_or_else(|| format!("mc-agent-{}", Uuid::new_v4().simple()));
+    let launch_agent_id = format!(
+        "{}:{}:{}",
+        launch_agent_base,
+        selected_agent.config_key(),
+        &runtime_session_id[..12.min(runtime_session_id.len())]
+    );
+    std::env::set_var("MC_AGENT_ID", &launch_agent_id);
     driver.install_config(
         &staging_dir,
         &base_url,

@@ -403,7 +403,8 @@ fn perform_repairs(config: &McConfig) -> Vec<DoctorRepair> {
         Err(err) => repairs.push(DoctorRepair::failed("directories", err.to_string())),
     }
     if config.agent_context.agent_id.is_none() {
-        let agent_id = format!("mc-agent-{}", Uuid::new_v4());
+        let agent_id = crate::config::default_agent_id_from_session(config.base_url.as_str())
+            .unwrap_or_else(|| format!("mc-agent-{}", Uuid::new_v4()));
         match crate::config::persist_agent_id(&agent_id) {
             Ok(()) => repairs.push(DoctorRepair::ok(
                 "agent_id",

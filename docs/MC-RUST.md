@@ -69,6 +69,15 @@ When no `MC_AGENT_ID` is provided, `mc` looks for `~/.missioncontrol/agent_id` a
   governance surface that Mission Control exposes.
 - `mc workspace load/heartbeat/fetch-artifact/commit/release` keeps parity with the Python bridge, carrying lease IDs, artifacts, and
   change sets unchanged.
+- `mc use --kluster-id <id>` is lease-backed and calls `load_kluster_workspace`; it is not a local-only context setter.
+- `mc use --release` and `mc release` call `release_kluster_workspace` to close the active lease.
+- When switching klusters via `mc use --kluster-id <new>`, `mc` prompts before releasing the previous lease unless `--auto-release` or `-y` is set.
+- `mc status --verify-lease` validates the tracked active lease with `heartbeat_workspace_lease`.
+- `mc status` reports attached workspace metadata from the lease-backed state cache (`~/.missioncontrol/active_workspace.json`).
+
+### Local-only utilities
+- `mc config`, `mc logs`, and `mc completion` are local utility commands.
+- These commands do not mutate MissionControl state and are intentionally outside governance policy mutation paths.
 
 ### Sync & approvals
 - `mc data sync status|promote` retains the existing payload contracts for skill sync and drift metadata so OpenClaw and similar runtimes can honor

@@ -14,7 +14,8 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use base64::Engine;
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Subcommand, ValueEnum};
+use clap_complete::Shell;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Cursor;
@@ -25,6 +26,24 @@ use url::form_urlencoded;
 /// Top-level CLI entrypoints for the mc binary.
 #[derive(Subcommand, Debug)]
 pub enum McCommand {
+    /// Show quick local/runtime/auth context for the current shell.
+    Status(StatusArgs),
+    /// Shortcut for `mc system doctor`.
+    Doctor(maintenance::DoctorArgs),
+    /// Lightweight backend readiness check.
+    Health(HealthArgs),
+    /// Show binary + backend version details.
+    Version(VersionArgs),
+    /// Show effective runtime config (redacted).
+    Config(ConfigArgs),
+    /// Convenience context/profile switcher.
+    Use(UseArgs),
+    /// Release the currently attached workspace lease.
+    Release(ReleaseArgs),
+    /// Tail local MissionControl logs.
+    Logs(LogsArgs),
+    /// Generate shell completion scripts.
+    Completion(CompletionArgs),
     /// Authentication and identity helpers.
     #[command(subcommand)]
     Auth(AuthCommand),
@@ -118,6 +137,65 @@ pub struct InitArgs {
     /// Initial profile name to create when none exists.
     #[arg(long, default_value = "default")]
     profile: String,
+}
+
+#[derive(Args, Debug, Default)]
+pub struct StatusArgs {
+    /// Validate active lease by sending a heartbeat call.
+    #[arg(long, default_value_t = false)]
+    verify_lease: bool,
+}
+
+#[derive(Args, Debug, Default)]
+pub struct HealthArgs {}
+
+#[derive(Args, Debug, Default)]
+pub struct VersionArgs {}
+
+#[derive(Args, Debug, Default)]
+pub struct ConfigArgs {}
+
+#[derive(Args, Debug, Default)]
+pub struct UseArgs {
+    #[arg(long)]
+    profile: Option<String>,
+    #[arg(long)]
+    kluster_id: Option<String>,
+    #[arg(long, default_value_t = 900)]
+    lease_seconds: u64,
+    #[arg(long)]
+    workspace_label: Option<String>,
+    /// Auto-release existing lease when switching klusters.
+    #[arg(long, default_value_t = false)]
+    auto_release: bool,
+    /// Non-interactive confirmation for releasing/switching.
+    #[arg(short = 'y', long, default_value_t = false)]
+    yes: bool,
+    /// Release currently attached lease instead of attaching a kluster.
+    #[arg(long, default_value_t = false)]
+    release: bool,
+}
+
+#[derive(Args, Debug, Default)]
+pub struct ReleaseArgs {
+    /// Optional reason recorded in lease release metadata.
+    #[arg(long)]
+    reason: Option<String>,
+    /// Succeed even when no active lease is tracked.
+    #[arg(long, default_value_t = false)]
+    ignore_missing: bool,
+}
+
+#[derive(Args, Debug, Default)]
+pub struct LogsArgs {
+    #[arg(long, default_value_t = 120)]
+    lines: usize,
+}
+
+#[derive(Args, Debug)]
+pub struct CompletionArgs {
+    #[arg(value_enum)]
+    shell: Shell,
 }
 
 #[derive(Subcommand, Debug)]
@@ -438,6 +516,15 @@ pub async fn run(
     output_mode: OutputMode,
 ) -> Result<()> {
     match command {
+        McCommand::Status(args) => handle_status(args, client, &config, output_mode).await,
+        McCommand::Doctor(args) => maintenance::run_doctor_command(&client, &config, &args).await,
+        McCommand::Health(_args) => handle_health(client, output_mode).await,
+        McCommand::Version(_args) => handle_version(client, &config, output_mode).await,
+        McCommand::Config(_args) => handle_config(&config, output_mode),
+        McCommand::Use(args) => handle_use(args, client, output_mode).await,
+        McCommand::Release(args) => handle_release(args, client, output_mode).await,
+        McCommand::Logs(args) => handle_logs(args, output_mode),
+        McCommand::Completion(args) => handle_completion(args),
         McCommand::Auth(cmd) => handle_auth(cmd, client, &config).await,
         McCommand::Data(cmd) => handle_data(cmd, client, &booster, &config.schema_pack, output_mode).await,
         McCommand::Admin(cmd) => handle_admin(cmd, client).await,
@@ -454,6 +541,318 @@ pub async fn run(
         McCommand::Serve(args) => mcp_server::run(&args, &client).await,
         McCommand::Profile(cmd) => handle_profile(cmd, client, output_mode).await,
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct ActiveWorkspaceState {
+    lease_id: Option<String>,
+    mission_id: Option<String>,
+    kluster_id: Option<String>,
+    status: Option<String>,
+}
+
+fn active_workspace_path() -> PathBuf {
+    crate::config::mc_home_dir().join("active_workspace.json")
+}
+
+fn load_active_workspace() -> ActiveWorkspaceState {
+    let path = active_workspace_path();
+    let raw = match fs::read_to_string(path) {
+        Ok(v) => v,
+        Err(_) => return ActiveWorkspaceState::default(),
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn save_active_workspace(ctx: &ActiveWorkspaceState) -> Result<()> {
+    let path = active_workspace_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_string_pretty(ctx)?)?;
+    Ok(())
+}
+
+fn clear_active_workspace() -> Result<()> {
+    let path = active_workspace_path();
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn response_lease_view(response: &Value) -> &Value {
+    response.get("lease").unwrap_or(response)
+}
+
+fn extract_workspace_state(response: &Value) -> ActiveWorkspaceState {
+    let lease = response_lease_view(response);
+    ActiveWorkspaceState {
+        lease_id: lease
+            .get("id")
+            .and_then(|v| v.as_str())
+            .or_else(|| response.get("lease_id").and_then(|v| v.as_str()))
+            .map(|s| s.to_string()),
+        mission_id: lease
+            .get("mission_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| response.get("mission_id").and_then(|v| v.as_str()))
+            .map(|s| s.to_string()),
+        kluster_id: lease
+            .get("kluster_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| response.get("kluster_id").and_then(|v| v.as_str()))
+            .map(|s| s.to_string()),
+        status: lease
+            .get("status")
+            .and_then(|v| v.as_str())
+            .or_else(|| response.get("status").and_then(|v| v.as_str()))
+            .map(|s| s.to_string()),
+    }
+}
+
+fn prompt_confirm(prompt: &str) -> Result<bool> {
+    use std::io::{self, Write};
+    eprint!("{prompt}");
+    io::stderr().flush()?;
+    let mut buf = String::new();
+    io::stdin().read_line(&mut buf)?;
+    let answer = buf.trim().to_ascii_lowercase();
+    Ok(matches!(answer.as_str(), "y" | "yes"))
+}
+
+async fn handle_health(client: MissionControlClient, output_mode: OutputMode) -> Result<()> {
+    let response = client.get_json("/mcp/health").await?;
+    output::print_value(output_mode, &response);
+    Ok(())
+}
+
+async fn handle_version(
+    client: MissionControlClient,
+    config: &McConfig,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let backend = client.get_json("/mcp/health").await.ok();
+    let payload = json!({
+        "mc_version": env!("CARGO_PKG_VERSION"),
+        "base_url": config.base_url.as_str(),
+        "backend_health": backend,
+    });
+    output::print_value(output_mode, &payload);
+    Ok(())
+}
+
+fn handle_config(config: &McConfig, output_mode: OutputMode) -> Result<()> {
+    let payload = json!({
+        "base_url": config.base_url.as_str(),
+        "timeout_secs": config.timeout.as_secs(),
+        "allow_insecure": config.allow_insecure,
+        "token": if config.token.is_some() { "***redacted***" } else { "" },
+        "agent_context": {
+            "agent_id": config.agent_context.agent_id,
+            "runtime_session_id": config.agent_context.runtime_session_id,
+            "profile_name": config.agent_context.profile_name,
+        },
+        "paths": {
+            "mc_home": crate::config::mc_home_dir(),
+            "skills_home": crate::config::skills_home_dir(),
+            "agent_id_file": crate::config::agent_id_file(),
+        }
+    });
+    output::print_value(output_mode, &payload);
+    Ok(())
+}
+
+async fn handle_use(args: UseArgs, client: MissionControlClient, output_mode: OutputMode) -> Result<()> {
+    if let Some(profile) = args.profile {
+        return handle_profile(ProfileCommand::Use { name: profile }, client, output_mode).await;
+    }
+    if args.release {
+        return handle_release(
+            ReleaseArgs {
+                reason: Some("released via mc use --release".to_string()),
+                ignore_missing: false,
+            },
+            client,
+            output_mode,
+        )
+        .await;
+    }
+    let kluster_id = args
+        .kluster_id
+        .ok_or_else(|| anyhow::anyhow!("`mc use` requires --kluster-id (or --profile)"))?;
+    let current = load_active_workspace();
+    if let (Some(existing_lease), Some(existing_kluster)) =
+        (current.lease_id.clone(), current.kluster_id.clone())
+    {
+        if existing_kluster != kluster_id {
+            let should_release = if args.auto_release || args.yes {
+                true
+            } else {
+                prompt_confirm(&format!(
+                    "Release existing lease {} for kluster {} and switch to {}? [y/N] ",
+                    existing_lease, existing_kluster, kluster_id
+                ))?
+            };
+            if !should_release {
+                anyhow::bail!("switch cancelled; existing lease kept active");
+            }
+            let _ = mcp_tools::call_tool(
+                &client,
+                None,
+                None,
+                "release_kluster_workspace",
+                json!({"lease_id": existing_lease, "reason": "switch kluster via mc use"}),
+            )
+            .await?;
+            clear_active_workspace()?;
+        }
+    }
+    let mut tool_args = json!({
+        "kluster_id": kluster_id,
+        "lease_seconds": args.lease_seconds,
+    });
+    if let Some(label) = args.workspace_label {
+        tool_args["workspace_label"] = json!(label);
+    }
+    let response = mcp_tools::call_tool(&client, None, None, "load_kluster_workspace", tool_args).await?;
+    let state = extract_workspace_state(&response);
+    save_active_workspace(&state)?;
+    output::print_value(output_mode, &json!({"ok": true, "workspace": state, "lease": response}));
+    Ok(())
+}
+
+async fn handle_release(
+    args: ReleaseArgs,
+    client: MissionControlClient,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let state = load_active_workspace();
+    let Some(lease_id) = state.lease_id.clone() else {
+        if args.ignore_missing {
+            output::print_value(output_mode, &json!({"ok": true, "released": false, "reason": "no_active_lease"}));
+            return Ok(());
+        }
+        anyhow::bail!("no active lease is tracked; nothing to release");
+    };
+    let response = mcp_tools::call_tool(
+        &client,
+        None,
+        None,
+        "release_kluster_workspace",
+        json!({
+            "lease_id": lease_id,
+            "reason": args.reason.unwrap_or_else(|| "released via mc release".to_string())
+        }),
+    )
+    .await?;
+    clear_active_workspace()?;
+    output::print_value(output_mode, &json!({"ok": true, "released": true, "lease": response}));
+    Ok(())
+}
+
+fn handle_logs(args: LogsArgs, output_mode: OutputMode) -> Result<()> {
+    let candidates = [
+        crate::config::mc_home_dir().join("daemon.log"),
+        crate::config::mc_home_dir().join("logs/daemon.log"),
+        crate::config::mc_home_dir().join("logs/mc.log"),
+    ];
+    let mut entries = Vec::new();
+    for path in candidates {
+        if !path.exists() {
+            continue;
+        }
+        let raw = fs::read_to_string(&path).unwrap_or_default();
+        let lines: Vec<String> = raw
+            .lines()
+            .rev()
+            .take(args.lines)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|s| s.to_string())
+            .collect();
+        entries.push(json!({"path": path, "lines": lines}));
+    }
+    let payload = json!({ "logs": entries });
+    output::print_value(output_mode, &payload);
+    Ok(())
+}
+
+fn handle_completion(args: CompletionArgs) -> Result<()> {
+    #[derive(clap::Parser)]
+    struct CompletionRoot {
+        #[command(subcommand)]
+        command: McCommand,
+    }
+    let mut cmd = CompletionRoot::command();
+    clap_complete::generate(args.shell, &mut cmd, "mc", &mut std::io::stdout());
+    Ok(())
+}
+
+async fn handle_status(
+    args: StatusArgs,
+    client: MissionControlClient,
+    config: &McConfig,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let local_session = auth::load_saved_session(config.base_url.as_str());
+    let effective_agent_id = config
+        .agent_context
+        .agent_id
+        .clone()
+        .or_else(|| crate::config::default_agent_id_from_session(config.base_url.as_str()));
+    let remote = match client.get_json("/auth/whoami").await {
+        Ok(value) => Some(value),
+        Err(err) => Some(json!({ "reachable": false, "error": err.to_string() })),
+    };
+    let workspace = load_active_workspace();
+    let lease_verification = if args.verify_lease {
+        if let Some(lease_id) = workspace.lease_id.clone() {
+            match mcp_tools::call_tool(
+                &client,
+                None,
+                None,
+                "heartbeat_workspace_lease",
+                json!({"lease_id": lease_id}),
+            )
+            .await
+            {
+                Ok(v) => Some(json!({"ok": true, "result": v})),
+                Err(err) => Some(json!({"ok": false, "error": err.to_string()})),
+            }
+        } else {
+            Some(json!({"ok": false, "error": "no active lease"}))
+        }
+    } else {
+        None
+    };
+    let payload = json!({
+        "base_url": config.base_url.as_str(),
+        "output": output_mode.as_str(),
+        "auth": {
+            "has_session": local_session.is_some(),
+            "session_subject": local_session.as_ref().map(|s| s.subject.clone()),
+            "session_email": local_session.as_ref().and_then(|s| s.email.clone()),
+            "session_expires_at": local_session.as_ref().map(|s| s.expires_at.clone()),
+            "has_token": config.token.is_some(),
+            "remote_whoami": remote,
+        },
+        "runtime": {
+            "profile": config.agent_context.profile_name.clone(),
+            "runtime_session_id": config.agent_context.runtime_session_id.clone(),
+            "agent_id": effective_agent_id,
+        },
+        "context": {
+            "lease_id": workspace.lease_id,
+            "mission_id": workspace.mission_id,
+            "kluster_id": workspace.kluster_id,
+            "status": workspace.status,
+        },
+        "lease_verification": lease_verification,
+    });
+    output::print_value(output_mode, &payload);
+    Ok(())
 }
 
 async fn handle_auth(command: AuthCommand, client: MissionControlClient, config: &McConfig) -> Result<()> {
