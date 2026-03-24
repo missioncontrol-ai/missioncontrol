@@ -13,6 +13,7 @@ import tarfile
 from typing import Any
 
 from app.ai_console.contracts import RuntimeKind, SkillPackManifest
+from app.ai_console.runtime_config import configured_default_runtime
 
 # File patterns that map to each manifest bucket.
 _INSTRUCTION_NAMES = {"claude.md", "agents.md", "system_prompt.md", "system-prompt.md", "copilot-instructions.md"}
@@ -35,7 +36,7 @@ def resolve_manifest(*, tarball_b64: str, snapshot_id: str, effective_version: s
         try:
             runtime_kind = RuntimeKind(runtime_kind)
         except ValueError:
-            runtime_kind = RuntimeKind.opencode
+            runtime_kind = configured_default_runtime()
 
     instruction_files: list[str] = []
     tool_definition_files: list[str] = []

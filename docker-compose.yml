@@ -129,6 +129,8 @@ services:
       args:
         OPENCODE_VERSION: ${OPENCODE_VERSION:-1.2.26}
     container_name: missioncontrol-opencode
+    profiles:
+      - opencode
     restart: unless-stopped
     environment:
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:-missioncontrol}
@@ -188,6 +190,10 @@ services:
       MC_OBJECT_STORAGE_ACCESS_KEY: ${MC_OBJECT_STORAGE_ACCESS_KEY}
       MC_OBJECT_STORAGE_ACCESS_SECRET: ${MC_OBJECT_STORAGE_ACCESS_SECRET}
       # AI Console runtime layer
+      MC_CENTRAL_RUNTIME_DEFAULT: ${MC_CENTRAL_RUNTIME_DEFAULT:-claude_code}
+      MC_CLAUDE_MODEL: ${MC_CLAUDE_MODEL:-claude-sonnet-4-5}
+      MC_CLAUDE_MAX_TOKENS: ${MC_CLAUDE_MAX_TOKENS:-4096}
+      MC_CLAUDE_TIMEOUT_SECONDS: ${MC_CLAUDE_TIMEOUT_SECONDS:-120}
       MC_OPENCODE_URL: ${MC_OPENCODE_URL:-http://opencode:4096}
       MC_OPENCODE_TIMEOUT_SECONDS: ${MC_OPENCODE_TIMEOUT_SECONDS:-120}
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:-}

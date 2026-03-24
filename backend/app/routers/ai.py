@@ -11,6 +11,7 @@ from sqlmodel import select
 from app.ai_console.event_store import emit_event as _store_emit_event
 from app.ai_console.gateway import get_gateway
 from app.ai_console.registry import available_runtimes
+from app.ai_console.runtime_config import normalize_runtime_kind
 from app.db import get_session
 from app.models import AiEvent, AiPendingAction, AiSession, AiTurn
 from app.routers import mcp as mcp_router
@@ -152,7 +153,7 @@ async def create_session(payload: AiSessionCreate, request: Request):
     subject = _subject(request)
     session_id = f"ais_{new_hash_id()}"
     title = (payload.title or "").strip() or "AI Console Session"
-    runtime_kind = (payload.runtime_kind or "opencode").strip()
+    runtime_kind = normalize_runtime_kind(payload.runtime_kind).value
     policy_dict = payload.policy or {}
 
     gateway = get_gateway()

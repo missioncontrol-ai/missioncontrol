@@ -66,7 +66,7 @@ async fn seed(args: SeedArgs, client: &MissionControlClient) -> Result<()> {
 }
 
 async fn run_mission(args: RunArgs, client: &MissionControlClient) -> Result<()> {
-    let body = json!({ "agent": args.agent });
+    let body = json!({ "runtime_kind": args.agent });
     let path = format!("/evolve/missions/{}/run", args.mission);
     let response = client.post_json(&path, &body).await?;
     println!("{}", serde_json::to_string_pretty(&response)?);

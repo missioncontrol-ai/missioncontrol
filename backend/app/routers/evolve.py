@@ -14,8 +14,9 @@ import uuid
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import select
+from app.ai_console.runtime_config import normalize_runtime_kind
 
 from app.db import get_session
 from app.models import AiSession, AiTurn, EvolveMission, EvolveRun
@@ -34,8 +35,9 @@ class EvolveSpec(BaseModel):
 
 
 class EvolveRunRequest(BaseModel):
-    runtime_kind: str = "opencode"
-    policy: dict = {}
+    runtime_kind: str = ""
+    agent: str = ""
+    policy: dict = Field(default_factory=dict)
 
 
 async def _run_evolve_turn(
@@ -138,12 +140,14 @@ async def seed_evolve_mission(body: EvolveSpec, request: Request) -> dict[str, A
 async def run_evolve_mission(
     mission_id: str, body: EvolveRunRequest, request: Request
 ) -> dict[str, Any]:
-    """Launch an opencode agent against a seeded evolve mission.
+    """Launch a configured central runtime against a seeded evolve mission.
 
     Creates an AiSession via ConsoleGateway, creates an EvolveRun linked to it,
     then submits the mission spec as the first turn in the background.
     """
     owner_subject = actor_subject_from_request(request)
+
+    runtime_kind = normalize_runtime_kind(body.runtime_kind or body.agent).value
 
     # Verify mission exists and capture spec
     with get_session() as db:
@@ -171,7 +175,7 @@ async def run_evolve_mission(
             subject=EVOLVE_BOT_SUBJECT,
             session_id=session_id,
             title=f"Evolve: {mission_id}",
-            runtime_kind=body.runtime_kind,
+            runtime_kind=runtime_kind,
             policy_dict={"require_approval_for_writes": True, **body.policy},
         )
 
@@ -179,7 +183,7 @@ async def run_evolve_mission(
             run_id=run_id,
             mission_id=mission_id,
             owner_subject=owner_subject,
-            agent=body.runtime_kind,
+            agent=runtime_kind,
             status="running",
             started_at=now,
             ai_session_id=ai_session.id,
@@ -205,7 +209,8 @@ async def run_evolve_mission(
     return {
         "mission_id": mission_id,
         "run_id": run_id,
-        "agent": body.runtime_kind,
+        "agent": runtime_kind,
+        "runtime_kind": runtime_kind,
         "status": "running",
         "started_at": now.isoformat() + "Z",
         "ai_session_id": created_session_id,

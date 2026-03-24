@@ -38,12 +38,12 @@ class EvolveRouterTests(unittest.TestCase):
         run = asyncio.run(
             evolve_router.run_evolve_mission(
                 mission_id,
-                evolve_router.EvolveRunRequest(runtime_kind="opencode"),
+                evolve_router.EvolveRunRequest(runtime_kind="claude_code"),
                 owner,
             )
         )
         self.assertEqual(run["mission_id"], mission_id)
-        self.assertEqual(run["agent"], "opencode")
+        self.assertEqual(run["agent"], "claude_code")
         self.assertEqual(run["status"], "running")
         self.assertIn("ai_session_id", run)
 
@@ -51,7 +51,7 @@ class EvolveRouterTests(unittest.TestCase):
         self.assertEqual(status["mission_id"], mission_id)
         self.assertEqual(status["run_count"], 1)
         self.assertEqual(status["task_count"], 1)
-        self.assertEqual(status["runs"][0]["agent"], "opencode")
+        self.assertEqual(status["runs"][0]["agent"], "claude_code")
         self.assertIn("ai_session_id", status["runs"][0])
 
     def test_cross_subject_access_returns_not_found(self):
@@ -94,6 +94,35 @@ class EvolveRouterTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as status_ctx:
             asyncio.run(evolve_router.get_evolve_status("evolve-missing", owner))
         self.assertEqual(status_ctx.exception.status_code, 404)
+
+    def test_agent_alias_and_invalid_runtime(self):
+        owner = _request("owner@example.com")
+        seeded = asyncio.run(
+            evolve_router.seed_evolve_mission(
+                evolve_router.EvolveSpec(spec={"name": "test", "tasks": []}),
+                owner,
+            )
+        )
+        mission_id = seeded["mission_id"]
+
+        run = asyncio.run(
+            evolve_router.run_evolve_mission(
+                mission_id,
+                evolve_router.EvolveRunRequest(agent="claude"),
+                owner,
+            )
+        )
+        self.assertEqual(run["runtime_kind"], "claude_code")
+
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(
+                evolve_router.run_evolve_mission(
+                    mission_id,
+                    evolve_router.EvolveRunRequest(runtime_kind="not-a-runtime"),
+                    owner,
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 422)
 
 
 if __name__ == "__main__":

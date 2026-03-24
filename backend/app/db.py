@@ -186,7 +186,7 @@ def _migrate_schema() -> None:
         aisession_columns = {c["name"] for c in inspect(engine).get_columns("aisession")}
         with engine.begin() as conn:
             if "runtime_kind" not in aisession_columns:
-                conn.execute(text("ALTER TABLE aisession ADD COLUMN runtime_kind TEXT NOT NULL DEFAULT 'opencode'"))
+                conn.execute(text("ALTER TABLE aisession ADD COLUMN runtime_kind TEXT NOT NULL DEFAULT 'claude_code'"))
             if "runtime_session_id" not in aisession_columns:
                 conn.execute(text("ALTER TABLE aisession ADD COLUMN runtime_session_id TEXT"))
             if "workspace_path" not in aisession_columns:

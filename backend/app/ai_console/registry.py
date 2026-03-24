@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Callable, TYPE_CHECKING
 
 from app.ai_console.contracts import CapabilitySet, RuntimeKind
+from app.ai_console.runtime_config import configured_default_runtime
 
 if TYPE_CHECKING:
     from app.ai_console.adapter import AgentRuntimeAdapter
@@ -28,10 +29,13 @@ def register_adapter(kind: RuntimeKind, factory: "type[AgentRuntimeAdapter] | Ca
 def get_adapter(kind: "RuntimeKind | str") -> "AgentRuntimeAdapter":
     """Return the singleton adapter for *kind*, creating it if necessary."""
     if isinstance(kind, str):
-        try:
-            kind = RuntimeKind(kind)
-        except ValueError:
-            kind = RuntimeKind.opencode
+        raw = kind.strip().lower()
+        if raw == "claude":
+            kind = RuntimeKind.claude_code
+        elif raw == "codex":
+            kind = RuntimeKind.codex
+        else:
+            kind = RuntimeKind(raw)
 
     if kind not in _instances:
         if kind not in _registry:
@@ -41,8 +45,12 @@ def get_adapter(kind: "RuntimeKind | str") -> "AgentRuntimeAdapter":
 
 
 def available_runtimes() -> list[CapabilitySet]:
-    """Return capability sets for all registered runtimes, opencode first."""
-    priority = [RuntimeKind.opencode, RuntimeKind.claude_code, RuntimeKind.codex]
+    """Return capability sets for all registered runtimes, default runtime first."""
+    default = configured_default_runtime()
+    priority = [default]
+    for kind in (RuntimeKind.claude_code, RuntimeKind.codex, RuntimeKind.opencode):
+        if kind not in priority:
+            priority.append(kind)
     out: list[CapabilitySet] = []
     for kind in priority:
         if kind in _registry:
@@ -54,7 +62,7 @@ def available_runtimes() -> list[CapabilitySet]:
 
 
 def default_runtime() -> RuntimeKind:
-    return RuntimeKind.opencode
+    return configured_default_runtime()
 
 
 # ── Bootstrap registrations ──────────────────────────────────────────────────

@@ -624,7 +624,7 @@ class UserProfileDownloadRead(UserProfileRead):
 
 class AiSessionCreate(BaseModel):
     title: str = ""
-    runtime_kind: str = "opencode"
+    runtime_kind: str = ""
     policy: dict = Field(default_factory=dict)
 
 
@@ -666,7 +666,7 @@ class AiSessionRead(BaseModel):
     owner_subject: str
     title: str
     status: str
-    runtime_kind: str = "opencode"
+    runtime_kind: str = "claude_code"
     runtime_session_id: Optional[str] = None
     workspace_path: Optional[str] = None
     capability_snapshot: dict = Field(default_factory=dict)

@@ -142,7 +142,7 @@ class ConsoleGateway:
         msg = (
             "The AI runtime service is currently unavailable. "
             f"Runtime '{session_row.runtime_kind}' could not be reached at startup. "
-            "Ensure the opencode service is running and restart your session."
+            "Check runtime credentials/configuration and restart your session."
         )
         emit_event(
             db=db,

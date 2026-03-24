@@ -44,13 +44,13 @@ async fn evolve_seed_posts_spec_json() {
 }
 
 #[tokio::test]
-async fn evolve_run_posts_agent_to_mission_path() {
+async fn evolve_run_posts_runtime_kind_to_mission_path() {
     let server = MockServer::start();
     let mission_id = "evolve-abc12345";
     let mock = server.mock(|when, then| {
         when.method(POST)
             .path(format!("/evolve/missions/{mission_id}/run"))
-            .json_body(json!({"agent":"gemini"}));
+            .json_body(json!({"runtime_kind":"gemini"}));
         then.status(200)
             .json_body(json!({"mission_id":mission_id,"status":"launched"}));
     });

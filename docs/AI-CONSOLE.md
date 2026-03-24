@@ -45,6 +45,10 @@ Planner selection is controlled by environment variables:
 - `MC_AI_BASE_URL`: optional API base override (for provider-compatible gateways/proxies)
 - `OPENAI_API_KEY`: required when `MC_AI_PROVIDER=openai`
 - `ANTHROPIC_API_KEY`: required when `MC_AI_PROVIDER=anthropic`
+- `MC_CENTRAL_RUNTIME_DEFAULT`: default runtime for AI sessions/evolve/scheduled jobs (`claude_code` recommended)
+- `MC_CLAUDE_MODEL`: Anthropic model used by `claude_code` runtime
+- `MC_CLAUDE_MAX_TOKENS`: max output tokens for `claude_code` runtime
+- `MC_CLAUDE_TIMEOUT_SECONDS`: request timeout for `claude_code` runtime
 
 `MC_AI_BASE_URL` examples:
 

@@ -579,7 +579,7 @@ class ScheduledAgentJob(SQLModel, table=True):
     name: str
     description: str = ""
     cron_expr: str                                    # "0 8 * * *" — standard cron
-    runtime_kind: str = "opencode"
+    runtime_kind: str = "claude_code"
     initial_prompt: str = Field(sa_column=Column(Text))
     system_context: Optional[str] = Field(default=None, sa_column=Column(Text))
     policy_json: str = Field(default="{}", sa_column=Column(Text))

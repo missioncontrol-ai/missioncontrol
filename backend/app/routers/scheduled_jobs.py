@@ -8,9 +8,10 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import select
 
+from app.ai_console.runtime_config import normalize_runtime_kind
 from app.db import get_session
 from app.models import ScheduledAgentJob
 from app.services.agent_scheduler import _run_job, schedule_job, unschedule_job
@@ -25,10 +26,10 @@ class ScheduledJobCreate(BaseModel):
     name: str
     description: str = ""
     cron_expr: str
-    runtime_kind: str = "opencode"
+    runtime_kind: str = ""
     initial_prompt: str
     system_context: Optional[str] = None
-    policy: dict = {}
+    policy: dict = Field(default_factory=dict)
     enabled: bool = True
 
 
@@ -81,7 +82,7 @@ def create_scheduled_job(body: ScheduledJobCreate, request: Request) -> dict[str
         name=body.name,
         description=body.description,
         cron_expr=body.cron_expr,
-        runtime_kind=body.runtime_kind,
+        runtime_kind=normalize_runtime_kind(body.runtime_kind).value,
         initial_prompt=body.initial_prompt,
         system_context=body.system_context,
         policy_json=json.dumps(body.policy, separators=(",", ":")),
@@ -141,7 +142,7 @@ def update_scheduled_job(job_id: int, body: ScheduledJobUpdate, request: Request
         if body.cron_expr is not None:
             job.cron_expr = body.cron_expr
         if body.runtime_kind is not None:
-            job.runtime_kind = body.runtime_kind
+            job.runtime_kind = normalize_runtime_kind(body.runtime_kind).value
         if body.initial_prompt is not None:
             job.initial_prompt = body.initial_prompt
         if body.system_context is not None:
