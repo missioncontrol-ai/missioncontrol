@@ -1,11 +1,28 @@
 const API_BASE = '';
 
+function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  const needle = `${name}=`;
+  for (const part of document.cookie.split(';')) {
+    const item = part.trim();
+    if (item.startsWith(needle)) {
+      return decodeURIComponent(item.slice(needle.length));
+    }
+  }
+  return null;
+}
+
 function authHeader(token?: string) {
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const csrf = readCookie('mc_csrf_token');
+  if (csrf) headers['X-CSRF-Token'] = csrf;
+  return headers;
 }
 
 export async function fetchTree(token?: string) {
   const res = await fetch(`${API_BASE}/explorer/tree`, {
+    credentials: 'include',
     headers: authHeader(token)
   });
   if (!res.ok) throw new Error(res.statusText);
@@ -14,6 +31,7 @@ export async function fetchTree(token?: string) {
 
 export async function fetchNode(type: string, id: string, token?: string) {
   const res = await fetch(`${API_BASE}/explorer/node/${type}/${id}`, {
+    credentials: 'include',
     headers: authHeader(token)
   });
   if (!res.ok) throw new Error(res.statusText);
@@ -22,6 +40,7 @@ export async function fetchNode(type: string, id: string, token?: string) {
 
 export async function fetchPolicy(token?: string) {
   const res = await fetch(`${API_BASE}/governance/policy/active`, {
+    credentials: 'include',
     headers: authHeader(token)
   });
   return res.ok ? res.json() : Promise.reject(new Error(res.statusText));
@@ -29,6 +48,7 @@ export async function fetchPolicy(token?: string) {
 
 export async function fetchGovernanceEvents(token?: string) {
   const res = await fetch(`${API_BASE}/governance/policy/events?limit=10`, {
+    credentials: 'include',
     headers: authHeader(token)
   });
   return res.ok ? res.json() : [];
@@ -96,6 +116,7 @@ export type AiSession = {
 export async function createAiSession(token?: string, title = '', runtimeKind?: string, policy?: Record<string, unknown>) {
   const res = await fetch(`${API_BASE}/ai/sessions`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...authHeader(token) },
     body: JSON.stringify({ title, runtime_kind: runtimeKind ?? 'opencode', policy: policy ?? {} })
   });
@@ -105,6 +126,7 @@ export async function createAiSession(token?: string, title = '', runtimeKind?: 
 
 export async function listAiSessions(token?: string) {
   const res = await fetch(`${API_BASE}/ai/sessions?limit=20`, {
+    credentials: 'include',
     headers: authHeader(token)
   });
   if (!res.ok) throw new Error(await res.text());
@@ -113,6 +135,7 @@ export async function listAiSessions(token?: string) {
 
 export async function getAiSession(sessionId: string, token?: string, sinceEventId = 0) {
   const res = await fetch(`${API_BASE}/ai/sessions/${encodeURIComponent(sessionId)}?since_event_id=${sinceEventId}`, {
+    credentials: 'include',
     headers: authHeader(token)
   });
   if (!res.ok) throw new Error(await res.text());
@@ -122,6 +145,7 @@ export async function getAiSession(sessionId: string, token?: string, sinceEvent
 export async function sendAiTurn(sessionId: string, message: string, token?: string) {
   const res = await fetch(`${API_BASE}/ai/sessions/${encodeURIComponent(sessionId)}/turns`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...authHeader(token) },
     body: JSON.stringify({ message })
   });
@@ -134,6 +158,7 @@ export async function approveAiAction(sessionId: string, actionId: string, token
     `${API_BASE}/ai/sessions/${encodeURIComponent(sessionId)}/actions/${encodeURIComponent(actionId)}/approve`,
     {
       method: 'POST',
+      credentials: 'include',
       headers: authHeader(token)
     }
   );
@@ -146,6 +171,7 @@ export async function rejectAiAction(sessionId: string, actionId: string, token?
     `${API_BASE}/ai/sessions/${encodeURIComponent(sessionId)}/actions/${encodeURIComponent(actionId)}/reject?note=${encodeURIComponent(note)}`,
     {
       method: 'POST',
+      credentials: 'include',
       headers: authHeader(token)
     }
   );
@@ -175,6 +201,7 @@ export type EvolveMissionStatus = {
 export async function seedEvolveMission(spec: Record<string, unknown>, token?: string) {
   const res = await fetch(`${API_BASE}/evolve/missions`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...authHeader(token) },
     body: JSON.stringify({ spec })
   });
@@ -190,6 +217,7 @@ export async function runEvolveMission(
 ) {
   const res = await fetch(`${API_BASE}/evolve/missions/${encodeURIComponent(missionId)}/run`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...authHeader(token) },
     body: JSON.stringify({ runtime_kind: runtimeKind, policy })
   });
@@ -200,7 +228,7 @@ export async function runEvolveMission(
 export async function getEvolveMissionStatus(missionId: string, token?: string) {
   const res = await fetch(
     `${API_BASE}/evolve/missions/${encodeURIComponent(missionId)}/status`,
-    { headers: authHeader(token) }
+    { credentials: 'include', headers: authHeader(token) }
   );
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as EvolveMissionStatus;
@@ -226,7 +254,7 @@ export type ScheduledJob = {
 };
 
 export async function listScheduledJobs(token?: string) {
-  const res = await fetch(`${API_BASE}/scheduled-jobs`, { headers: authHeader(token) });
+  const res = await fetch(`${API_BASE}/scheduled-jobs`, { credentials: 'include', headers: authHeader(token) });
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as ScheduledJob[];
 }
@@ -246,6 +274,7 @@ export async function createScheduledJob(
 ) {
   const res = await fetch(`${API_BASE}/scheduled-jobs`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...authHeader(token) },
     body: JSON.stringify(data)
   });
@@ -254,7 +283,7 @@ export async function createScheduledJob(
 }
 
 export async function getScheduledJob(jobId: number, token?: string) {
-  const res = await fetch(`${API_BASE}/scheduled-jobs/${jobId}`, { headers: authHeader(token) });
+  const res = await fetch(`${API_BASE}/scheduled-jobs/${jobId}`, { credentials: 'include', headers: authHeader(token) });
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as ScheduledJob;
 }
@@ -275,6 +304,7 @@ export async function updateScheduledJob(
 ) {
   const res = await fetch(`${API_BASE}/scheduled-jobs/${jobId}`, {
     method: 'PUT',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...authHeader(token) },
     body: JSON.stringify(data)
   });
@@ -285,6 +315,7 @@ export async function updateScheduledJob(
 export async function deleteScheduledJob(jobId: number, token?: string) {
   const res = await fetch(`${API_BASE}/scheduled-jobs/${jobId}`, {
     method: 'DELETE',
+    credentials: 'include',
     headers: authHeader(token)
   });
   if (!res.ok) throw new Error(await res.text());
@@ -294,6 +325,7 @@ export async function deleteScheduledJob(jobId: number, token?: string) {
 export async function triggerScheduledJobNow(jobId: number, token?: string) {
   const res = await fetch(`${API_BASE}/scheduled-jobs/${jobId}/run`, {
     method: 'POST',
+    credentials: 'include',
     headers: authHeader(token)
   });
   if (!res.ok) throw new Error(await res.text());
@@ -313,6 +345,7 @@ export type OidcExchangeResponse = {
 export async function exchangeOidcGrant(grantId: string) {
   const res = await fetch(`${API_BASE}/auth/oidc/exchange`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ grant_id: grantId })
   });

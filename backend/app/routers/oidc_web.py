@@ -3,13 +3,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from typing import Optional
 from sqlmodel import select
@@ -24,6 +25,7 @@ from app.services.ids import new_hash_id
 router = APIRouter(prefix="/auth/oidc", tags=["auth"])
 OIDC_HTTP_HEADERS = {"User-Agent": "MissionControl-OIDC/1.0 (+https://missioncontrolai.app)"}
 SESSION_COOKIE_NAME = "mc_session_token"
+DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 
 
 def _now_utc() -> datetime:
@@ -38,6 +40,39 @@ def _pkce_pair() -> tuple[str, str]:
     verifier = _b64url(secrets.token_bytes(32))
     challenge = _b64url(hashlib.sha256(verifier.encode("utf-8")).digest())
     return verifier, challenge
+
+
+def _device_user_code(device_code: str) -> str:
+    digest = hashlib.sha256(device_code.encode("utf-8")).hexdigest().upper()
+    raw = digest[:8]
+    return f"{raw[:4]}-{raw[4:]}"
+
+
+def _device_verification_uri(request: Request) -> str:
+    return str(request.url_for("device_verify"))
+
+
+def _device_interval_seconds() -> int:
+    raw = (os.getenv("OIDC_DEVICE_INTERVAL_SECONDS") or "5").strip()
+    try:
+        return max(2, min(int(raw), 30))
+    except ValueError:
+        return 5
+
+
+def _device_expires_seconds() -> int:
+    raw = (os.getenv("OIDC_DEVICE_EXPIRES_SECONDS") or "600").strip()
+    try:
+        return max(120, min(int(raw), 1800))
+    except ValueError:
+        return 600
+
+
+def _oauth_error_response(error: str, description: str, status_code: int = 400) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": error, "error_description": description},
+    )
 
 
 def _fetch_openid_config() -> dict:
@@ -110,6 +145,160 @@ class OidcCliInitiateResponse(BaseModel):
     authorize_url: str
     cli_nonce: str
     expires_at: str  # ISO-8601 — CLI polls until this time
+
+
+@router.post("/device/authorize")
+async def device_authorize(request: Request):
+    """RFC 8628-style device authorization endpoint."""
+    settings = _auth_settings()
+    if not settings.oidc_enabled():
+        raise HTTPException(status_code=503, detail="OIDC is not configured on this server")
+
+    config = _fetch_openid_config()
+    authorize_endpoint = str(config.get("authorization_endpoint") or "").strip()
+    if not authorize_endpoint:
+        raise HTTPException(status_code=503, detail="OIDC discovery missing authorization_endpoint")
+
+    form = await request.form()
+    client_id = str(form.get("client_id") or "").strip()
+    if client_id and client_id != _oidc_client_id():
+        return _oauth_error_response("invalid_client", "client_id does not match configured OIDC client")
+
+    device_code = secrets.token_urlsafe(32)
+    user_code = _device_user_code(device_code)
+    state = secrets.token_urlsafe(24)
+    nonce = secrets.token_urlsafe(24)
+    verifier, challenge = _pkce_pair()
+    auth_id = f"oar_{new_hash_id()}"
+    now = _now_utc()
+    expires_in = _device_expires_seconds()
+    interval = _device_interval_seconds()
+    expires = now + timedelta(seconds=expires_in)
+
+    row = OidcAuthRequest(
+        id=auth_id,
+        state=state,
+        nonce=nonce,
+        code_verifier=verifier,
+        redirect_path=f"/auth/oidc/device/success?user_code={urllib_parse.quote(user_code)}",
+        cli_nonce=device_code,
+        created_at=now,
+        expires_at=expires,
+    )
+    with get_session() as db:
+        db.add(row)
+        db.commit()
+
+    verification_uri = _device_verification_uri(request)
+    verification_uri_complete = f"{verification_uri}?user_code={urllib_parse.quote(user_code)}"
+    return {
+        "device_code": device_code,
+        "user_code": user_code,
+        "verification_uri": verification_uri,
+        "verification_uri_complete": verification_uri_complete,
+        "expires_in": expires_in,
+        "interval": interval,
+        "authorization_endpoint": authorize_endpoint,
+    }
+
+
+@router.get("/device/verify", name="device_verify")
+def device_verify(request: Request, user_code: str = Query(default="")):
+    """Browser entrypoint for device flow (user enters code and authenticates)."""
+    code = (user_code or "").strip().upper()
+    if not code:
+        raise HTTPException(status_code=400, detail="user_code is required")
+    now = _now_utc()
+    with get_session() as db:
+        rows = db.exec(
+            select(OidcAuthRequest)
+            .where(OidcAuthRequest.cli_nonce != None)  # noqa: E711
+            .where(OidcAuthRequest.used_at == None)  # noqa: E711
+            .where(OidcAuthRequest.expires_at > now)
+        ).all()
+        match = next(
+            (row for row in rows if _device_user_code(str(row.cli_nonce or "")).upper() == code),
+            None,
+        )
+        if match is None:
+            raise HTTPException(status_code=400, detail="user_code is invalid or expired")
+
+    config = _fetch_openid_config()
+    authorize_endpoint = str(config.get("authorization_endpoint") or "").strip()
+    if not authorize_endpoint:
+        raise HTTPException(status_code=503, detail="OIDC discovery missing authorization_endpoint")
+    params = {
+        "response_type": "code",
+        "client_id": _oidc_client_id(),
+        "redirect_uri": _oidc_redirect_uri(request),
+        "scope": _auth_settings().oidc_scopes or "openid profile email",
+        "state": match.state,
+        "nonce": match.nonce,
+        "code_challenge": _b64url(hashlib.sha256(match.code_verifier.encode("utf-8")).digest()),
+        "code_challenge_method": "S256",
+    }
+    return RedirectResponse(url=f"{authorize_endpoint}?{urllib_parse.urlencode(params)}", status_code=302)
+
+
+@router.post("/device/token")
+async def device_token(request: Request):
+    """RFC 8628-style token polling endpoint."""
+    form = await request.form()
+    grant_type = str(form.get("grant_type") or "").strip()
+    if grant_type != DEVICE_GRANT_TYPE:
+        return _oauth_error_response("unsupported_grant_type", "grant_type must be device_code")
+    device_code = str(form.get("device_code") or "").strip()
+    if not device_code:
+        return _oauth_error_response("invalid_request", "device_code is required")
+    now = _now_utc()
+    with get_session() as db:
+        auth_req = db.exec(
+            select(OidcAuthRequest)
+            .where(OidcAuthRequest.cli_nonce == device_code)
+        ).first()
+        if auth_req is None:
+            return _oauth_error_response("invalid_grant", "device_code is invalid")
+        if auth_req.expires_at <= now:
+            return _oauth_error_response("expired_token", "device_code expired")
+
+        grant = db.exec(
+            select(OidcLoginGrant)
+            .where(OidcLoginGrant.cli_nonce == device_code)
+            .where(OidcLoginGrant.expires_at > now)
+        ).first()
+        if grant is None:
+            return _oauth_error_response("authorization_pending", "authorization is still pending")
+        if grant.used_at is not None:
+            return _oauth_error_response("invalid_grant", "grant already used")
+
+        grant.used_at = now
+        db.add(grant)
+        db.commit()
+
+        session_subject = (grant.email or "").strip() or grant.subject
+        session = issue_session_token(
+            subject=session_subject,
+            user_agent=request.headers.get("user-agent", ""),
+        )
+        expires_in = max(1, int((session.expires_at - now).total_seconds()))
+        return {
+            "access_token": session.token,
+            "token_type": "Bearer",
+            "expires_in": expires_in,
+            "scope": _auth_settings().oidc_scopes or "openid profile email",
+        }
+
+
+@router.get("/device/success")
+def device_success_page(user_code: str = Query(default="")):
+    safe_code = (user_code or "").replace("<", "").replace(">", "")
+    html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>MissionControl Device Login Complete</title></head>
+<body style="font-family:system-ui,sans-serif;padding:2rem;background:#0f1117;color:#e2e8f0;">
+  <h2>Authentication Complete</h2>
+  <p>You can return to your terminal/device. Code: <code>{safe_code}</code></p>
+</body></html>"""
+    return HTMLResponse(content=html)
 
 
 @router.get("/cli-initiate")

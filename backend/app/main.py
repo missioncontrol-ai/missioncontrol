@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 import hmac
 import os
+import secrets
 import time
 import uuid
 from collections import deque
@@ -90,6 +91,8 @@ AUTH_EXEMPT_WEBHOOK_PATHS = {
     "/integrations/teams/events",
 }
 TOKEN_SUBJECT = "token-client"
+CSRF_COOKIE_NAME = "mc_csrf_token"
+CSRF_HEADER_NAME = "x-csrf-token"
 
 
 def _as_int(value: str | None, default: int, *, minimum: int = 1, maximum: int | None = None) -> int:
@@ -128,6 +131,16 @@ def _trusted_proxy_ips() -> set[str]:
     if not raw:
         return set()
     return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _session_cookie_secure(request: Request) -> bool:
+    explicit = (os.getenv("MC_SESSION_COOKIE_SECURE") or "").strip().lower()
+    if explicit in {"1", "true", "yes", "on"}:
+        return True
+    if explicit in {"0", "false", "no", "off"}:
+        return False
+    host = (request.url.hostname or "").lower()
+    return host not in {"localhost", "127.0.0.1"}
 
 
 @dataclass(frozen=True)
@@ -266,7 +279,9 @@ async def require_auth(request, call_next):
         return _finalize_response(request, response, start)
 
     auth_header = request.headers.get("authorization")
-    token = _extract_bearer_token(auth_header) or _extract_session_cookie_token(request)
+    bearer_token = _extract_bearer_token(auth_header)
+    cookie_token = _extract_session_cookie_token(request)
+    token = bearer_token or cookie_token
     if not token:
         return _unauthorized(
             request,
@@ -277,7 +292,13 @@ async def require_auth(request, call_next):
 
     # Session tokens (mcs_*) are validated against the DB regardless of AUTH_MODE.
     if token.startswith("mcs_"):
-        return await _require_session_token(request, token, call_next, start)
+        return await _require_session_token(
+            request,
+            token,
+            call_next,
+            start,
+            token_from_cookie=bool(cookie_token and not bearer_token),
+        )
 
     if AUTH_SETTINGS.mode == "token":
         if not AUTH_SETTINGS.missioncontrol_token or not hmac.compare_digest(token, AUTH_SETTINGS.missioncontrol_token):
@@ -367,7 +388,7 @@ async def _require_oidc_token(request, token: str, call_next, start: float):
     return _finalize_response(request, response, start)
 
 
-async def _require_session_token(request, token: str, call_next, start: float):
+async def _require_session_token(request, token: str, call_next, start: float, *, token_from_cookie: bool = False):
     import hashlib
     from datetime import datetime as _dt
     from sqlmodel import select as _select
@@ -410,11 +431,20 @@ async def _require_session_token(request, token: str, call_next, start: float):
         "session_id": session_row["session_id"],
         "session_expires_at": session_row["expires_at"],
     }
+    request.state.auth_via_cookie = bool(token_from_cookie)
     response = await _call_next_with_guards(request, call_next)
+    if token_from_cookie:
+        _ensure_csrf_cookie(request, response)
     return _finalize_response(request, response, start)
 
 
 async def _call_next_with_guards(request: Request, call_next):
+    if request.method in {"POST", "PATCH", "PUT", "DELETE"} and _requires_csrf(request):
+        if not _validate_csrf(request):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Forbidden", "reason": "csrf_invalid"},
+            )
     now = time.monotonic()
     policy = _rate_limit_policy(request)
     key = f"{request.method}:{request.url.path}:{_rate_limit_key(request)}"
@@ -439,6 +469,7 @@ def _unauthorized(request: Request, reason: str, detail: str, *, start: float) -
 
 
 def _finalize_response(request: Request, response, start: float):
+    _apply_security_headers(response)
     response = _attach_trace_headers(request, response)
     request_id = _request_id(request)
     response.headers["x-request-id"] = request_id
@@ -480,6 +511,45 @@ def _finalize_response(request: Request, response, start: float):
         }
     )
     return response
+
+
+def _requires_csrf(request: Request) -> bool:
+    return bool(getattr(getattr(request, "state", None), "auth_via_cookie", False))
+
+
+def _validate_csrf(request: Request) -> bool:
+    cookie_token = str(request.cookies.get(CSRF_COOKIE_NAME) or "").strip()
+    header_token = str(request.headers.get(CSRF_HEADER_NAME) or "").strip()
+    if not cookie_token or not header_token:
+        return False
+    return hmac.compare_digest(cookie_token, header_token)
+
+
+def _ensure_csrf_cookie(request: Request, response) -> None:
+    current = str(request.cookies.get(CSRF_COOKIE_NAME) or "").strip()
+    token = current or secrets.token_urlsafe(24)
+    response.set_cookie(
+        key=CSRF_COOKIE_NAME,
+        value=token,
+        httponly=False,
+        secure=_session_cookie_secure(request),
+        samesite="lax",
+        path="/",
+    )
+
+
+def _apply_security_headers(response) -> None:
+    response.headers.setdefault(
+        "content-security-policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+    )
+    response.headers.setdefault("referrer-policy", "no-referrer")
+    response.headers.setdefault("x-frame-options", "DENY")
+    response.headers.setdefault(
+        "permissions-policy",
+        "geolocation=(), microphone=(), camera=()",
+    )
 
 
 def _request_id(request: Request) -> str:
