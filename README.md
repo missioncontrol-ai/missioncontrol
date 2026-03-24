@@ -87,7 +87,7 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 ```bash
 bash scripts/dev-up.sh
 bash scripts/install-mc.sh
-MC_TOKEN="TopSecret" mc doctor
+MC_TOKEN="TopSecret" mc system doctor
 ```
 
 Optional (auto-load env on new shells):
@@ -101,7 +101,7 @@ Then open:
 
 ## Evolve (Self-Improvement Loop)
 
-`mc evolve` currently supports seeding evolve missions and recording/inspecting run metadata.
+`mc agent evolve` currently supports seeding evolve missions and recording/inspecting run metadata.
 For the exact current behavior and limitations, see [`docs/EVOLVE.md`](docs/EVOLVE.md).
 
 ## Web UI (SvelteKit)
@@ -280,14 +280,14 @@ mc launch openclaw  # OpenClaw — writes ~/.missioncontrol/config/openclaw.acp.
 
 `mc launch` auto-starts the daemon, validates auth, writes agent config, and exec's the agent.
 
-Use `mc login` to create a server-issued session token (`mcs_*`) stored locally — no more
+Use `mc auth login` to create a server-issued session token (`mcs_*`) stored locally — no more
 token in agent config files, revocable any time, auto-loaded by `mc` on next run:
 
 ```bash
-MC_TOKEN="<static-token>" mc login   # exchange for session token
+MC_TOKEN="<static-token>" mc auth login   # exchange for session token
 mc launch claude                     # session auto-loaded, token injected at exec
-mc whoami                            # verify identity
-mc logout                            # revoke session
+mc auth whoami                       # verify identity
+mc auth logout                       # revoke session
 ```
 
 Pass `--preflight-only` to validate without launching (useful in CI).
@@ -296,9 +296,9 @@ Pass `-- <args>` to forward arguments to the agent binary.
 For manual setup, session token details, Codex swarm workflows, and skill sync: see [`docs/AGENT-INSTALL.md`](docs/AGENT-INSTALL.md).
 
 - **Rust CLI (`mc`) first:** see `integrations/mc/README.md` for installation, daemon, governance, tooling, sync, and matrix telemetry commands; the CLI mirrors the HTTP/MCP surface described elsewhere in this README and is the recommended interface for most OSS users.
-- **Agent configs & doctor:** use `scripts/generate-agent-config.sh` to emit MCP onboarding manifests and run `mc doctor` (preferred) to validate connectivity before handing configs to Codex/Claude/Gemini.
+- **Agent configs & doctor:** use `scripts/generate-agent-config.sh` to emit MCP onboarding manifests and run `mc system doctor` (preferred) to validate connectivity before handing configs to Codex/Claude/Gemini.
 - **Codex multi-session swarms:** follow `docs/CODEX-SWARM-WORKFLOW.md` for first-class collaborative runs without nested `codex exec`.
-- **Auth modes:** API accepts `token`, `oidc`, or `dual` via `AUTH_MODE`. `mc login` issues server-side session tokens (`mcs_*`) that work across all auth modes, are revocable, and never need to be written to agent config files.
+- **Auth modes:** API accepts `token`, `oidc`, or `dual` via `AUTH_MODE`. `mc auth login` issues server-side session tokens (`mcs_*`) that work across all auth modes, are revocable, and never need to be written to agent config files.
 
 ## MCP Examples
 

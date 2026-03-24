@@ -287,9 +287,7 @@ async fn dispatch(
                         }
                         delay = (delay * 2).min(Duration::from_secs(30));
                     }
-                    tracing::error!(
-                        "mcp_server: all retry attempts exhausted; tools unavailable"
-                    );
+                    tracing::error!("mcp_server: all retry attempts exhausted; tools unavailable");
                 });
             }
 
@@ -401,7 +399,10 @@ fn maybe_update_context_json(result: &Value) {
 
     // Read existing context (best-effort; skip on error).
     let mut ctx: Value = if context_path.exists() {
-        match fs::read_to_string(&context_path).ok().and_then(|s| serde_json::from_str(&s).ok()) {
+        match fs::read_to_string(&context_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+        {
             Some(v) => v,
             None => return,
         }
@@ -417,20 +418,36 @@ fn maybe_update_context_json(result: &Value) {
     let mut changed = false;
 
     // Extract mission_id from common response shapes.
-    let mission_id = result.get("mission_id")
-        .or_else(|| result.get("id").filter(|_| result.get("northstar_md").is_some()))
+    let mission_id = result
+        .get("mission_id")
+        .or_else(|| {
+            result
+                .get("id")
+                .filter(|_| result.get("northstar_md").is_some())
+        })
         .and_then(|v| v.as_str());
     if let Some(mid) = mission_id {
-        obj.insert("active_mission_id".to_string(), Value::String(mid.to_string()));
+        obj.insert(
+            "active_mission_id".to_string(),
+            Value::String(mid.to_string()),
+        );
         changed = true;
     }
 
     // Extract kluster_id from common response shapes.
-    let kluster_id = result.get("kluster_id")
-        .or_else(|| result.get("id").filter(|_| result.get("workstream_md").is_some()))
+    let kluster_id = result
+        .get("kluster_id")
+        .or_else(|| {
+            result
+                .get("id")
+                .filter(|_| result.get("workstream_md").is_some())
+        })
         .and_then(|v| v.as_str());
     if let Some(kid) = kluster_id {
-        obj.insert("active_kluster_id".to_string(), Value::String(kid.to_string()));
+        obj.insert(
+            "active_kluster_id".to_string(),
+            Value::String(kid.to_string()),
+        );
         changed = true;
     }
 

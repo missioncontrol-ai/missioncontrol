@@ -112,6 +112,16 @@ class OidcValidator:
 
         email = claims.get("email")
         if email is not None:
-            email = str(email)
+            email = str(email).strip()
+        if not email:
+            # Some IdPs omit `email` but include an equivalent login identifier.
+            for key in ("preferred_username", "upn", "username"):
+                candidate = claims.get(key)
+                if candidate is None:
+                    continue
+                candidate_text = str(candidate).strip()
+                if "@" in candidate_text:
+                    email = candidate_text
+                    break
 
         return OidcPrincipal(subject=subject, email=email, claims=claims)

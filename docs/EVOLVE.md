@@ -1,6 +1,6 @@
 # Evolve — MissionControl Self-Improvement Loop
 
-`mc evolve` seeds and tracks a self-improvement backlog in MissionControl.
+`mc agent evolve` seeds and tracks a self-improvement backlog in MissionControl.
 Today it is a thin mission/run tracker: it stores the evolve spec, records run launches,
 and returns run status metadata.
 
@@ -8,14 +8,14 @@ and returns run status metadata.
 
 ```bash
 # 1. Seed a mission with a task backlog
-mc evolve seed --spec docs/examples/evolve-seed-spec.json
+mc agent evolve seed --spec docs/examples/evolve-seed-spec.json
 # → outputs mission_id: evolve-abc12345
 
 # 2. Record a run launch for that mission
-mc evolve run --mission evolve-abc12345 --agent claude
+mc agent evolve run --mission evolve-abc12345 --agent claude
 
 # 3. Inspect mission/run status metadata
-mc evolve status --mission evolve-abc12345
+mc agent evolve status --mission evolve-abc12345
 ```
 
 ## Spec File Format
@@ -41,9 +41,9 @@ The spec file is JSON:
     },
     {
       "id": "t002",
-      "title": "Add mc evolve CLI",
-      "description": "Implement mc evolve seed/run/status subcommands",
-      "acceptance": "mc evolve --help shows seed, run, status"
+      "title": "Add mc agent evolve CLI",
+      "description": "Implement mc agent evolve seed/run/status subcommands",
+      "acceptance": "mc agent evolve --help shows seed, run, status"
     }
   ]
 }
@@ -53,9 +53,9 @@ The spec file is JSON:
 
 | Command | Description |
 |---------|-------------|
-| `mc evolve seed --spec <file>` | Seed an evolve mission from a JSON spec. Outputs `mission_id`. |
-| `mc evolve run --mission <id> [--agent <name>]` | Record a launched run entry (default: claude) for a seeded mission. |
-| `mc evolve status --mission <id>` | Show mission status, task count from the seeded spec, and recorded runs. |
+| `mc agent evolve seed --spec <file>` | Seed an evolve mission from a JSON spec. Outputs `mission_id`. |
+| `mc agent evolve run --mission <id> [--agent <name>]` | Record a launched run entry (default: claude) for a seeded mission. |
+| `mc agent evolve status --mission <id>` | Show mission status, task count from the seeded spec, and recorded runs. |
 
 ## Current Behavior
 
@@ -97,5 +97,5 @@ The spec file is JSON:
 
 - [ ] Add retention/cleanup policies for older evolve missions and runs
 - [ ] Score runs automatically (parse test results, build status from artifacts)
-- [ ] `mc evolve watch` — stream agent output in real time
+- [ ] `mc agent evolve watch` — stream agent output in real time
 - [ ] Leaderboard: which agent completed the most tasks with the highest scores

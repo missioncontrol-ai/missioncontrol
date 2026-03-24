@@ -1,4 +1,4 @@
-//! `mc login` / `mc logout` / `mc whoami` — session token management.
+//! `mc auth login` / `mc auth logout` / `mc auth whoami` — session token management.
 //!
 //! Session tokens (`mcs_*`) are issued by the MissionControl server and stored
 //! at `~/.missioncontrol/session.json` (chmod 600). They are:
@@ -10,7 +10,7 @@
 //!
 //! ## Interactive login flow
 //!
-//! `mc login` with no flags prompts the user for everything it needs:
+//! `mc auth login` with no flags prompts the user for everything it needs:
 //!   1. MC_BASE_URL (skipped if already in env or ~/.missioncontrol/config.json)
 //!   2. Auth method: token or OIDC
 //!      - token: masked prompt → POST /auth/sessions → save session.json
@@ -19,6 +19,7 @@
 use crate::{
     client::MissionControlClient,
     config::{load_saved_config, mc_home_dir, save_config},
+    ui,
 };
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
@@ -65,6 +66,8 @@ pub struct WhoamiArgs {}
 pub struct SavedSession {
     pub token: String,
     pub subject: String,
+    #[serde(default)]
+    pub email: Option<String>,
     /// RFC3339 timestamp
     pub expires_at: String,
     /// The base URL this session was created against
@@ -146,6 +149,28 @@ fn prompt_masked(msg: &str) -> Result<String> {
     Ok(value.trim().to_string())
 }
 
+fn ui_rule(width: usize) -> String {
+    format!("{}{}{}", ui::GRAY, "─".repeat(width), ui::RESET)
+}
+
+fn ui_section(title: &str) {
+    eprintln!();
+    eprintln!("{}{}{}{}", ui::BOLD, ui::ORANGE, title, ui::RESET);
+    eprintln!("{}", ui_rule(46));
+}
+
+fn ui_kv(label: &str, value: &str, value_color: &str) {
+    eprintln!(
+        "  {}{: <14}{} {}{}{}",
+        ui::DIM,
+        format!("{}:", label),
+        ui::RESET,
+        value_color,
+        value,
+        ui::RESET
+    );
+}
+
 /// Resolve base_url: env var → saved config → prompt user (and save answer).
 fn resolve_base_url(env_base_url: Option<&str>) -> Result<String> {
     // 1. Explicit env / flag
@@ -160,7 +185,7 @@ fn resolve_base_url(env_base_url: Option<&str>) -> Result<String> {
     let cfg = load_saved_config();
     if let Some(url) = cfg.base_url.as_deref() {
         if !url.is_empty() {
-            eprintln!("mc login: using saved server URL: {}", url);
+            eprintln!("mc auth login: using saved server URL: {}", url);
             return Ok(url.trim_end_matches('/').to_string());
         }
     }
@@ -177,7 +202,7 @@ fn resolve_base_url(env_base_url: Option<&str>) -> Result<String> {
     let mut new_cfg = load_saved_config();
     new_cfg.base_url = Some(url.clone());
     if let Err(e) = save_config(&new_cfg) {
-        eprintln!("mc login: warning: could not save config: {}", e);
+        eprintln!("mc auth login: warning: could not save config: {}", e);
     }
 
     Ok(url)
@@ -192,8 +217,8 @@ pub async fn login(
 ) -> Result<()> {
     if args.non_interactive {
         // Non-interactive: use MC_TOKEN env directly with the resolved URL
-        let token = std::env::var("MC_TOKEN")
-            .context("--non-interactive requires MC_TOKEN to be set")?;
+        let token =
+            std::env::var("MC_TOKEN").context("--non-interactive requires MC_TOKEN to be set")?;
         let client = MissionControlClient::new_with_token(current_base_url, &token)
             .context("could not build client")?;
         let ttl = args.ttl_hours.clamp(1, 720);
@@ -204,18 +229,27 @@ pub async fn login(
         return finish_session_login(resp, current_base_url, args.print_token);
     }
 
-    eprintln!();
-    eprintln!("  MissionControl Login");
-    eprintln!("  ─────────────────────────────────────────");
-    eprintln!();
+    ui_section("MissionControl Login");
 
     // Always let the user confirm/change the server URL
     let base_url = resolve_base_url(Some(current_base_url))?;
 
     // Auth method choice
-    eprintln!("  Auth method:");
-    eprintln!("    1) OIDC / SSO (open browser — default)");
-    eprintln!("    2) API token  (paste a long-lived token)");
+    eprintln!("  {}Auth method{}", ui::BOLD, ui::RESET);
+    eprintln!(
+        "    {}1){} OIDC / SSO {}(open browser — default){}",
+        ui::CYAN,
+        ui::RESET,
+        ui::DIM,
+        ui::RESET
+    );
+    eprintln!(
+        "    {}2){} API token  {}(paste a long-lived token){}",
+        ui::CYAN,
+        ui::RESET,
+        ui::DIM,
+        ui::RESET
+    );
     eprintln!();
     let choice = prompt("  Choice [1]: ")?;
 
@@ -247,10 +281,10 @@ async fn login_with_token(base_url: &str, ttl_hours: u64, print_token: bool) -> 
 
 async fn login_oidc(base_url: &str, print_token: bool) -> Result<()> {
     // Unauthenticated client — cli-initiate and cli-poll don't require a token
-    let anon_client = MissionControlClient::new_with_token(base_url, "")
-        .context("could not build client")?;
+    let anon_client =
+        MissionControlClient::new_with_token(base_url, "").context("could not build client")?;
     eprintln!();
-    eprintln!("  Starting OIDC login…");
+    eprintln!("  {}Starting OIDC login…{}", ui::CYAN, ui::RESET);
 
     // Call the CLI-specific initiate endpoint (no MC_TOKEN required)
     let init: serde_json::Value = anon_client
@@ -268,10 +302,18 @@ async fn login_oidc(base_url: &str, print_token: bool) -> Result<()> {
         .to_string();
 
     eprintln!();
-    eprintln!("  Opening your browser to complete authentication…");
-    eprintln!("  If the browser doesn't open, visit this URL manually:");
+    eprintln!(
+        "  {}Opening your browser to complete authentication…{}",
+        ui::BOLD,
+        ui::RESET
+    );
+    eprintln!(
+        "  {}If the browser doesn't open, visit this URL manually:{}",
+        ui::DIM,
+        ui::RESET
+    );
     eprintln!();
-    eprintln!("    {}", authorize_url);
+    eprintln!("    {}{}{}", ui::CYAN, authorize_url, ui::RESET);
     eprintln!();
 
     // Best-effort browser launch
@@ -280,7 +322,11 @@ async fn login_oidc(base_url: &str, print_token: bool) -> Result<()> {
     }
 
     // Poll until the browser flow completes (up to 60 seconds before fallback).
-    eprintln!("  Waiting for browser authentication…");
+    eprintln!(
+        "  {}Waiting for browser authentication…{}",
+        ui::DIM,
+        ui::RESET
+    );
     let poll_url = format!("/auth/oidc/cli-poll/{}", cli_nonce);
     let poll_deadline = std::time::Instant::now() + Duration::from_secs(60);
 
@@ -313,11 +359,18 @@ async fn login_oidc(base_url: &str, print_token: bool) -> Result<()> {
     if grant_id.is_empty() {
         return Err(anyhow!("no code provided"));
     }
-    eprintln!("  Browser authentication complete.");
+    eprintln!(
+        "  {}Browser authentication complete.{}",
+        ui::GREEN,
+        ui::RESET
+    );
 
     // Exchange grant for a session token
     let resp = anon_client
-        .post_json("/auth/oidc/exchange", &serde_json::json!({ "grant_id": grant_id }))
+        .post_json(
+            "/auth/oidc/exchange",
+            &serde_json::json!({ "grant_id": grant_id }),
+        )
         .await
         .context("failed to exchange OIDC grant for session token")?;
 
@@ -330,12 +383,14 @@ fn finish_session_login(resp: serde_json::Value, base_url: &str, print_token: bo
         .ok_or_else(|| anyhow!("server response missing 'token' field"))?
         .to_string();
     let subject = resp["subject"].as_str().unwrap_or("unknown").to_string();
+    let email = resp["email"].as_str().map(|s| s.to_string());
     let expires_at = resp["expires_at"].as_str().unwrap_or("").to_string();
     let session_id = resp["session_id"].as_i64();
 
     let session = SavedSession {
         token: token.clone(),
         subject: subject.clone(),
+        email: email.clone(),
         expires_at: expires_at.clone(),
         base_url: base_url.trim_end_matches('/').to_string(),
         session_id,
@@ -345,13 +400,25 @@ fn finish_session_login(resp: serde_json::Value, base_url: &str, print_token: bo
     if print_token {
         println!("{}", token);
     } else {
+        ui_section("Login Complete");
+        let display_identity = email.as_deref().unwrap_or(&subject);
+        ui_kv("Logged in as", display_identity, ui::GREEN);
+        ui_kv("Token expires", &expires_at, ui::CYAN);
+        ui_kv(
+            "Session saved",
+            &session_file_path().display().to_string(),
+            ui::DIM,
+        );
         eprintln!();
-        eprintln!("  Logged in as:  {}", subject);
-        eprintln!("  Token expires: {}", expires_at);
-        eprintln!("  Session saved: {}", session_file_path().display());
-        eprintln!();
-        eprintln!("  Run agents with:  mc launch claude");
-        eprintln!("  Check identity:   mc whoami");
+        eprintln!(
+            "  {}Next:{}  {}mc launch claude{}  ·  {}mc auth whoami{}",
+            ui::BOLD,
+            ui::RESET,
+            ui::CYAN,
+            ui::RESET,
+            ui::CYAN,
+            ui::RESET
+        );
         eprintln!();
     }
 
@@ -362,12 +429,15 @@ pub async fn logout(args: LogoutArgs, client: &MissionControlClient) -> Result<(
     if !args.local_only {
         // Best-effort server-side revoke; don't fail if the session is already expired
         match client.delete("/auth/sessions/current").await {
-            Ok(_) => eprintln!("mc logout: session revoked on server"),
-            Err(e) => eprintln!("mc logout: server revoke failed ({}); clearing local file anyway", e),
+            Ok(_) => eprintln!("mc auth logout: session revoked on server"),
+            Err(e) => eprintln!(
+                "mc auth logout: server revoke failed ({}); clearing local file anyway",
+                e
+            ),
         }
     }
     clear_session()?;
-    eprintln!("mc logout: cleared {}", session_file_path().display());
+    eprintln!("mc auth logout: cleared {}", session_file_path().display());
     Ok(())
 }
 
@@ -377,7 +447,12 @@ pub async fn whoami(client: &MissionControlClient) -> Result<()> {
     if session_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&session_path) {
             if let Ok(session) = serde_json::from_str::<SavedSession>(&content) {
-                eprintln!("local session: {} (expires {})", session.subject, session.expires_at);
+                ui_section("Local Session");
+                ui_kv("Subject", &session.subject, ui::CYAN);
+                if let Some(email) = session.email.as_deref().filter(|e| !e.is_empty()) {
+                    ui_kv("Email", email, ui::GREEN);
+                }
+                ui_kv("Expires", &session.expires_at, ui::DIM);
             }
         }
     }

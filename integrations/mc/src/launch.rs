@@ -22,21 +22,40 @@ use crate::{
     auth,
     client::MissionControlClient,
     config::{mc_home_dir, McConfig},
-    mc_info, mc_ok, mc_warn,
-    ui,
+    mc_info, mc_ok, mc_warn, ui,
 };
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs as unix_fs;
 use std::{
     io::{self, Write},
     path::{Path, PathBuf},
 };
-#[cfg(unix)]
-use std::os::unix::fs as unix_fs;
 use uuid::Uuid;
+
+const CODEX_APPROVAL_RULES: &[&str] = &[
+    r#"prefix_rule(pattern=["mc", "whoami"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "auth"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "data"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "data", "tools", "call"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "data", "tools"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "data", "sync"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "data", "explorer"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "admin"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "system"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "agent"], decision="allow")"#,
+    // Legacy compatibility: older assistants may still emit pre-cutover paths.
+    r#"prefix_rule(pattern=["mc", "explorer"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "tools"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "profile"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "approvals"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "workspace"], decision="allow")"#,
+    r#"prefix_rule(pattern=["mc", "tools", "call"], decision="allow")"#,
+];
 
 // ── CLI args ────────────────────────────────────────────────────────────────
 
@@ -216,7 +235,8 @@ impl AgentDriver for CodexDriver {
             // Config differs — prompt user to replace.
             eprint!(
                 "{}⚑{} [mcp_servers.missioncontrol] differs from current template. Replace? [y/N] ",
-                crate::ui::YELLOW, crate::ui::RESET
+                crate::ui::YELLOW,
+                crate::ui::RESET
             );
             std::io::stderr().flush()?;
             let mut answer = String::new();
@@ -279,7 +299,10 @@ fn extract_codex_mc_section(content: &str) -> String {
         }
 
         if in_mc_section {
-            if trimmed.starts_with('[') && trimmed != CODEX_MC_MARKER && !trimmed.starts_with("[mcp_servers.missioncontrol") {
+            if trimmed.starts_with('[')
+                && trimmed != CODEX_MC_MARKER
+                && !trimmed.starts_with("[mcp_servers.missioncontrol")
+            {
                 break;
             }
             out.push(line);
@@ -629,9 +652,10 @@ fn inject_mc_lifecycle_hooks(settings_path: &Path, backend_url: &str) -> Result<
     }
 
     // Write back.
-    root.as_object_mut()
-        .unwrap()
-        .insert("hooks".to_string(), Value::Object(hooks_map.into_iter().collect()));
+    root.as_object_mut().unwrap().insert(
+        "hooks".to_string(),
+        Value::Object(hooks_map.into_iter().collect()),
+    );
 
     if let Some(parent) = settings_path.parent() {
         fs::create_dir_all(parent)?;
@@ -643,10 +667,8 @@ fn inject_mc_lifecycle_hooks(settings_path: &Path, backend_url: &str) -> Result<
 /// Write the MC hook shell scripts into `<target_home>/.claude/hooks/`.
 /// Scripts are embedded at compile time from `distribution/hooks/`.
 fn write_hook_scripts(target_home: &Path) -> Result<()> {
-    const PRECOMPACT: &str =
-        include_str!("../../../distribution/hooks/mc-precompact.sh");
-    const RECOMPACT: &str =
-        include_str!("../../../distribution/hooks/mc-recompact-context.sh");
+    const PRECOMPACT: &str = include_str!("../../../distribution/hooks/mc-precompact.sh");
+    const RECOMPACT: &str = include_str!("../../../distribution/hooks/mc-recompact-context.sh");
 
     let hooks_dir = target_home.join(".claude").join("hooks");
     fs::create_dir_all(&hooks_dir)?;
@@ -673,10 +695,7 @@ fn write_hook_scripts(target_home: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_json_missioncontrol_entry(
-    config_path: &Path,
-    mc_entry: serde_json::Value,
-) -> Result<()> {
+fn write_json_missioncontrol_entry(config_path: &Path, mc_entry: serde_json::Value) -> Result<()> {
     let mut root: serde_json::Value = if config_path.exists() {
         let content = std::fs::read_to_string(config_path)?;
         serde_json::from_str(&content)
@@ -777,8 +796,8 @@ fn render_json_mcp_entry(
     let rendered = tmpl
         .replace("__BASE_URL__", base_url)
         .replace("__TOKEN__", token);
-    let mut full: serde_json::Value =
-        serde_json::from_str(&rendered).unwrap_or_else(|_| panic!("{} must be valid JSON", tmpl_name));
+    let mut full: serde_json::Value = serde_json::from_str(&rendered)
+        .unwrap_or_else(|_| panic!("{} must be valid JSON", tmpl_name));
     if !embed_token {
         if let Some(env_obj) = full
             .pointer_mut("/mcpServers/missioncontrol/env")
@@ -908,8 +927,8 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     let mut selected_agent = resolve_agent_choice(args.agent.clone())?;
     let want_resume = !args.new_session
         && (args.resume
-        || args.session_id.is_some()
-        || matches!(args.agent, Some(AgentKind::Resume)));
+            || args.session_id.is_some()
+            || matches!(args.agent, Some(AgentKind::Resume)));
     let base_mc_home = mc_home_dir();
     fs::create_dir_all(&base_mc_home)?;
 
@@ -946,9 +965,7 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         .map(|r| r.runtime_session_id.clone())
         .unwrap_or_else(|| format!("rs_{}", Uuid::new_v4().simple()));
     let instance_home = base_mc_home.join("instances").join(&runtime_session_id);
-    let profile_home = base_mc_home
-        .join("profiles")
-        .join(&profile_name);
+    let profile_home = base_mc_home.join("profiles").join(&profile_name);
     fs::create_dir_all(&instance_home)?;
     fs::create_dir_all(&profile_home)?;
 
@@ -1002,7 +1019,7 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     let login_client_holder: Option<MissionControlClient> = if config.token.is_none() {
         if auth::load_saved_session(config.base_url.as_str()).is_none() {
             mc_warn!("no valid session found for {}", config.base_url.as_str());
-            mc_info!("running `mc login` to authenticate...");
+            mc_info!("running `mc auth login` to authenticate...");
             auth::login(
                 auth::LoginArgs {
                     ttl_hours: 8,
@@ -1018,7 +1035,7 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         // Rebuild client with the freshly written (or pre-existing) session token.
         let session_token = auth::load_saved_session(config.base_url.as_str())
             .map(|s| s.token)
-            .context("session not found after login — run `mc login` manually")?;
+            .context("session not found after login — run `mc auth login` manually")?;
         Some(
             MissionControlClient::new_with_token(config.base_url.as_str(), &session_token)
                 .context("failed to build client with session token")?,
@@ -1026,8 +1043,7 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     } else {
         None
     };
-    let effective_client: &MissionControlClient =
-        login_client_holder.as_ref().unwrap_or(client);
+    let effective_client: &MissionControlClient = login_client_holder.as_ref().unwrap_or(client);
     enforce_profile_pin(effective_client, &profile_name, args.allow_pin_mismatch).await?;
 
     // 4. Preflight-only mode: verify connectivity then stop.
@@ -1040,11 +1056,7 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         return Ok(());
     }
 
-    let base_url = config
-        .base_url
-        .as_str()
-        .trim_end_matches('/')
-        .to_string();
+    let base_url = config.base_url.as_str().trim_end_matches('/').to_string();
     // Effective token: static config token, or session token from disk (after login).
     let token = config.token.clone().unwrap_or_else(|| {
         auth::load_saved_session(config.base_url.as_str())
@@ -1065,8 +1077,14 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
 
     // 6. Fetch agent config from onboarding manifest and write to staging dir.
     if !args.skip_config_gen {
-        fetch_and_stage_agent_config(effective_client, &selected_agent, &staging_dir, &base_url, &token)
-            .await?;
+        fetch_and_stage_agent_config(
+            effective_client,
+            &selected_agent,
+            &staging_dir,
+            &base_url,
+            &token,
+        )
+        .await?;
     }
 
     // 7. Install config in instance-local paths by default.
@@ -1196,11 +1214,14 @@ fn codex_preflight_report(agent_home: &Path) {
 /// Non-fatal: prints status either way. The MCP server's retry loop handles
 /// recovery if the backend is temporarily unavailable at agent start time.
 async fn mcp_connectivity_preflight(client: &MissionControlClient) {
+    let mut tools_count: usize = 0;
     // Health check.
     match client.get_json("/mcp/health").await {
         Err(e) => {
             mc_warn!("MCP preflight: backend unreachable ({})", e);
-            mc_warn!("MCP preflight: tools will load once backend is available (retry loop active)");
+            mc_warn!(
+                "MCP preflight: tools will load once backend is available (retry loop active)"
+            );
             return;
         }
         Ok(_) => {}
@@ -1219,7 +1240,11 @@ async fn mcp_connectivity_preflight(client: &MissionControlClient) {
                 _ => 0,
             };
             if count > 0 {
-                mc_ok!("MCP preflight: backend reachable, {} tools available", count);
+                mc_ok!(
+                    "MCP preflight: backend reachable, {} tools available",
+                    count
+                );
+                tools_count = count;
             } else {
                 mc_warn!("MCP preflight: backend reachable but returned 0 tools");
             }
@@ -1228,6 +1253,35 @@ async fn mcp_connectivity_preflight(client: &MissionControlClient) {
             mc_warn!("MCP preflight: tools fetch failed ({})", e);
         }
     }
+
+    eprintln!();
+    eprintln!(
+        "{}{}Launch Preflight Summary{}",
+        ui::BOLD,
+        ui::ORANGE,
+        ui::RESET
+    );
+    eprintln!("{}{}{}", ui::GRAY, "─".repeat(56), ui::RESET);
+    eprintln!(
+        "  {}Backend:{} {}{}{}",
+        ui::DIM,
+        ui::RESET,
+        ui::GREEN,
+        "reachable",
+        ui::RESET
+    );
+    eprintln!(
+        "  {}Tools:{} {}{}{}",
+        ui::DIM,
+        ui::RESET,
+        if tools_count > 0 {
+            ui::CYAN
+        } else {
+            ui::YELLOW
+        },
+        tools_count,
+        ui::RESET
+    );
 }
 
 /// Determine whether to embed `MC_TOKEN` into the written agent config.
@@ -1277,6 +1331,7 @@ fn managed_config_relpaths(agent: &AgentKind) -> &'static [&'static str] {
             ".codex/config.toml",
             ".codex/auth.json",
             ".codex/credentials.json",
+            ".codex/rules",
         ],
         AgentKind::Claude => &[".claude.json", ".claude"],
         AgentKind::Gemini => &[".gemini/settings.json"],
@@ -1290,11 +1345,27 @@ fn initialize_profile_overlay(
     profile_home: &Path,
     global_home: &Path,
 ) -> Result<()> {
+    if matches!(agent, AgentKind::Codex) {
+        let inserted = ensure_codex_approval_rules_for_profile(profile_home)?;
+        if inserted > 0 {
+            mc_info!(
+                "seeded {} codex approval rules at {}",
+                inserted,
+                profile_home.join(".codex/rules/default.rules").display()
+            );
+        }
+    }
     for rel in managed_config_relpaths(agent) {
         let profile_path = profile_home.join(rel);
         let global_path = global_home.join(rel);
         if global_path.exists() {
-            if !profile_path.exists() {
+            if should_force_profile_refresh(rel) {
+                seed_profile_path(&global_path, &profile_path)?;
+                mc_info!(
+                    "refreshed profile auth from global {}",
+                    global_path.display()
+                );
+            } else if !profile_path.exists() {
                 seed_profile_path(&global_path, &profile_path)?;
                 mc_info!(
                     "seeded profile config from global {}",
@@ -1352,6 +1423,59 @@ fn initialize_profile_overlay(
         }
     }
     Ok(())
+}
+
+pub(crate) fn ensure_codex_approval_rules_for_profile(profile_home: &Path) -> Result<usize> {
+    let rules_dir = profile_home.join(".codex").join("rules");
+    fs::create_dir_all(&rules_dir)?;
+    let rules_path = rules_dir.join("default.rules");
+    let existing = if rules_path.exists() {
+        fs::read_to_string(&rules_path)?
+    } else {
+        String::new()
+    };
+    let mut appended = String::new();
+    let mut inserted: usize = 0;
+    for rule in CODEX_APPROVAL_RULES {
+        if !existing.contains(rule) {
+            appended.push_str(rule);
+            appended.push('\n');
+            inserted += 1;
+        }
+    }
+    if inserted > 0 {
+        let mut content = existing;
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(&appended);
+        fs::write(&rules_path, content)?;
+    }
+    Ok(inserted)
+}
+
+pub(crate) fn codex_approval_rules_for_profile(profile_home: &Path) -> Result<(PathBuf, Vec<String>)> {
+    let rules_path = profile_home
+        .join(".codex")
+        .join("rules")
+        .join("default.rules");
+    if !rules_path.exists() {
+        return Ok((
+            rules_path,
+            CODEX_APPROVAL_RULES.iter().map(|s| s.to_string()).collect(),
+        ));
+    }
+    let content = fs::read_to_string(&rules_path)?;
+    let missing = CODEX_APPROVAL_RULES
+        .iter()
+        .filter(|rule| !content.contains(**rule))
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    Ok((rules_path, missing))
+}
+
+fn should_force_profile_refresh(rel: &str) -> bool {
+    matches!(rel, ".codex/auth.json" | ".codex/credentials.json")
 }
 
 fn seed_profile_path(global_path: &Path, profile_path: &Path) -> Result<()> {
@@ -1462,7 +1586,11 @@ async fn resolve_profile_name(
     let profiles = mcp_profile_call(client, "list_profiles", json!({ "limit": 200 })).await?;
     if let Some(items) = profiles.get("profiles").and_then(|v| v.as_array()) {
         for item in items {
-            if item.get("is_default").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if item
+                .get("is_default")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
                     return Ok(name.to_string());
                 }
@@ -1504,7 +1632,10 @@ async fn mcp_profile_call(client: &MissionControlClient, tool: &str, args: Value
     let response = client
         .post_json("/mcp/call", &json!({ "tool": tool, "args": args }))
         .await?;
-    let ok = response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let ok = response
+        .get("ok")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if !ok {
         let err = response
             .get("error")
@@ -1606,8 +1737,15 @@ fn find_resume_session(
     io::stderr().flush()?;
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
-    let picked = answer.trim().parse::<usize>().ok().filter(|n| *n > 0).unwrap_or(1);
-    let picked_idx = picked.saturating_sub(1).min(candidates.len().saturating_sub(1));
+    let picked = answer
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|n| *n > 0)
+        .unwrap_or(1);
+    let picked_idx = picked
+        .saturating_sub(1)
+        .min(candidates.len().saturating_sub(1));
     Ok(Some(candidates[picked_idx].clone()))
 }
 
@@ -1703,8 +1841,7 @@ async fn fetch_and_stage_agent_config(
     base_url: &str,
     _token: &str,
 ) -> Result<()> {
-    let encoded_url: String =
-        url::form_urlencoded::byte_serialize(base_url.as_bytes()).collect();
+    let encoded_url: String = url::form_urlencoded::byte_serialize(base_url.as_bytes()).collect();
     let manifest = client
         .get_json(&format!("/agent-onboarding.json?endpoint={}", encoded_url))
         .await
@@ -1719,7 +1856,10 @@ async fn fetch_and_stage_agent_config(
         std::fs::write(&out_path, serde_json::to_string_pretty(agent_cfg)?)?;
         mc_info!("manifest staged → {}", out_path.display());
     } else {
-        mc_warn!("no agent_configs.{} in manifest — using embedded template", config_key);
+        mc_warn!(
+            "no agent_configs.{} in manifest — using embedded template",
+            config_key
+        );
     }
     Ok(())
 }
@@ -1757,8 +1897,7 @@ fn exec_agent(
     let instance_local_bin = agent_home.join(".local").join("bin");
     if let Some(current_path) = std::env::var_os("PATH") {
         let new_path = std::env::join_paths(
-            std::iter::once(instance_local_bin.clone())
-                .chain(std::env::split_paths(&current_path)),
+            std::iter::once(instance_local_bin.clone()).chain(std::env::split_paths(&current_path)),
         )
         .unwrap_or(current_path);
         cmd.env("PATH", new_path);
@@ -1774,8 +1913,7 @@ fn exec_agent(
         use std::os::unix::process::CommandExt;
         let err = cmd.exec();
         // exec() only returns if it fails.
-        Err(anyhow::Error::new(err)
-            .context(format!("failed to exec '{}'", binary_name)))
+        Err(anyhow::Error::new(err).context(format!("failed to exec '{}'", binary_name)))
     }
 
     #[cfg(not(unix))]
@@ -1934,7 +2072,10 @@ mod tests {
 
         let instance_cfg = agent_home.join(".claude.json");
         let meta = fs::symlink_metadata(&instance_cfg).expect("instance metadata");
-        assert!(meta.file_type().is_symlink(), "instance path should be symlink");
+        assert!(
+            meta.file_type().is_symlink(),
+            "instance path should be symlink"
+        );
         let target = fs::read_link(&instance_cfg).expect("read symlink");
         assert_eq!(target, profile_cfg);
     }
@@ -1966,7 +2107,10 @@ mod tests {
 
         let instance_dir = agent_home.join(".claude");
         let meta = fs::symlink_metadata(&instance_dir).expect("instance dir metadata");
-        assert!(meta.file_type().is_symlink(), "instance dir should be symlink");
+        assert!(
+            meta.file_type().is_symlink(),
+            "instance dir should be symlink"
+        );
         let target = fs::read_link(&instance_dir).expect("read dir symlink");
         assert_eq!(target, profile_dir);
     }
@@ -2040,11 +2184,49 @@ mod tests {
             "codex auth should be seeded"
         );
         assert!(
-            profile_home.join(".codex").join("credentials.json").exists(),
+            profile_home
+                .join(".codex")
+                .join("credentials.json")
+                .exists(),
             "codex credentials should be seeded"
         );
         let instance_auth = agent_home.join(".codex").join("auth.json");
         let meta = fs::symlink_metadata(&instance_auth).expect("instance auth metadata");
-        assert!(meta.file_type().is_symlink(), "instance auth should be symlink");
+        assert!(
+            meta.file_type().is_symlink(),
+            "instance auth should be symlink"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn overlay_refreshes_stale_profile_codex_auth_from_global() {
+        let tmp = tempdir().expect("tempdir");
+        let global_home = tmp.path().join("global-home");
+        let profile_home = tmp.path().join("profile-home");
+        let agent_home = tmp.path().join("agent-home");
+        fs::create_dir_all(global_home.join(".codex")).expect("global codex dir");
+        fs::create_dir_all(profile_home.join(".codex")).expect("profile codex dir");
+        fs::create_dir_all(&agent_home).expect("agent home");
+
+        fs::write(
+            global_home.join(".codex").join("auth.json"),
+            r#"{"refresh":"fresh"}"#,
+        )
+        .expect("write global auth");
+        fs::write(
+            profile_home.join(".codex").join("auth.json"),
+            r#"{"refresh":"stale"}"#,
+        )
+        .expect("write stale profile auth");
+
+        initialize_profile_overlay(&AgentKind::Codex, &agent_home, &profile_home, &global_home)
+            .expect("initialize profile overlay");
+
+        assert_eq!(
+            fs::read_to_string(profile_home.join(".codex").join("auth.json"))
+                .expect("read profile auth"),
+            r#"{"refresh":"fresh"}"#
+        );
     }
 }

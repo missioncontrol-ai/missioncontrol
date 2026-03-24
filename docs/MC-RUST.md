@@ -42,19 +42,19 @@ queen hosts, or local planners that need an exceptional offline/online experienc
 | --- | --- | --- |
 | `MC_BASE_URL` | Mission Control HTTP base URL | `http://localhost:8008` |
 | `MC_TOKEN` | MCP bearer token | unset |
-| `MC_AGENT_ID` | Optional agent identifier (persisted by `mc doctor --repair`) | unset |
+| `MC_AGENT_ID` | Optional agent identifier (persisted by `mc system doctor --fix`) | unset |
 | `MC_TIMEOUT_SECS` | Outbound timeout for HTTP/SSE calls | `10` |
 | `MC_ALLOW_INSECURE` | Accept self-signed certs (daemon and doctor matrix checks) | `false` |
 | `MC_BOOSTER_WASM` | Path to a custom WASM booster module | embedded default |
 | `MC_DISABLE_BOOSTER` | Skip the booster hook even if configured | `false` |
 | `MC_ALLOW_BOOSTER_SHORT_CIRCUIT` | Allow booster to short-circuit MCP tool execution | `false` |
-| `MC_SCHEMA_PACK_FILE` | Schema pack JSON used to gate `mc tools call` payloads | `docs/schema-packs/main.json` |
+| `MC_SCHEMA_PACK_FILE` | Schema pack JSON used to gate `mc data tools call` payloads | `docs/schema-packs/main.json` |
 
 Point `MC_SCHEMA_PACK_FILE` at the same `docs/schema-packs/main.json` that the backend uses so the CLI-level booster, matrix doctor,
 and fan-out diagnostics share the same entity expectations. Custom schema packs can live beside your deployment manifests, and the
 daemon will warn and fall back to defaults if the JSON is invalid.
 
-When no `MC_AGENT_ID` is provided, `mc` looks for `~/.missioncontrol/agent_id` and `mc doctor --repair` will seed it and ensure
+When no `MC_AGENT_ID` is provided, `mc` looks for `~/.missioncontrol/agent_id` and `mc system doctor --fix` will seed it and ensure
 `MC_HOME`/`MC_SKILLS_HOME` exist so local swarms keep a stable identity.
 
 ## Command surface
@@ -63,22 +63,22 @@ When no `MC_AGENT_ID` is provided, `mc` looks for `~/.missioncontrol/agent_id` a
 - `mc launch <agent>` now writes agent config into session-local runtime paths under `~/.missioncontrol/instances/<runtime_session_id>/...` by default.
 - Use `mc launch --legacy-global-config <agent>` only for compatibility scenarios that still require mutating global files such as `~/.codex/config.toml`.
 
-### Tools & governance
-- `mc tools list` / `mc tools call --tool <tool> --payload '{...}'` map directly to `/mcp/tools` and `/mcp/call`.
-- `mc explorer tree|node`, `mc admin active/versions/events`, and `mc approvals list/create/approve/reject` mirror the FastAPI
+### Data + admin surface
+- `mc data tools list` / `mc data tools call --tool <tool> --payload '{...}'` map directly to `/mcp/tools` and `/mcp/call`.
+- `mc data explorer tree|node`, `mc admin policy active|versions|events`, and `mc approvals list/create/approve/reject` mirror the FastAPI
   governance surface that Mission Control exposes.
 - `mc workspace load/heartbeat/fetch-artifact/commit/release` keeps parity with the Python bridge, carrying lease IDs, artifacts, and
   change sets unchanged.
 
 ### Sync & approvals
-- `mc sync status|promote` retains the existing payload contracts for skill sync and drift metadata so OpenClaw and similar runtimes can honor
+- `mc data sync status|promote` retains the existing payload contracts for skill sync and drift metadata so OpenClaw and similar runtimes can honor
   the same ledger expectations.
 - Approval commands carry the same `mission_id`, `action`, `request_context`, and decision parameters as before.
 
 ### Hot paths (doctor + daemon)
-- `mc doctor [--matrix-endpoint /events/stream] [--matrix-sample-seconds 5] [--repair]` probes `/mcp/health`, `/mcp/tools`, and the
+- `mc system doctor [--matrix-endpoint /events/stream] [--matrix-sample-seconds 5] [--fix]` probes `/mcp/health`, `/mcp/tools`, and the
   matrix SSE feed discussed in [`docs/REAL-TIME.md`](REAL-TIME.md), emitting a structured JSON report with repair hints.
-  `--repair` ensures local directories exist and persists an `agent_id` so future runs keep the same identity.
+  `--fix` ensures local directories exist and persists an `agent_id` so future runs keep the same identity.
 - `mc daemon --matrix-endpoint /events/stream [--fanout-port <port>] [--mqtt-url mqtt://host:1884] [--mqtt-topic missioncontrol/inbox]`
   keeps the SSE stream alive, fans it out to localhost, and can replay MQTT inbox updates so local controller processes see one
   unified stream.
@@ -94,12 +94,12 @@ expectations so both matrix telemetry and local governance stay in sync.
 
 `mc` embeds a WASM booster that runs before every MCP tool call when enabled (`--booster-wasm` or `MC_BOOSTER_WASM`). The default
 module simply asserts that payloads are non-empty, but you can drop in custom Wasm that implements `validate(ptr, len)` for schema
-gating or quick success paths while still emitting matrix telemetry. `mc doctor` keeps a wire on `/events/stream` and records rate-limit
+gating or quick success paths while still emitting matrix telemetry. `mc system doctor` keeps a wire on `/events/stream` and records rate-limit
 headers, TLS failures, and timeouts so dashboards know whether the daemon is healthy.
 
 ## Operational notes
 
-- `mc doctor --repair` is the recommended first step for hardened deployments: it caches agent metadata, checks directories, and prints
+- `mc system doctor --fix` is the recommended first step for hardened deployments: it caches agent metadata, checks directories, and prints
   diagnostics before any agent starts consuming LLMs.
 - `mc daemon` is now the canonical hot path for approvals, governance alerts, and matrix telemetry. Other local packages should call
   `mc daemon` (or connect to its fan-out SSE feed) to share the same governance plane that Mission Control enforces.
@@ -133,7 +133,7 @@ all while reusing the same SSE contracts documented in [`docs/REAL-TIME.md`](REA
 Completed recently:
 - `MC-PROFILE-001`: profile-aware launch + new/resume session flow with persisted runtime session metadata.
 - `MC-PROFILE-003`: MCP-backed profile lifecycle (`publish`, `pull`, `status`, pin conflict checks) with CLI tests.
-- `MC-PROFILE-004`: cleanup/retention integrated with doctor via `mc maintenance doctor --cleanup`.
+- `MC-PROFILE-004`: cleanup/retention integrated with doctor via `mc system doctor --cleanup`.
 - `MC-LAUNCH-001`: launch regression harness landed for supported agent runtimes.
 - `MC-LAUNCH-002`: instance-local config default with explicit `--legacy-global-config` compatibility mode.
 

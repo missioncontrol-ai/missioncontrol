@@ -376,7 +376,7 @@ async def _require_session_token(request, token: str, call_next, start: float):
 
     request.state.principal = {
         "subject": session_row["subject"],
-        "email": None,
+        "email": session_row["subject"] if "@" in session_row["subject"] else None,
         "auth_type": "session",
         "session_id": session_row["session_id"],
         "session_expires_at": session_row["expires_at"],

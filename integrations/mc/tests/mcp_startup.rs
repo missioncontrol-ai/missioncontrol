@@ -62,7 +62,10 @@ fn initialized_request_returns_result_and_list_changed_notification() {
         let Ok(msg) = serde_json::from_str::<Value>(candidate) else {
             continue;
         };
-        let method = msg.get("method").and_then(Value::as_str).unwrap_or_default();
+        let method = msg
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if msg.get("id") == Some(&Value::from(1)) && msg.get("result").is_some() {
             saw_init_response = true;
         }

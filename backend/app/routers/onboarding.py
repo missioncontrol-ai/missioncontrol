@@ -78,7 +78,7 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
         },
         # mc serve: the Rust-native MCP server — single binary, no Python required.
         # MC_TOKEN is intentionally omitted; mc reads the session from disk.
-        # Run `mc login` once before using this entry.
+        # Run `mc auth login` once before using this entry.
         "mc_serve_mcp_server": {
             "name": "missioncontrol",
             "command": "mc",
@@ -129,7 +129,7 @@ def build_agent_onboarding_manifest(base_url: str) -> dict:
             + " --token ${MC_TOKEN} --agent both"
         },
         "notes": [
-            "Run `mc login` once to authenticate; mc serve reads the session token from disk.",
+            "Run `mc auth login` once to authenticate; mc serve reads the session token from disk.",
             "All agents now use `mc serve` (Rust-native MCP server) — no Python missioncontrol-mcp required.",
             "Set the activation endpoint to your MissionControl instance before copying configs.",
             "Public distribution repo: https://github.com/missioncontrol-ai/mc-integration",

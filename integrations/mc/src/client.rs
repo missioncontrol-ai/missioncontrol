@@ -33,16 +33,18 @@ impl MissionControlClient {
         })
     }
 
-    /// Build a minimal client from a raw base URL + token, used during `mc login`
+    /// Build a minimal client from a raw base URL + token, used during `mc auth login`
     /// before a full McConfig is available.
     pub fn new_with_token(base_url: &str, token: &str) -> Result<Self> {
-        let http = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let http = Client::builder().timeout(Duration::from_secs(15)).build()?;
         Ok(Self {
             http,
             base_url: Url::parse(base_url).context("invalid base URL")?,
-            token: if token.is_empty() { None } else { Some(token.to_string()) },
+            token: if token.is_empty() {
+                None
+            } else {
+                Some(token.to_string())
+            },
             agent_id: None,
             runtime_session_id: None,
             profile_name: None,

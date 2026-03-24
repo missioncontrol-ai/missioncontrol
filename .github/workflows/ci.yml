@@ -3,6 +3,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_compat_smoke:
+        description: "Run compatibility smoke matrix"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   backend:
@@ -30,6 +37,53 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Run mc launch regression harness
         run: bash scripts/launch-regression.sh
+
+  compat-smoke:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_compat_smoke == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run staged compatibility smoke matrix
+        run: |
+          cd integrations/mc
+          cargo run -- compat matrix run --providers claude,codex --mode smoke
+
+  compat-strict-main:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check whether mc integration changed
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            mc:
+              - 'integrations/mc/**'
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.changes.outputs.mc == 'true'
+      - name: Main branch strict compatibility gate
+        if: steps.changes.outputs.mc == 'true'
+        run: |
+          cd integrations/mc
+          mkdir -p .ci-bin
+          cat > .ci-bin/claude <<'EOF'
+          #!/usr/bin/env bash
+          exit 0
+          EOF
+          cat > .ci-bin/codex <<'EOF'
+          #!/usr/bin/env bash
+          exit 0
+          EOF
+          chmod +x .ci-bin/claude .ci-bin/codex
+          export PATH="$PWD/.ci-bin:$PATH"
+          cargo run -- compat matrix run --providers claude,codex --mode smoke
+          cargo run -- compat matrix report-latest > /tmp/compat-latest.json
+          jq -e '.summary.overall_status == "compatible"' /tmp/compat-latest.json >/dev/null
+      - name: Compatibility gate skipped
+        if: steps.changes.outputs.mc != 'true'
+        run: echo "No integrations/mc changes detected; skipping strict compatibility gate."
 
   docs-catalog:
     runs-on: ubuntu-latest

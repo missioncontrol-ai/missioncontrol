@@ -5,7 +5,10 @@ use mc::config::McConfig;
 use serde_json::json;
 
 fn build_config(base_url: &str) -> McConfig {
-    McConfig::from_parts(base_url, None, None, None, None, 2, true, false, false, None).unwrap()
+    McConfig::from_parts(
+        base_url, None, None, None, None, 2, true, false, false, None,
+    )
+    .unwrap()
 }
 
 fn build_config_with_context(base_url: &str) -> McConfig {
@@ -113,7 +116,8 @@ async fn concurrent_clients_keep_distinct_identity_headers() {
             .header("x-mc-agent-id", "agent-a")
             .header("x-mc-runtime-session-id", "rs_a")
             .header("x-mc-agent-profile", "research");
-        then.status(200).json_body(json!({ "ok": true, "agent": "a" }));
+        then.status(200)
+            .json_body(json!({ "ok": true, "agent": "a" }));
     });
     let mock_b = server.mock(|when, then| {
         when.method(GET)
@@ -121,7 +125,8 @@ async fn concurrent_clients_keep_distinct_identity_headers() {
             .header("x-mc-agent-id", "agent-b")
             .header("x-mc-runtime-session-id", "rs_b")
             .header("x-mc-agent-profile", "security");
-        then.status(200).json_body(json!({ "ok": true, "agent": "b" }));
+        then.status(200)
+            .json_body(json!({ "ok": true, "agent": "b" }));
     });
 
     let client_a = MissionControlClient::new(&build_config_with_context_values(
@@ -139,8 +144,10 @@ async fn concurrent_clients_keep_distinct_identity_headers() {
     ))
     .unwrap();
 
-    let (resp_a, resp_b) =
-        tokio::join!(client_a.get_json("/mcp/tools"), client_b.get_json("/mcp/tools"));
+    let (resp_a, resp_b) = tokio::join!(
+        client_a.get_json("/mcp/tools"),
+        client_b.get_json("/mcp/tools")
+    );
     assert_eq!(resp_a.unwrap()["ok"], true);
     assert_eq!(resp_b.unwrap()["ok"], true);
     mock_a.assert_hits(1);

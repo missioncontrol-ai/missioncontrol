@@ -84,7 +84,7 @@ pub fn load_session_token(base_url: &str) -> Option<String> {
 
 // ── Persistent config file (~/.missioncontrol/config.json) ───────────────────
 
-/// User-level persistent settings. Written by `mc login`, read at startup.
+/// User-level persistent settings. Written by `mc auth login`, read at startup.
 /// Sensitive values (tokens) are NOT stored here — those live in session.json (chmod 600).
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct SavedConfig {

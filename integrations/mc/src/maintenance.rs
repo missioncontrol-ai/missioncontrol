@@ -1,6 +1,6 @@
 use crate::{client::MissionControlClient, config::McConfig};
 use anyhow::Result;
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, ValueEnum};
 use reqwest::Method;
 use serde_json::{json, Value};
 use std::fmt;
@@ -8,24 +8,14 @@ use std::time::Duration;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-#[derive(Subcommand, Debug)]
-pub enum MaintenanceCommand {
-    /// Diagnostics + repair helpers.
-    Doctor(DoctorArgs),
-    /// Trigger local backups (postgres, rustfs, or both).
-    Backup(BackupArgs),
-    /// Cleanup local profile/session artifacts with retention limits.
-    ProfileGc(ProfileGcArgs),
-}
-
 #[derive(Args, Debug)]
 pub struct DoctorArgs {
     #[arg(long, default_value = "/events/stream")]
     pub matrix_endpoint: String,
     #[arg(long, default_value_t = 5)]
     pub matrix_sample_seconds: u64,
-    #[arg(long)]
-    pub repair: bool,
+    #[arg(long = "fix", default_value_t = false)]
+    pub fix: bool,
     /// Also cleanup local profile/session artifacts after checks.
     #[arg(long, default_value_t = false)]
     pub cleanup: bool,
@@ -89,16 +79,20 @@ impl fmt::Display for BackupTarget {
     }
 }
 
-pub async fn run(
-    command: MaintenanceCommand,
+pub async fn run_doctor_command(
     client: &MissionControlClient,
     config: &McConfig,
+    args: &DoctorArgs,
 ) -> Result<()> {
-    match command {
-        MaintenanceCommand::Doctor(args) => run_doctor(client, config, &args).await,
-        MaintenanceCommand::Backup(args) => run_backup(client, args).await,
-        MaintenanceCommand::ProfileGc(args) => run_profile_gc(config, args),
-    }
+    run_doctor(client, config, args).await
+}
+
+pub async fn run_backup_command(client: &MissionControlClient, args: BackupArgs) -> Result<()> {
+    run_backup(client, args).await
+}
+
+pub fn run_profile_gc_command(config: &McConfig, args: ProfileGcArgs) -> Result<()> {
+    run_profile_gc(config, args)
 }
 
 fn run_profile_gc(config: &McConfig, args: ProfileGcArgs) -> Result<()> {
@@ -140,7 +134,8 @@ fn perform_profile_gc(args: ProfileGcArgs) -> Result<ProfileGcSummary> {
         });
         entries.reverse();
 
-        let age_limit = std::time::Duration::from_secs(args.max_age_days.saturating_mul(24 * 60 * 60));
+        let age_limit =
+            std::time::Duration::from_secs(args.max_age_days.saturating_mul(24 * 60 * 60));
         let now = std::time::SystemTime::now();
         for (idx, entry) in entries.iter().enumerate() {
             let path = entry.path();
@@ -202,6 +197,7 @@ async fn run_doctor(
     let checks = vec![
         run_health_check(client).await,
         run_tools_check(client).await,
+        run_codex_approval_rules_check(config),
         run_matrix_check(
             client,
             &args.matrix_endpoint,
@@ -209,7 +205,7 @@ async fn run_doctor(
         )
         .await,
     ];
-    let repairs = if args.repair {
+    let repairs = if args.fix {
         perform_repairs(config)
     } else {
         Vec::new()
@@ -425,7 +421,82 @@ fn perform_repairs(config: &McConfig) -> Vec<DoctorRepair> {
             "Agent ID already configured".into(),
         ));
     }
+    let profile_name = config
+        .agent_context
+        .profile_name
+        .clone()
+        .unwrap_or_else(|| "default".to_string());
+    let profile_home = crate::config::mc_home_dir().join("profiles").join(&profile_name);
+    match crate::launch::ensure_codex_approval_rules_for_profile(&profile_home) {
+        Ok(inserted) => repairs.push(DoctorRepair::ok(
+            "codex_approval_rules",
+            if inserted > 0 {
+                format!(
+                    "Seeded {} codex approval rules at {}",
+                    inserted,
+                    profile_home.join(".codex/rules/default.rules").display()
+                )
+            } else {
+                format!(
+                    "Codex approval rules already present at {}",
+                    profile_home.join(".codex/rules/default.rules").display()
+                )
+            },
+        )),
+        Err(err) => repairs.push(DoctorRepair::failed(
+            "codex_approval_rules",
+            err.to_string(),
+        )),
+    }
     repairs
+}
+
+fn run_codex_approval_rules_check(config: &McConfig) -> DoctorCheck {
+    let profile_name = config
+        .agent_context
+        .profile_name
+        .clone()
+        .unwrap_or_else(|| "default".to_string());
+    let profile_home = crate::config::mc_home_dir().join("profiles").join(&profile_name);
+    let start = std::time::Instant::now();
+    match crate::launch::codex_approval_rules_for_profile(&profile_home) {
+        Ok((rules_path, missing)) => {
+            if missing.is_empty() {
+                DoctorCheck {
+                    name: "codex_approval_rules".into(),
+                    ok: true,
+                    detail: format!("codex approval rules present at {}", rules_path.display()),
+                    duration_ms: start.elapsed().as_millis(),
+                    payload: Some(json!({"rules_path": rules_path, "missing": []})),
+                    repair_hint: None,
+                }
+            } else {
+                DoctorCheck {
+                    name: "codex_approval_rules".into(),
+                    ok: false,
+                    detail: format!(
+                        "{} required codex approval rules missing at {}",
+                        missing.len(),
+                        rules_path.display()
+                    ),
+                    duration_ms: start.elapsed().as_millis(),
+                    payload: Some(json!({"rules_path": rules_path, "missing": missing})),
+                    repair_hint: Some(
+                        "Run `mc system doctor --fix` or `mc launch codex` to seed rules"
+                            .into(),
+                    ),
+                }
+            }
+        }
+        Err(err) => DoctorCheck {
+            name: "codex_approval_rules".into(),
+            ok: false,
+            detail: err.to_string(),
+            duration_ms: start.elapsed().as_millis(),
+            payload: None,
+            repair_hint: Some("Ensure profile directories are writable".into()),
+        },
+    }
 }
 
 #[derive(serde::Serialize)]

@@ -80,8 +80,8 @@ pub fn print_banner(base_url: &str, agent_label: &str, version: &str) {
 
     let blank = pad("");
     let agent_line = pad(&format!("  ▶  Agent    :  {}", agent_label));
-    let url_line   = pad(&format!("  ◈  Web UI   :  {}", ui_url));
-    let ver_line   = pad(&format!("  ·  mc {}", version));
+    let url_line = pad(&format!("  ◈  Web UI   :  {}", ui_url));
+    let ver_line = pad(&format!("  ·  mc {}", version));
 
     let top = format!("{}╔{}╗{}", ORANGE, "═".repeat(W), RESET);
     let bot = format!("{}╚{}╝{}", ORANGE, "═".repeat(W), RESET);
@@ -103,8 +103,8 @@ pub fn print_banner(base_url: &str, agent_label: &str, version: &str) {
     row(&logo_6, ORANGE_BOLD);
     row(&blank, "");
     row(&agent_line, CYAN);
-    row(&url_line,   CYAN);
-    row(&ver_line,   GRAY);
+    row(&url_line, CYAN);
+    row(&ver_line, GRAY);
     eprintln!("{}", bot);
     eprintln!();
 }

@@ -31,7 +31,11 @@ fn profile_list_uses_mcp_call() {
         .output()
         .expect("run mc profile list");
 
-    assert!(output.status.success(), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("research"), "stdout={stdout}");
     mock.assert();
@@ -69,7 +73,11 @@ fn profile_publish_uses_mcp_call() {
         .output()
         .expect("run mc profile publish");
 
-    assert!(output.status.success(), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\"name\": \"dev\""), "stdout={stdout}");
     mock.assert_hits(1);
@@ -89,12 +97,10 @@ fn profile_pull_respects_pin_mismatch_from_mcp() {
     .expect("pin");
 
     let mock = server.mock(|when, then| {
-        when.method(POST)
-            .path("/mcp/call")
-            .json_body(json!({
-                "tool":"download_profile",
-                "args":{"name":"research","if_sha256":"pinned-sha"}
-            }));
+        when.method(POST).path("/mcp/call").json_body(json!({
+            "tool":"download_profile",
+            "args":{"name":"research","if_sha256":"pinned-sha"}
+        }));
         then.status(200).json_body(json!({
             "ok": false,
             "error": "profile_sha_mismatch",
@@ -110,7 +116,11 @@ fn profile_pull_respects_pin_mismatch_from_mcp() {
         .output()
         .expect("run mc profile pull");
 
-    assert!(!output.status.success(), "stdout={}", String::from_utf8_lossy(&output.stdout));
+    assert!(
+        !output.status.success(),
+        "stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("profile_sha_mismatch"), "stderr={stderr}");
     mock.assert();
@@ -130,12 +140,10 @@ fn profile_status_calls_get_and_pin_tools() {
     .expect("pin");
 
     let get_mock = server.mock(|when, then| {
-        when.method(POST)
-            .path("/mcp/call")
-            .json_body(json!({
-                "tool":"get_profile",
-                "args":{"name":"research"}
-            }));
+        when.method(POST).path("/mcp/call").json_body(json!({
+            "tool":"get_profile",
+            "args":{"name":"research"}
+        }));
         then.status(200).json_body(json!({
             "ok": true,
             "result": {"profile":{"name":"research","sha256":"remote-sha"}}
@@ -143,12 +151,10 @@ fn profile_status_calls_get_and_pin_tools() {
     });
 
     let pin_mock = server.mock(|when, then| {
-        when.method(POST)
-            .path("/mcp/call")
-            .json_body(json!({
-                "tool":"pin_profile_version",
-                "args":{"name":"research","sha256":"remote-sha"}
-            }));
+        when.method(POST).path("/mcp/call").json_body(json!({
+            "tool":"pin_profile_version",
+            "args":{"name":"research","sha256":"remote-sha"}
+        }));
         then.status(200).json_body(json!({
             "ok": true,
             "result": {
@@ -168,7 +174,11 @@ fn profile_status_calls_get_and_pin_tools() {
         .output()
         .expect("run mc profile status");
 
-    assert!(output.status.success(), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\"pin_check\""), "stdout={stdout}");
     assert!(stdout.contains("\"matches\": true"), "stdout={stdout}");
@@ -205,7 +215,11 @@ fn init_bootstraps_default_profile_when_empty() {
         .output()
         .expect("run mc init");
 
-    assert!(output.status.success(), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\"created\": true"), "stdout={stdout}");
     assert!(stdout.contains("\"name\": \"default\""), "stdout={stdout}");

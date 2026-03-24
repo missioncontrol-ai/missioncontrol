@@ -19,7 +19,7 @@ export MC_BASE_URL="https://your-mc.example.com"
 Or create a session token (recommended — see [Session tokens](#session-tokens)):
 ```bash
 export MC_BASE_URL="https://your-mc.example.com"
-MC_TOKEN="<your-token>" mc login   # saves ~/.missioncontrol/session.json
+MC_TOKEN="<your-token>" mc auth login   # saves ~/.missioncontrol/session.json
 # MC_TOKEN no longer needed in env after this
 ```
 
@@ -75,11 +75,11 @@ Use `--legacy-global-config` only when you explicitly need legacy global config 
 
 ## Session tokens
 
-`mc login` exchanges your current credentials for a server-issued session token
+`mc auth login` exchanges your current credentials for a server-issued session token
 (`mcs_*` prefix) stored at `~/.missioncontrol/session.json` (chmod 600).
 
 Session tokens are:
-- **Revocable** — `mc logout` revokes server-side instantly
+- **Revocable** — `mc auth logout` revokes server-side instantly
 - **Never written to agent config files** — injected into the agent process at exec time only
 - **Auto-loaded** — `mc` reads `session.json` automatically when `MC_TOKEN` is not set
 - **Expiring** — default 8h TTL, configurable with `--ttl-hours` (max 720h / 30 days)
@@ -88,16 +88,16 @@ Session tokens are:
 
 ```bash
 # Create a session (exchange any valid credential for an mcs_ token)
-mc login                      # default 8h TTL
-mc login --ttl-hours 24       # longer TTL
-mc login --print-token        # print token to stdout (for scripting)
+mc auth login                      # default 8h TTL
+mc auth login --ttl-hours 24       # longer TTL
+mc auth login --print-token        # print token to stdout (for scripting)
 
 # Check identity and session expiry
-mc whoami
+mc auth whoami
 
 # Revoke session server-side and clear local file
-mc logout
-mc logout --local-only        # clear local file only (no server call)
+mc auth logout
+mc auth logout --local-only        # clear local file only (no server call)
 ```
 
 ### Session token workflow
@@ -106,13 +106,13 @@ mc logout --local-only        # clear local file only (no server call)
 export MC_BASE_URL="https://your-mc.example.com"
 
 # One-time: bootstrap a session from a static token
-MC_TOKEN="<static-token>" mc login
+MC_TOKEN="<static-token>" mc auth login
 
 # From now on — no MC_TOKEN needed in env
 mc launch claude   # session loaded from ~/.missioncontrol/session.json
 mc launch codex    # token injected into agent process at exec, not written to config
-mc whoami          # verify identity
-mc logout          # revoke when done
+mc auth whoami          # verify identity
+mc auth logout          # revoke when done
 ```
 
 ### OIDC / short-lived JWTs
@@ -122,7 +122,7 @@ The recommended pattern is to exchange it for a session token immediately:
 
 ```bash
 # Exchange OIDC JWT for a longer-lived mc session token
-MC_TOKEN="$(get-oidc-token)" mc login --ttl-hours 8
+MC_TOKEN="$(get-oidc-token)" mc auth login --ttl-hours 8
 mc launch claude
 ```
 
@@ -244,7 +244,7 @@ For first-class Codex multi-session collaboration (without nested `codex exec`),
 Resolve and materialize effective skills for an active mission/kluster:
 
 ```bash
-mc sync status --mission-id <mission-id> --kluster-id <optional-kluster-id>
+mc data sync status --mission-id <mission-id> --kluster-id <optional-kluster-id>
 ```
 
 ---
@@ -266,4 +266,4 @@ If Codex shows `MCP startup incomplete (failed: missioncontrol)`:
 - Ensure `mc daemon` is running on `127.0.0.1:8765`.
 - Use shim defaults (`MC_MCP_MODE=shim`, `MC_STARTUP_PREFLIGHT=none`).
 - Ensure your MCP env vars are `MC_*` (not `MISSIONCONTROL_*`).
-- Run `mc whoami` to verify auth is working before launching an agent.
+- Run `mc auth whoami` to verify auth is working before launching an agent.

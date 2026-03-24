@@ -1,11 +1,7 @@
 use clap::Parser;
 use mc::{
-    auth::resolve_startup_base_url,
-    booster::AgentBooster,
-    client::MissionControlClient,
-    commands::McCommand,
-    config::McConfig,
-    secrets,
+    auth::resolve_startup_base_url, booster::AgentBooster, client::MissionControlClient,
+    commands::McCommand, config::McConfig, output::OutputMode, secrets,
 };
 use tracing::Level;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -59,9 +55,18 @@ pub struct CliOpts {
     #[arg(long, env = "MC_ALLOW_BOOSTER_SHORT_CIRCUIT", default_value_t = false)]
     allow_booster_short_circuit: bool,
 
-    /// Emit JSON output (machine-readable). Human-readable text is default.
-    #[arg(long, global = true, default_value_t = false)]
+    /// Emit JSON output (machine-readable). Compatibility alias for `--output json`.
+    #[arg(
+        long,
+        global = true,
+        default_value_t = false,
+        conflicts_with = "output"
+    )]
     json: bool,
+
+    /// Output format for command responses.
+    #[arg(long, global = true, env = "MC_OUTPUT", value_enum, default_value_t = OutputMode::Human)]
+    output: OutputMode,
 
     #[command(subcommand)]
     command: McCommand,
@@ -70,6 +75,7 @@ pub struct CliOpts {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(EnvFilter::from_default_env().add_directive(Level::INFO.into()))
         .init();
 
@@ -78,15 +84,20 @@ async fn main() -> anyhow::Result<()> {
     // Resolve base_url: flag/env → ~/.missioncontrol/config.json → hardcoded default.
     let base_url = resolve_startup_base_url(opts.base_url.clone(), DEFAULT_BASE_URL);
 
-    // Resolve the effective token: CLI/env takes precedence; fall back to a
-    // saved session token in ~/.missioncontrol/session.json.
-    let token = opts.token.clone().or_else(|| {
-        let sess = mc::config::load_session_token(&base_url);
-        if sess.is_some() {
-            tracing::debug!("using session token from ~/.missioncontrol/session.json");
-        }
-        sess
-    });
+    // Resolve the effective token.
+    //
+    // Prefer session tokens (`mcs_*`) from `~/.missioncontrol/session.json` over
+    // non-session `MC_TOKEN` values so `mc auth login` reliably takes effect even
+    // when a legacy static token is exported in the shell environment.
+    let saved_session_token = mc::config::load_session_token(&base_url);
+    if saved_session_token.is_some() {
+        tracing::debug!("session token available from ~/.missioncontrol/session.json");
+    }
+    let token = match opts.token.clone() {
+        Some(raw) if raw.starts_with(mc::auth::SESSION_TOKEN_PREFIX) => Some(raw),
+        Some(raw) => saved_session_token.or(Some(raw)),
+        None => saved_session_token,
+    };
     let token = if let Some(raw) = token {
         Some(
             secrets::resolve_maybe_secret_ref(&raw)
@@ -112,6 +123,12 @@ async fn main() -> anyhow::Result<()> {
     let client = MissionControlClient::new(&config)?;
     let booster = AgentBooster::load(&config)?;
 
+    let output_mode = if opts.json {
+        OutputMode::Json
+    } else {
+        opts.output
+    };
+
     let ctx = config.agent_context.clone();
-    mc::commands::run(opts.command, client, ctx, booster, config, opts.json).await
+    mc::commands::run(opts.command, client, ctx, booster, config, output_mode).await
 }

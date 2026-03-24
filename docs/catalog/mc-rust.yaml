@@ -11,6 +11,7 @@ summary: >
 
 source_of_truth:
   docs:
+    - docs/COMMAND-MAP.md
     - docs/MC-RUST.md
     - docs/REAL-TIME.md
     - README.md
@@ -26,7 +27,7 @@ entrypoints:
     - command: mc launch codex
       purpose: Launch Codex agent with mc integration
   verify:
-    - command: mc doctor
+    - command: mc system doctor
       purpose: Health check (backend connectivity, token, daemon)
 
 interfaces:
@@ -36,20 +37,30 @@ interfaces:
     - MC_AGENT_ID        # Agent identity
     - MC_SCHEMA_PACK_FILE  # Optional schema pack override
   commands:
-    - mc doctor
+    - mc auth login
+    - mc auth whoami
+    - mc auth logout
     - mc daemon
     - mc launch <agent>
-    - mc tools list
-    - mc tools call <tool> <args>
+    - mc data tools list
+    - mc data tools call <tool> <args>
+    - mc data sync status
+    - mc data explorer tree
+    - mc admin policy active
+    - mc admin governance
+    - mc system doctor
+    - mc system update self-update
+    - mc system compat matrix run
+    - mc system drift triage
+    - mc agent remote sessions list
+    - mc agent evolve status --mission <id>
     - mc profile list
     - mc profile use <name>
     - mc profile show <name>
     - mc profile create <name>
-    - mc profile push <name>
+    - mc profile publish <name>
     - mc profile pull <name>
     - mc profile delete <name>
-    - mc profile setup-shims
-    - mc evolve
 
 implemented:
   - MCP tool dispatch over HTTP
@@ -57,7 +68,7 @@ implemented:
   - agent launch with proper startup layering
   - profile management (list/use/push/pull/delete)
   - atomic symlink swap for profile activation (~/.missioncontrol/profiles/active)
-  - mc doctor health diagnostics
+  - mc system doctor health diagnostics
   - env file loading on mc launch
 
 gaps:
@@ -72,6 +83,7 @@ dependencies:
   - auth
 
 read_next:
+  - docs/COMMAND-MAP.md
   - docs/MC-RUST.md
   - docs/REAL-TIME.md
   - docs/DEPLOYMENT.md

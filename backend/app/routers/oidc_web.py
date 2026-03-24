@@ -322,7 +322,7 @@ _CLI_SUCCESS_HTML = """\
 <body>
   <div class="card">
     <h1>&#10003; Authentication Complete</h1>
-    <p>Your browser login succeeded. If <code>mc login</code> hasn't continued automatically,
+    <p>Your browser login succeeded. If <code>mc auth login</code> hasn't continued automatically,
        copy the code below and paste it into your terminal.</p>
     <div class="code" onclick="navigator.clipboard.writeText(this.innerText)"
          title="Click to copy">{grant_id}</div>
@@ -352,6 +352,7 @@ class OidcGrantExchangeRequest(BaseModel):
 class OidcGrantExchangeResponse(BaseModel):
     token: str
     subject: str
+    email: str | None = None
     expires_at: datetime
     session_id: int
     ttl_hours: int
@@ -372,8 +373,11 @@ def exchange_oidc_grant(payload: OidcGrantExchangeRequest, request: Request):
         db.add(grant)
         db.commit()
 
+        session_subject = (grant.email or "").strip() or grant.subject
         session = issue_session_token(
-            subject=grant.subject,
+            subject=session_subject,
             user_agent=request.headers.get("user-agent", ""),
         )
-        return OidcGrantExchangeResponse(**session.model_dump())
+        payload = session.model_dump()
+        payload["email"] = (grant.email or "").strip() or None
+        return OidcGrantExchangeResponse(**payload)

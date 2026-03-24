@@ -1,8 +1,8 @@
 """Evolve router — self-improvement loop for MissionControl.
 
-mc evolve seed --spec <spec.json>  → seeds an evolve mission + task backlog
-mc evolve run  --mission <id>      → launches an agent against the evolve mission
-mc evolve status --mission <id>    → returns progress
+mc agent evolve seed --spec <spec.json>  → seeds an evolve mission + task backlog
+mc agent evolve run  --mission <id>      → launches an agent against the evolve mission
+mc agent evolve status --mission <id>    → returns progress
 """
 from __future__ import annotations
 

@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use crate::client::MissionControlClient;
 
-/// `mc evolve` — self-improvement loop: run agents against MC's own backlog.
+/// `mc agent evolve` — self-improvement loop: run agents against MC's own backlog.
 #[derive(Args, Debug)]
 pub struct EvolveArgs {
     #[command(subcommand)]

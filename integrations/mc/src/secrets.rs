@@ -39,7 +39,14 @@ fn resolve_keychain(parsed: &url::Url) -> Result<String> {
     #[cfg(target_os = "macos")]
     {
         let output = Command::new("security")
-            .args(["find-generic-password", "-s", &service, "-a", &account, "-w"])
+            .args([
+                "find-generic-password",
+                "-s",
+                &service,
+                "-a",
+                &account,
+                "-w",
+            ])
             .output()
             .context("failed to execute security command")?;
         if !output.status.success() {
@@ -82,7 +89,8 @@ fn resolve_pass(parsed: &url::Url) -> Result<String> {
 }
 
 async fn resolve_vault(parsed: &url::Url) -> Result<String> {
-    let vault_addr = std::env::var("VAULT_ADDR").context("VAULT_ADDR is required for vault refs")?;
+    let vault_addr =
+        std::env::var("VAULT_ADDR").context("VAULT_ADDR is required for vault refs")?;
     let vault_token =
         std::env::var("VAULT_TOKEN").context("VAULT_TOKEN is required for vault refs")?;
     let path = parsed.path().trim_start_matches('/');

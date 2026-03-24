@@ -3,9 +3,12 @@ use crate::{
     auth,
     booster::AgentBooster,
     client::MissionControlClient,
+    compat,
     config::McConfig,
     daemon::{self, DaemonArgs},
-    evolve, governance, launch, maintenance, mcp_server, mcp_tools, ops, remote,
+    drift, evolve, governance, launch, maintenance, mcp_server, mcp_tools, ops,
+    output::{self, OutputMode},
+    remote,
     schema_pack::SchemaPack,
     update,
 };
@@ -22,7 +25,56 @@ use url::form_urlencoded;
 /// Top-level CLI entrypoints for the mc binary.
 #[derive(Subcommand, Debug)]
 pub enum McCommand {
-    /// Inspect and invoke Mission Control Python tools.
+    /// Authentication and identity helpers.
+    #[command(subcommand)]
+    Auth(AuthCommand),
+    /// Governance and admin workflows.
+    #[command(subcommand)]
+    Admin(AdminCommand),
+    /// Data/catalog/read workflows (tools, sync, explorer).
+    #[command(subcommand)]
+    Data(DataCommand),
+    /// Platform diagnostics and release-control workflows.
+    #[command(subcommand)]
+    System(SystemCommand),
+    /// Agent control workflows (remote, evolve, swarm/subagent workflows).
+    #[command(subcommand)]
+    Agent(AgentCommand),
+    /// Approval workflow commands (requests, decisions).
+    #[command(subcommand)]
+    Approvals(ApprovalCommand),
+    /// Workspace lifecycle helpers (load/heartbeat/artifact/commit/release).
+    #[command(subcommand)]
+    Workspace(WorkspaceCommand),
+    /// Mission operations (lifecycle orchestration and execution workflows).
+    #[command(subcommand)]
+    Ops(ops::OpsCommand),
+    /// Run the async background daemon (matrix + MQTT).
+    Daemon(DaemonArgs),
+    /// Launch an agent with a fully wired MissionControl harness.
+    Launch(launch::LaunchArgs),
+    /// Initialize MC profile state for first-time usage.
+    Init(InitArgs),
+    /// Start an MCP server (stdio JSON-RPC 2.0) for LLM runtime connections.
+    Serve(mcp_server::ServeMcpArgs),
+    /// Manage MissionControl user profiles.
+    #[command(subcommand)]
+    Profile(ProfileCommand),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AuthCommand {
+    /// Authenticate and create a session token stored at ~/.missioncontrol/session.json.
+    Login(auth::LoginArgs),
+    /// Revoke the current session token and clear local credentials.
+    Logout(auth::LogoutArgs),
+    /// Show the current authenticated identity.
+    Whoami(auth::WhoamiArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DataCommand {
+    /// Inspect and invoke MissionControl MCP tools.
     #[command(subcommand)]
     Tools(ToolsCommand),
     /// Manage local skill sync state for Klusters and missions.
@@ -31,49 +83,34 @@ pub enum McCommand {
     /// Explore missions, klusters, and tasks via the explorer endpoints.
     #[command(subcommand)]
     Explorer(ExplorerCommand),
-    /// Governance helpers for policy, events, and audit.
-    #[command(subcommand)]
-    Admin(AdminCommand),
-    /// Approval workflow commands (requests, decisions).
-    #[command(subcommand)]
-    Approvals(ApprovalCommand),
-    /// Workspace lifecycle helpers (load/heartbeat/artifact/commit/release).
-    #[command(subcommand)]
-    Workspace(WorkspaceCommand),
-    /// AI-native mission operations such as mission lifecycle orchestration.
-    #[command(subcommand)]
-    Ops(ops::OpsCommand),
-    /// Governance automation helpers (roles, policies, events).
-    #[command(subcommand)]
-    Governance(governance::GovernanceCommand),
-    /// Maintenance utilities (doctor, backups).
-    #[command(subcommand)]
-    Maintenance(maintenance::MaintenanceCommand),
-    /// Remote agent control verbs.
-    #[command(subcommand)]
-    Remote(remote::RemoteCommand),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SystemCommand {
+    /// Diagnostics + auto-fix helpers.
+    Doctor(maintenance::DoctorArgs),
+    /// Trigger local backups (postgres, rustfs, or both).
+    Backup(maintenance::BackupArgs),
+    /// Cleanup local profile/session artifacts with retention limits.
+    ProfileGc(maintenance::ProfileGcArgs),
     /// Self-update helper for the mc binary.
     #[command(subcommand)]
     Update(update::UpdateCommand),
-    /// Run the async background daemon (matrix + MQTT).
-    Daemon(DaemonArgs),
-    /// Launch an agent with a fully wired MissionControl harness.
-    Launch(launch::LaunchArgs),
-    /// Initialize MC profile state for first-time usage.
-    Init(InitArgs),
-    /// Self-improvement loop — run agents against MC's own backlog to evolve the codebase.
-    Evolve(evolve::EvolveArgs),
-    /// Authenticate and create a session token stored at ~/.missioncontrol/session.json.
-    Login(auth::LoginArgs),
-    /// Revoke the current session token and clear local credentials.
-    Logout(auth::LogoutArgs),
-    /// Show the current authenticated identity.
-    Whoami(auth::WhoamiArgs),
-    /// Start an MCP server (stdio JSON-RPC 2.0) for LLM runtime connections.
-    Serve(mcp_server::ServeMcpArgs),
-    /// Manage MissionControl user profiles.
+    /// Compatibility matrix commands and reports for provider/version drift control.
     #[command(subcommand)]
-    Profile(ProfileCommand),
+    Compat(compat::CompatCommand),
+    /// Drift ingestion + policy decision helpers for staged release gates.
+    #[command(subcommand)]
+    Drift(drift::DriftCommand),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AgentCommand {
+    /// Remote agent control verbs.
+    #[command(subcommand)]
+    Remote(remote::RemoteCommand),
+    /// Self-improvement loop for MissionControl itself (agent-driven backlog/code evolution).
+    Evolve(evolve::EvolveArgs),
 }
 
 #[derive(Args, Debug)]
@@ -320,6 +357,16 @@ impl ExplorerNodeType {
 
 #[derive(Subcommand, Debug)]
 pub enum AdminCommand {
+    /// Governance policy summaries and event feeds.
+    #[command(subcommand)]
+    Policy(AdminPolicyCommand),
+    /// Governance automation helpers (roles, policies, events).
+    #[command(subcommand)]
+    Governance(governance::GovernanceCommand),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AdminPolicyCommand {
     /// Show the currently active governance policy.
     Active,
     /// List previous policy versions (limit defaults to 50).
@@ -388,31 +435,74 @@ pub async fn run(
     ctx: AgentContext,
     booster: AgentBooster,
     config: McConfig,
-    json_output: bool,
+    output_mode: OutputMode,
 ) -> Result<()> {
     match command {
-        McCommand::Tools(cmd) => handle_tools(cmd, client, &booster, &config.schema_pack).await,
-        McCommand::Sync(cmd) => handle_sync(cmd, client).await,
-        McCommand::Explorer(cmd) => handle_explorer(cmd, client).await,
+        McCommand::Auth(cmd) => handle_auth(cmd, client, &config).await,
+        McCommand::Data(cmd) => handle_data(cmd, client, &booster, &config.schema_pack, output_mode).await,
         McCommand::Admin(cmd) => handle_admin(cmd, client).await,
+        McCommand::System(cmd) => handle_system(cmd, client, &config).await,
+        McCommand::Agent(cmd) => handle_agent(cmd, client, &booster, &config.schema_pack).await,
         McCommand::Workspace(cmd) => {
-            handle_workspace(cmd, client, &booster, &config.schema_pack).await
+            handle_workspace(cmd, client, &booster, &config.schema_pack, output_mode).await
         }
-        McCommand::Approvals(cmd) => handle_approvals(cmd, client).await,
+        McCommand::Approvals(cmd) => handle_approvals(cmd, client, output_mode).await,
         McCommand::Ops(cmd) => ops::run(cmd, &client, &booster, &config.schema_pack).await,
-        McCommand::Governance(cmd) => governance::run(cmd, &client).await,
-        McCommand::Maintenance(cmd) => maintenance::run(cmd, &client, &config).await,
-        McCommand::Remote(cmd) => remote::run(cmd, &client).await,
-        McCommand::Update(cmd) => update::run(cmd, &config).await,
         McCommand::Daemon(args) => daemon::run(&args, &client, ctx).await,
         McCommand::Launch(args) => launch::run(args, &client, &config).await,
-        McCommand::Init(args) => handle_init(args, client, &config, json_output).await,
-        McCommand::Evolve(args) => evolve::run(args, &client).await,
-        McCommand::Login(args) => auth::login(args, &client, config.base_url.as_str()).await,
-        McCommand::Logout(args) => auth::logout(args, &client).await,
-        McCommand::Whoami(_) => auth::whoami(&client).await,
+        McCommand::Init(args) => handle_init(args, client, &config, output_mode).await,
         McCommand::Serve(args) => mcp_server::run(&args, &client).await,
-        McCommand::Profile(cmd) => handle_profile(cmd, client, json_output).await,
+        McCommand::Profile(cmd) => handle_profile(cmd, client, output_mode).await,
+    }
+}
+
+async fn handle_auth(command: AuthCommand, client: MissionControlClient, config: &McConfig) -> Result<()> {
+    match command {
+        AuthCommand::Login(args) => auth::login(args, &client, config.base_url.as_str()).await,
+        AuthCommand::Logout(args) => auth::logout(args, &client).await,
+        AuthCommand::Whoami(_) => auth::whoami(&client).await,
+    }
+}
+
+async fn handle_data(
+    command: DataCommand,
+    client: MissionControlClient,
+    booster: &AgentBooster,
+    schema_pack: &SchemaPack,
+    output_mode: OutputMode,
+) -> Result<()> {
+    match command {
+        DataCommand::Tools(cmd) => handle_tools(cmd, client, booster, schema_pack, output_mode).await,
+        DataCommand::Sync(cmd) => handle_sync(cmd, client).await,
+        DataCommand::Explorer(cmd) => handle_explorer(cmd, client).await,
+    }
+}
+
+async fn handle_system(
+    command: SystemCommand,
+    client: MissionControlClient,
+    config: &McConfig,
+) -> Result<()> {
+    match command {
+        SystemCommand::Doctor(args) => maintenance::run_doctor_command(&client, config, &args).await,
+        SystemCommand::Backup(args) => maintenance::run_backup_command(&client, args).await,
+        SystemCommand::ProfileGc(args) => maintenance::run_profile_gc_command(config, args),
+        SystemCommand::Update(cmd) => update::run(cmd, config).await,
+        SystemCommand::Compat(cmd) => compat::run(cmd).await,
+        SystemCommand::Drift(cmd) => drift::run(cmd).await,
+    }
+}
+
+async fn handle_agent(
+    command: AgentCommand,
+    client: MissionControlClient,
+    booster: &AgentBooster,
+    schema_pack: &SchemaPack,
+) -> Result<()> {
+    let _ = (booster, schema_pack);
+    match command {
+        AgentCommand::Remote(cmd) => remote::run(cmd, &client).await,
+        AgentCommand::Evolve(args) => evolve::run(args, &client).await,
     }
 }
 
@@ -420,8 +510,9 @@ async fn handle_init(
     args: InitArgs,
     client: MissionControlClient,
     config: &McConfig,
-    json_output: bool,
+    output_mode: OutputMode,
 ) -> Result<()> {
+    let json_output = output_mode.is_machine();
     let profile_name = args.profile.trim();
     if profile_name.is_empty() {
         anyhow::bail!("--profile cannot be empty");
@@ -430,8 +521,11 @@ async fn handle_init(
 
     let login_client_holder: Option<MissionControlClient> = if config.token.is_none() {
         if auth::load_saved_session(config.base_url.as_str()).is_none() {
-            eprintln!("mc: no valid session found for {}", config.base_url.as_str());
-            eprintln!("mc: running `mc login` to authenticate...");
+            eprintln!(
+                "mc: no valid session found for {}",
+                config.base_url.as_str()
+            );
+            eprintln!("mc: running `mc auth login` to authenticate...");
             if let Err(err) = auth::login(
                 auth::LoginArgs {
                     ttl_hours: 8,
@@ -445,8 +539,10 @@ async fn handle_init(
             {
                 return bootstrap_local_profile(
                     profile_name,
-                    Some(format!("login failed; continuing in local-only mode: {err}")),
-                    json_output,
+                    Some(format!(
+                        "login failed; continuing in local-only mode: {err}"
+                    )),
+                    output_mode,
                 );
             }
         }
@@ -462,7 +558,9 @@ async fn handle_init(
     };
     let effective_client: &MissionControlClient = login_client_holder.as_ref().unwrap_or(&client);
 
-    let listed = match mcp_profile_call(effective_client, "list_profiles", json!({ "limit": 1 })).await {
+    let listed = match mcp_profile_call(effective_client, "list_profiles", json!({ "limit": 1 }))
+        .await
+    {
         Ok(v) => v,
         Err(err) => {
             return bootstrap_local_profile(
@@ -470,7 +568,7 @@ async fn handle_init(
                 Some(format!(
                     "unable to reach Mission Control profile service; continuing in local-only mode: {err}"
                 )),
-                json_output,
+                output_mode,
             );
         }
     };
@@ -539,7 +637,8 @@ async fn handle_init(
             "tarball_b64": tarball_b64
         }),
     )
-    .await {
+    .await
+    {
         Ok(v) => v,
         Err(err) => {
             return bootstrap_local_profile(
@@ -547,7 +646,7 @@ async fn handle_init(
                 Some(format!(
                     "failed to publish profile to Mission Control; continuing in local-only mode: {err}"
                 )),
-                json_output,
+                output_mode,
             );
         }
     };
@@ -579,11 +678,16 @@ async fn handle_tools(
     client: MissionControlClient,
     booster: &AgentBooster,
     schema_pack: &SchemaPack,
+    output_mode: OutputMode,
 ) -> Result<()> {
     match command {
         ToolsCommand::List => {
             let response = client.get_json("/mcp/tools").await?;
-            print_json(&response);
+            if output_mode.is_machine() {
+                output::print_value(output_mode, &response);
+            } else {
+                print_tools_human(&response);
+            }
         }
         ToolsCommand::Call(args) => {
             let payload = serde_json::from_str::<Value>(&args.payload)
@@ -603,10 +707,67 @@ async fn handle_tools(
 }
 
 fn print_json(value: &Value) {
+    output::print_value(OutputMode::Json, value);
+}
+
+fn ui_section(title: &str) {
+    println!();
     println!(
-        "{}",
-        serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+        "{}{}{}{}",
+        crate::ui::BOLD,
+        crate::ui::ORANGE,
+        title,
+        crate::ui::RESET
     );
+    println!("{}{}{}", crate::ui::GRAY, "─".repeat(56), crate::ui::RESET);
+}
+
+fn ui_row(label: &str, value: &str, value_color: &str) {
+    println!(
+        "  {}{: <16}{} {}{}{}",
+        crate::ui::DIM,
+        format!("{}:", label),
+        crate::ui::RESET,
+        value_color,
+        value,
+        crate::ui::RESET
+    );
+}
+
+fn print_tools_human(value: &Value) {
+    let items: Vec<Value> = match value {
+        Value::Array(arr) => arr.clone(),
+        Value::Object(obj) => obj
+            .get("tools")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    ui_section("MCP Tools");
+    ui_row("Count", &items.len().to_string(), crate::ui::CYAN);
+    if items.is_empty() {
+        println!(
+            "  {}no tools returned{}",
+            crate::ui::YELLOW,
+            crate::ui::RESET
+        );
+        return;
+    }
+    for tool in items {
+        let name = tool
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let description = tool
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        println!("  {}•{} {}", crate::ui::CYAN, crate::ui::RESET, name);
+        if !description.is_empty() {
+            println!("    {}{}{}", crate::ui::DIM, description, crate::ui::RESET);
+        }
+    }
 }
 
 fn print_profiles_human(value: &Value) {
@@ -621,9 +782,18 @@ fn print_profiles_human(value: &Value) {
     for p in items {
         let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
         let sha = p.get("sha256").and_then(|v| v.as_str()).unwrap_or("-");
-        let is_default = p.get("is_default").and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_default = p
+            .get("is_default")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if is_default {
-            println!("{}*{} {}  {}", crate::ui::GREEN, crate::ui::RESET, name, sha);
+            println!(
+                "{}*{} {}  {}",
+                crate::ui::GREEN,
+                crate::ui::RESET,
+                name,
+                sha
+            );
         } else {
             println!("  {}  {}", name, sha);
         }
@@ -631,16 +801,38 @@ fn print_profiles_human(value: &Value) {
 }
 
 fn print_profile_human(profile: &Value) {
-    let name = profile.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-    let sha = profile.get("sha256").and_then(|v| v.as_str()).unwrap_or("-");
-    let is_default = profile.get("is_default").and_then(|v| v.as_bool()).unwrap_or(false);
+    let name = profile
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let sha = profile
+        .get("sha256")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let is_default = profile
+        .get("is_default")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let default_marker = if is_default { " (default)" } else { "" };
-    println!("{}{}{}{}  {}", crate::ui::CYAN, name, crate::ui::RESET, default_marker, sha);
+    println!(
+        "{}{}{}{}  {}",
+        crate::ui::CYAN,
+        name,
+        crate::ui::RESET,
+        default_marker,
+        sha
+    );
 }
 
 fn print_profile_status_human(value: &Value) {
-    let name = value.get("profile").and_then(|v| v.as_str()).unwrap_or("unknown");
-    let remote_sha = value.get("remote_sha256").and_then(|v| v.as_str()).unwrap_or("-");
+    let name = value
+        .get("profile")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let remote_sha = value
+        .get("remote_sha256")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
     let local_pin = value
         .get("local_pin")
         .and_then(|v| v.get("pinned_sha256"))
@@ -707,7 +899,12 @@ async fn handle_sync(command: SyncCommand, client: MissionControlClient) -> Resu
     Ok(())
 }
 
-async fn handle_profile(command: ProfileCommand, client: MissionControlClient, json_output: bool) -> Result<()> {
+async fn handle_profile(
+    command: ProfileCommand,
+    client: MissionControlClient,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let json_output = output_mode.is_machine();
     match command {
         ProfileCommand::Create {
             name,
@@ -731,7 +928,10 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
             if json_output {
                 print_json(&profile);
             } else {
-                let shown = profile.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let shown = profile
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
                 println!(
                     "{}{}{} created profile: {}{}{}",
                     crate::ui::GREEN,
@@ -744,8 +944,12 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
             }
         }
         ProfileCommand::List { limit } => {
-            let response = mcp_profile_call(&client, "list_profiles", json!({ "limit": limit })).await?;
-            let profiles = response.get("profiles").cloned().unwrap_or_else(|| json!([]));
+            let response =
+                mcp_profile_call(&client, "list_profiles", json!({ "limit": limit })).await?;
+            let profiles = response
+                .get("profiles")
+                .cloned()
+                .unwrap_or_else(|| json!([]));
             if json_output {
                 print_json(&profiles);
             } else {
@@ -753,7 +957,8 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
             }
         }
         ProfileCommand::Show { name } => {
-            let response = mcp_profile_call(&client, "get_profile", json!({ "name": name })).await?;
+            let response =
+                mcp_profile_call(&client, "get_profile", json!({ "name": name })).await?;
             let profile = response.get("profile").cloned().unwrap_or(Value::Null);
             if json_output {
                 print_json(&profile);
@@ -762,12 +967,16 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
             }
         }
         ProfileCommand::Activate { name } => {
-            let response = mcp_profile_call(&client, "activate_profile", json!({ "name": name })).await?;
+            let response =
+                mcp_profile_call(&client, "activate_profile", json!({ "name": name })).await?;
             let profile = response.get("profile").cloned().unwrap_or(Value::Null);
             if json_output {
                 print_json(&profile);
             } else {
-                let shown = profile.get("name").and_then(|v| v.as_str()).unwrap_or(&name);
+                let shown = profile
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&name);
                 println!(
                     "{}{}{} default profile: {}{}{}",
                     crate::ui::GREEN,
@@ -780,7 +989,8 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
             }
         }
         ProfileCommand::Download { name, out } => {
-            let response = mcp_profile_call(&client, "download_profile", json!({ "name": name })).await?;
+            let response =
+                mcp_profile_call(&client, "download_profile", json!({ "name": name })).await?;
             let tarball = response
                 .get("tarball_b64")
                 .and_then(|v| v.as_str())
@@ -791,7 +1001,8 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
             let out_path = out.unwrap_or_else(|| PathBuf::from(format!("{}.profile.tar", name)));
             std::fs::write(&out_path, bytes)
                 .with_context(|| format!("failed to write {}", out_path.display()))?;
-            let payload = json!({"ok": true, "profile": name, "out": out_path.display().to_string()});
+            let payload =
+                json!({"ok": true, "profile": name, "out": out_path.display().to_string()});
             if json_output {
                 print_json(&payload);
             } else {
@@ -831,7 +1042,11 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
             } else {
                 json!([])
             };
-            let manifest = if manifest.is_array() { manifest } else { json!([manifest]) };
+            let manifest = if manifest.is_array() {
+                manifest
+            } else {
+                json!([manifest])
+            };
             let response = mcp_profile_call(
                 &client,
                 "publish_profile",
@@ -848,7 +1063,10 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
             if json_output {
                 print_json(&profile);
             } else {
-                let shown = profile.get("name").and_then(|v| v.as_str()).unwrap_or(&name);
+                let shown = profile
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&name);
                 println!(
                     "{}{}{} published profile: {}{}{}",
                     crate::ui::GREEN,
@@ -968,9 +1186,13 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
             confirm_delete,
         } => {
             if !confirm_delete {
-                anyhow::bail!("refusing to delete profile '{}'; rerun with --confirm-delete", name);
+                anyhow::bail!(
+                    "refusing to delete profile '{}'; rerun with --confirm-delete",
+                    name
+                );
             }
-            let response = mcp_profile_call(&client, "delete_profile", json!({ "name": name })).await?;
+            let response =
+                mcp_profile_call(&client, "delete_profile", json!({ "name": name })).await?;
             if json_output {
                 print_json(&response);
             } else {
@@ -996,12 +1218,14 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
             let local_pin_path = profile_root.join("pin.json");
             let local_state_path = profile_root.join("state.json");
             let local_pin = if local_pin_path.exists() {
-                serde_json::from_str::<Value>(&fs::read_to_string(&local_pin_path)?).unwrap_or(Value::Null)
+                serde_json::from_str::<Value>(&fs::read_to_string(&local_pin_path)?)
+                    .unwrap_or(Value::Null)
             } else {
                 Value::Null
             };
             let local_state = if local_state_path.exists() {
-                serde_json::from_str::<Value>(&fs::read_to_string(&local_state_path)?).unwrap_or(Value::Null)
+                serde_json::from_str::<Value>(&fs::read_to_string(&local_state_path)?)
+                    .unwrap_or(Value::Null)
             } else {
                 Value::Null
             };
@@ -1105,7 +1329,9 @@ async fn handle_profile(command: ProfileCommand, client: MissionControlClient, j
                 if notified > 0 {
                     println!(
                         "{}  {} session(s) will be prompted to restart on next message{}",
-                        crate::ui::YELLOW, notified, crate::ui::RESET
+                        crate::ui::YELLOW,
+                        notified,
+                        crate::ui::RESET
                     );
                 }
             }
@@ -1118,7 +1344,10 @@ async fn mcp_profile_call(client: &MissionControlClient, tool: &str, args: Value
     let response = client
         .post_json("/mcp/call", &json!({ "tool": tool, "args": args }))
         .await?;
-    let ok = response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let ok = response
+        .get("ok")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if !ok {
         let err = response
             .get("error")
@@ -1192,7 +1421,9 @@ fn validate_init_base_url(config: &McConfig) -> Result<()> {
 }
 
 fn write_synced_profile_state(profile_name: &str) -> Result<()> {
-    let profile_root = crate::config::mc_home_dir().join("profiles").join(profile_name);
+    let profile_root = crate::config::mc_home_dir()
+        .join("profiles")
+        .join(profile_name);
     fs::create_dir_all(&profile_root)?;
     let payload = json!({
         "profile": profile_name,
@@ -1207,8 +1438,15 @@ fn write_synced_profile_state(profile_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn bootstrap_local_profile(profile_name: &str, warning: Option<String>, json_output: bool) -> Result<()> {
-    let profile_root = crate::config::mc_home_dir().join("profiles").join(profile_name);
+fn bootstrap_local_profile(
+    profile_name: &str,
+    warning: Option<String>,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let json_output = output_mode.is_machine();
+    let profile_root = crate::config::mc_home_dir()
+        .join("profiles")
+        .join(profile_name);
     fs::create_dir_all(&profile_root)?;
     let payload = json!({
         "profile": profile_name,
@@ -1255,7 +1493,9 @@ async fn handle_workspace(
     client: MissionControlClient,
     booster: &AgentBooster,
     schema_pack: &SchemaPack,
+    output_mode: OutputMode,
 ) -> Result<()> {
+    let json_output = output_mode.is_machine();
     match command {
         WorkspaceCommand::Load {
             kluster_id,
@@ -1281,7 +1521,11 @@ async fn handle_workspace(
                 args,
             )
             .await?;
-            print_json(&response);
+            if json_output {
+                print_json(&response);
+            } else {
+                print_workspace_human("Workspace Lease", &response);
+            }
         }
         WorkspaceCommand::Heartbeat { lease_id } => {
             let args = json!({"lease_id": lease_id});
@@ -1293,7 +1537,11 @@ async fn handle_workspace(
                 args,
             )
             .await?;
-            print_json(&response);
+            if json_output {
+                print_json(&response);
+            } else {
+                print_workspace_human("Lease Heartbeat", &response);
+            }
         }
         WorkspaceCommand::FetchArtifact {
             lease_id,
@@ -1315,7 +1563,11 @@ async fn handle_workspace(
                 args,
             )
             .await?;
-            print_json(&response);
+            if json_output {
+                print_json(&response);
+            } else {
+                print_workspace_human("Artifact Fetch", &response);
+            }
         }
         WorkspaceCommand::Commit {
             lease_id,
@@ -1339,7 +1591,11 @@ async fn handle_workspace(
                 args,
             )
             .await?;
-            print_json(&response);
+            if json_output {
+                print_json(&response);
+            } else {
+                print_workspace_human("Workspace Commit", &response);
+            }
         }
         WorkspaceCommand::Release { lease_id, reason } => {
             let mut args = json!({"lease_id": lease_id});
@@ -1354,10 +1610,38 @@ async fn handle_workspace(
                 args,
             )
             .await?;
-            print_json(&response);
+            if json_output {
+                print_json(&response);
+            } else {
+                print_workspace_human("Lease Release", &response);
+            }
         }
     }
     Ok(())
+}
+
+fn print_workspace_human(title: &str, value: &Value) {
+    ui_section(title);
+    if let Some(lease) = value.get("lease_id").and_then(|v| v.as_str()) {
+        ui_row("Lease", lease, crate::ui::CYAN);
+    }
+    if let Some(status) = value.get("status").and_then(|v| v.as_str()) {
+        let color = match status {
+            "active" | "ok" | "success" => crate::ui::GREEN,
+            "released" => crate::ui::YELLOW,
+            _ => crate::ui::CYAN,
+        };
+        ui_row("Status", status, color);
+    }
+    if let Some(url) = value.get("download_url").and_then(|v| v.as_str()) {
+        ui_row("Download URL", url, crate::ui::CYAN);
+    }
+    println!(
+        "  {}Result:{} {}",
+        crate::ui::DIM,
+        crate::ui::RESET,
+        serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+    );
 }
 
 async fn handle_explorer(command: ExplorerCommand, client: MissionControlClient) -> Result<()> {
@@ -1398,11 +1682,11 @@ async fn handle_explorer(command: ExplorerCommand, client: MissionControlClient)
 
 async fn handle_admin(command: AdminCommand, client: MissionControlClient) -> Result<()> {
     match command {
-        AdminCommand::Active => {
+        AdminCommand::Policy(AdminPolicyCommand::Active) => {
             let response = client.get_json("/governance/policy/active").await?;
             print_json(&response);
         }
-        AdminCommand::Versions { limit } => {
+        AdminCommand::Policy(AdminPolicyCommand::Versions { limit }) => {
             let mut serializer = form_urlencoded::Serializer::new(String::new());
             if let Some(limit) = limit {
                 serializer.append_pair("limit", &limit.to_string());
@@ -1411,7 +1695,7 @@ async fn handle_admin(command: AdminCommand, client: MissionControlClient) -> Re
             let response = client.get_json(&path).await?;
             print_json(&response);
         }
-        AdminCommand::Events { limit } => {
+        AdminCommand::Policy(AdminPolicyCommand::Events { limit }) => {
             let mut serializer = form_urlencoded::Serializer::new(String::new());
             if let Some(limit) = limit {
                 serializer.append_pair("limit", &limit.to_string());
@@ -1420,11 +1704,17 @@ async fn handle_admin(command: AdminCommand, client: MissionControlClient) -> Re
             let response = client.get_json(&path).await?;
             print_json(&response);
         }
+        AdminCommand::Governance(cmd) => governance::run(cmd, &client).await?,
     }
     Ok(())
 }
 
-async fn handle_approvals(command: ApprovalCommand, client: MissionControlClient) -> Result<()> {
+async fn handle_approvals(
+    command: ApprovalCommand,
+    client: MissionControlClient,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let json_output = output_mode.is_machine();
     match command {
         ApprovalCommand::Create {
             mission_id,
@@ -1460,7 +1750,11 @@ async fn handle_approvals(command: ApprovalCommand, client: MissionControlClient
                 body["expires_in_seconds"] = json!(expires);
             }
             let response = client.post_json("/approvals/requests", &body).await?;
-            print_json(&response);
+            if json_output {
+                print_json(&response);
+            } else {
+                print_approval_single("Approval Request Created", &response);
+            }
         }
         ApprovalCommand::List {
             mission_id,
@@ -1477,7 +1771,11 @@ async fn handle_approvals(command: ApprovalCommand, client: MissionControlClient
             }
             let path = build_path_with_query("/approvals", serializer.finish());
             let response = client.get_json(&path).await?;
-            print_json(&response);
+            if json_output {
+                print_json(&response);
+            } else {
+                print_approvals_list_human(&response);
+            }
         }
         ApprovalCommand::Approve {
             approval_id,
@@ -1493,7 +1791,11 @@ async fn handle_approvals(command: ApprovalCommand, client: MissionControlClient
             }
             let path = format!("/approvals/{}/approve", approval_id);
             let response = client.post_json(&path, &body).await?;
-            print_json(&response);
+            if json_output {
+                print_json(&response);
+            } else {
+                print_approval_single("Approval Granted", &response);
+            }
         }
         ApprovalCommand::Reject { approval_id, note } => {
             let mut body = json!({});
@@ -1502,10 +1804,81 @@ async fn handle_approvals(command: ApprovalCommand, client: MissionControlClient
             }
             let path = format!("/approvals/{}/reject", approval_id);
             let response = client.post_json(&path, &body).await?;
-            print_json(&response);
+            if json_output {
+                print_json(&response);
+            } else {
+                print_approval_single("Approval Rejected", &response);
+            }
         }
     }
     Ok(())
+}
+
+fn print_approvals_list_human(value: &Value) {
+    let items: Vec<Value> = match value {
+        Value::Array(arr) => arr.clone(),
+        Value::Object(obj) => obj
+            .get("items")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .or_else(|| obj.get("approvals").and_then(|v| v.as_array()).cloned())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    ui_section("Approvals");
+    ui_row("Count", &items.len().to_string(), crate::ui::CYAN);
+    for item in items {
+        let id = item.get("id").and_then(|v| v.as_i64()).unwrap_or_default();
+        let mission_id = item
+            .get("mission_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
+        let action = item.get("action").and_then(|v| v.as_str()).unwrap_or("-");
+        let status = item.get("status").and_then(|v| v.as_str()).unwrap_or("-");
+        let status_color = match status {
+            "approved" => crate::ui::GREEN,
+            "rejected" => crate::ui::RED,
+            "pending" => crate::ui::YELLOW,
+            _ => crate::ui::CYAN,
+        };
+        println!(
+            "  {}#{}{} {}{}{} {}{}{} {}{}{}",
+            crate::ui::DIM,
+            id,
+            crate::ui::RESET,
+            crate::ui::CYAN,
+            mission_id,
+            crate::ui::RESET,
+            crate::ui::BOLD,
+            action,
+            crate::ui::RESET,
+            status_color,
+            status,
+            crate::ui::RESET
+        );
+    }
+}
+
+fn print_approval_single(title: &str, value: &Value) {
+    ui_section(title);
+    if let Some(id) = value.get("id").and_then(|v| v.as_i64()) {
+        ui_row("ID", &id.to_string(), crate::ui::CYAN);
+    }
+    if let Some(status) = value.get("status").and_then(|v| v.as_str()) {
+        let color = match status {
+            "approved" => crate::ui::GREEN,
+            "rejected" => crate::ui::RED,
+            "pending" => crate::ui::YELLOW,
+            _ => crate::ui::CYAN,
+        };
+        ui_row("Status", status, color);
+    }
+    if let Some(action) = value.get("action").and_then(|v| v.as_str()) {
+        ui_row("Action", action, crate::ui::BOLD);
+    }
+    if let Some(mission) = value.get("mission_id").and_then(|v| v.as_str()) {
+        ui_row("Mission", mission, crate::ui::CYAN);
+    }
 }
 
 async fn call_mcp_tool(
