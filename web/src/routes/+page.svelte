@@ -38,6 +38,9 @@
   let selectedTab: TabName = 'ai';
   let tree: ExplorerTree = {};
   let selectedNode: any = null;
+  let selectedNodeType: 'mission' | 'kluster' | 'task' | null = null;
+  let selectedNodeData: any = null;
+  let explorerBusy = false;
   let policy: PolicySummary | null = null;
   let policyEvents: any[] = [];
   let onboardingEndpoint = '';
@@ -269,9 +272,63 @@
       const data = await fetchTree(get(token) || undefined);
       tree = data;
       lastRefreshed = new Date().toLocaleTimeString();
+      if (!selectedNode && tree.missions?.length) {
+        selectMission(tree.missions[0]);
+      }
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to fetch tree');
     }
+  }
+
+  async function selectExplorerNode(type: 'mission' | 'kluster' | 'task', node: any) {
+    selectedNode = node;
+    selectedNodeType = type;
+    if (type === 'mission') {
+      selectedNodeData = {
+        mission: node,
+        klusters: node.klusters ?? [],
+        tasks: []
+      };
+      return;
+    }
+    const nodeId = type === 'task' ? String(node.public_id ?? node.id ?? '') : String(node.id ?? '');
+    if (!nodeId) {
+      selectedNodeData = null;
+      return;
+    }
+    explorerBusy = true;
+    try {
+      selectedNodeData = await fetchNode(type, nodeId, get(token) || undefined);
+    } catch (err) {
+      selectedNodeData = null;
+      showToast(err instanceof Error ? err.message : 'Failed to load explorer node');
+    } finally {
+      explorerBusy = false;
+    }
+  }
+
+  function selectMission(mission: any) {
+    return selectExplorerNode('mission', mission);
+  }
+
+  function selectKluster(kluster: any) {
+    return selectExplorerNode('kluster', kluster);
+  }
+
+  function selectTask(task: any) {
+    return selectExplorerNode('task', task);
+  }
+
+  function statusClass(status?: string) {
+    const value = String(status ?? '').toLowerCase();
+    if (value === 'done' || value === 'completed') return 'status-done';
+    if (value === 'blocked') return 'status-blocked';
+    if (value === 'in_progress') return 'status-progress';
+    return 'status-proposed';
+  }
+
+  function taskCountByStatus(tasks: any[] = [], status: string) {
+    return tasks.filter((t) => String(t.status ?? '').toLowerCase() === status).length;
   }
 
   async function refreshPolicy() {
@@ -493,9 +550,26 @@
         <div class="grid">
           <section class="glass-panel">
             <h4>Missions {filteredMissions.length > 0 ? `(${filteredMissions.length})` : ''}</h4>
-            <ul>
+            <ul class="explorer-list">
               {#each filteredMissions as mission}
-                <li><button class="ghost" on:click={() => (selectedNode = mission)}>{mission.name}</button></li>
+                <li>
+                  <button class="ghost explorer-node-btn" on:click={() => selectMission(mission)}>
+                    <span>{mission.name}</span>
+                    <span class={`status-badge ${statusClass(mission.status)}`}>{mission.status ?? 'unknown'}</span>
+                  </button>
+                  {#if mission.klusters?.length}
+                    <ul class="explorer-sublist">
+                      {#each mission.klusters as kluster}
+                        <li>
+                          <button class="ghost explorer-subnode-btn" on:click={() => selectKluster(kluster)}>
+                            <span>{kluster.name}</span>
+                            <span class="muted">{kluster.task_count ?? kluster.recent_tasks?.length ?? 0} tasks</span>
+                          </button>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </li>
               {:else}
                 <li class="muted">No missions yet.</li>
               {/each}
@@ -503,7 +577,59 @@
           </section>
           <section class="glass-panel">
             <h4>Details</h4>
-            <pre>{selectedNode ? JSON.stringify(selectedNode, null, 2) : 'Choose a node'}</pre>
+            {#if explorerBusy}
+              <p class="muted">Loading node details...</p>
+            {:else if selectedNodeData}
+              {#if selectedNodeType === 'mission' && selectedNodeData.mission}
+                <div class="explorer-detail-header">
+                  <h4>{selectedNodeData.mission.name}</h4>
+                  <span class={`status-badge ${statusClass(selectedNodeData.mission.status)}`}>{selectedNodeData.mission.status ?? 'unknown'}</span>
+                </div>
+                <p class="muted">{selectedNodeData.mission.description || 'No mission description.'}</p>
+                <div class="detail-metrics">
+                  <div class="status-chip">Klusters: {selectedNodeData.klusters?.length ?? 0}</div>
+                  <div class="status-chip">Tasks: {selectedNodeData.mission.task_count ?? 0}</div>
+                </div>
+              {:else if selectedNodeType === 'kluster' && selectedNodeData.kluster}
+                <div class="explorer-detail-header">
+                  <h4>{selectedNodeData.kluster.name}</h4>
+                  <span class={`status-badge ${statusClass(selectedNodeData.kluster.status)}`}>{selectedNodeData.kluster.status ?? 'unknown'}</span>
+                </div>
+                <p class="muted">{selectedNodeData.kluster.description || 'No kluster description.'}</p>
+                <div class="detail-metrics">
+                  <div class="status-chip">Sub-tasks: {selectedNodeData.tasks?.length ?? 0}</div>
+                  <div class="status-chip">In Progress: {taskCountByStatus(selectedNodeData.tasks ?? [], 'in_progress')}</div>
+                  <div class="status-chip">Blocked: {taskCountByStatus(selectedNodeData.tasks ?? [], 'blocked')}</div>
+                </div>
+                <div class="task-cards">
+                  {#each selectedNodeData.tasks ?? [] as task}
+                    <article class="task-card">
+                      <div class="explorer-detail-header">
+                        <strong>{task.title}</strong>
+                        <span class={`status-badge ${statusClass(task.status)}`}>{task.status ?? 'unknown'}</span>
+                      </div>
+                      <p class="muted">{task.description || 'No description.'}</p>
+                      <button class="ghost" on:click={() => selectTask(task)}>Open Task</button>
+                    </article>
+                  {:else}
+                    <p class="muted">No sub-tasks for this kluster yet.</p>
+                  {/each}
+                </div>
+              {:else if selectedNodeType === 'task' && selectedNodeData.task}
+                <div class="explorer-detail-header">
+                  <h4>{selectedNodeData.task.title}</h4>
+                  <span class={`status-badge ${statusClass(selectedNodeData.task.status)}`}>{selectedNodeData.task.status ?? 'unknown'}</span>
+                </div>
+                <p class="muted">{selectedNodeData.task.description || 'No task description.'}</p>
+                <pre>{JSON.stringify(selectedNodeData.task, null, 2)}</pre>
+              {:else}
+                <pre>{JSON.stringify(selectedNodeData, null, 2)}</pre>
+              {/if}
+            {:else if selectedNode}
+              <pre>{JSON.stringify(selectedNode, null, 2)}</pre>
+            {:else}
+              <p class="muted">Choose a mission or kluster to inspect.</p>
+            {/if}
           </section>
         </div>
       </div>

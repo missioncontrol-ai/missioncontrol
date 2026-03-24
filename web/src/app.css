@@ -248,6 +248,97 @@ button:disabled {
   color: var(--muted);
 }
 
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.75rem;
+  border: 1px solid transparent;
+}
+
+.status-proposed {
+  color: #facc15;
+  border-color: rgba(250, 204, 21, 0.45);
+  background: rgba(250, 204, 21, 0.14);
+}
+
+.status-progress {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.48);
+  background: rgba(56, 189, 248, 0.14);
+}
+
+.status-blocked {
+  color: #fb7185;
+  border-color: rgba(251, 113, 133, 0.48);
+  background: rgba(251, 113, 133, 0.14);
+}
+
+.status-done {
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.48);
+  background: rgba(52, 211, 153, 0.14);
+}
+
+.explorer-list,
+.explorer-sublist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.explorer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.explorer-sublist {
+  margin-top: 0.45rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-left: 0.65rem;
+  border-left: 1px solid var(--panel-border);
+}
+
+.explorer-node-btn,
+.explorer-subnode-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.explorer-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.detail-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.6rem 0 0.9rem;
+}
+
+.task-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.task-card {
+  border: 1px solid var(--panel-border);
+  border-radius: 0.7rem;
+  padding: 0.7rem 0.8rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
 .onboarding-actions,
 .login-actions {
   display: flex;
