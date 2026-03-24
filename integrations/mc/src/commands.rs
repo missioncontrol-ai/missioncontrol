@@ -44,6 +44,9 @@ pub enum McCommand {
     Logs(LogsArgs),
     /// Generate shell completion scripts.
     Completion(CompletionArgs),
+    /// Artifact retrieval and mutation helpers.
+    #[command(subcommand)]
+    Artifact(ArtifactCommand),
     /// Authentication and identity helpers.
     #[command(subcommand)]
     Auth(AuthCommand),
@@ -204,6 +207,41 @@ pub enum ToolsCommand {
     List,
     /// Call an MCP tool with JSON payload and show the response.
     Call(ToolsCallArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ArtifactCommand {
+    /// Show artifact metadata.
+    Inspect {
+        #[arg(long)]
+        id: i32,
+    },
+    /// Retrieve artifact bytes for validation/view.
+    View {
+        #[arg(long)]
+        id: i32,
+        /// Optional active lease for workspace-scoped retrieval.
+        #[arg(long)]
+        lease_id: Option<String>,
+        /// Write bytes to local path instead of printing text.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Replace artifact bytes from a local file.
+    Replace {
+        #[arg(long)]
+        id: i32,
+        #[arg(long)]
+        from_file: PathBuf,
+        /// Optional active lease for workspace-scoped mutation.
+        #[arg(long)]
+        lease_id: Option<String>,
+        #[arg(long)]
+        mime: Option<String>,
+        /// Confirm cross-kluster mutation without explicit --lease-id.
+        #[arg(short = 'y', long, default_value_t = false)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -528,6 +566,7 @@ pub async fn run(
         McCommand::Release(args) => handle_release(args, client, output_mode).await,
         McCommand::Logs(args) => handle_logs(args, output_mode),
         McCommand::Completion(args) => handle_completion(args),
+        McCommand::Artifact(cmd) => handle_artifact(cmd, client, &booster, &config.schema_pack, output_mode).await,
         McCommand::Auth(cmd) => handle_auth(cmd, client, &config).await,
         McCommand::Data(cmd) => handle_data(cmd, client, &booster, &config.schema_pack, output_mode).await,
         McCommand::Admin(cmd) => handle_admin(cmd, client).await,
@@ -790,6 +829,168 @@ fn handle_completion(args: CompletionArgs) -> Result<()> {
     }
     let mut cmd = CompletionRoot::command();
     clap_complete::generate(args.shell, &mut cmd, "mc", &mut std::io::stdout());
+    Ok(())
+}
+
+fn infer_mime_from_path(path: &std::path::Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|v| v.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "md" => "text/markdown",
+        "txt" => "text/plain",
+        "json" => "application/json",
+        "yaml" | "yml" => "application/yaml",
+        "toml" => "application/toml",
+        "xml" => "application/xml",
+        "csv" => "text/csv",
+        "html" => "text/html",
+        "js" => "application/javascript",
+        "ts" => "application/typescript",
+        "py" | "rs" | "go" | "java" | "c" | "h" | "cpp" | "hpp" | "sh" => "text/plain",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
+    }
+}
+
+fn is_text_like_mime(mime: &str) -> bool {
+    let m = mime.to_ascii_lowercase();
+    m.starts_with("text/")
+        || matches!(
+            m.as_str(),
+            "application/json"
+                | "application/yaml"
+                | "application/toml"
+                | "application/xml"
+                | "application/javascript"
+                | "application/typescript"
+        )
+}
+
+async fn handle_artifact(
+    command: ArtifactCommand,
+    client: MissionControlClient,
+    _booster: &AgentBooster,
+    _schema_pack: &SchemaPack,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let json_output = output_mode.is_machine();
+    match command {
+        ArtifactCommand::Inspect { id } => {
+            let path = format!("/artifacts/{id}");
+            let artifact = client.get_json(&path).await?;
+            output::print_value(output_mode, &artifact);
+        }
+        ArtifactCommand::View { id, lease_id, out } => {
+            let artifact = client.get_json(&format!("/artifacts/{id}")).await?;
+            let mime = artifact
+                .get("mime_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("application/octet-stream");
+            let content_b64 = if let Some(lease_id) = lease_id {
+                let response = mcp_tools::call_tool(
+                    &client,
+                    None,
+                    None,
+                    "fetch_workspace_artifact",
+                    json!({"lease_id": lease_id, "artifact_id": id, "mode": "content"}),
+                )
+                .await?;
+                response
+                    .get("content_b64")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .context("workspace artifact fetch did not return content_b64")?
+            } else {
+                let mut req = client.request_builder(reqwest::Method::GET, &format!("/artifacts/{id}/content"))?;
+                req = req.header("accept", "*/*");
+                let resp = req.send().await.context("artifact content request failed")?;
+                let resp = resp.error_for_status().context("artifact content request returned error status")?;
+                let bytes = resp.bytes().await.context("failed reading artifact content body")?;
+                base64::engine::general_purpose::STANDARD.encode(bytes)
+            };
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(content_b64)
+                .context("artifact content_b64 decode failed")?;
+            if let Some(out_path) = out {
+                if let Some(parent) = out_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&out_path, &bytes)
+                    .with_context(|| format!("failed writing {}", out_path.display()))?;
+                output::print_value(
+                    output_mode,
+                    &json!({"ok": true, "artifact_id": id, "written_path": out_path.display().to_string(), "size_bytes": bytes.len(), "mime_type": mime}),
+                );
+            } else if is_text_like_mime(mime) {
+                let text = String::from_utf8(bytes).context("artifact appears text-like but is not valid UTF-8; use --out")?;
+                if json_output {
+                    output::print_value(output_mode, &json!({"artifact_id": id, "mime_type": mime, "text": text}));
+                } else {
+                    println!("{text}");
+                }
+            } else {
+                anyhow::bail!("binary/non-text artifact requires --out for safe viewing");
+            }
+        }
+        ArtifactCommand::Replace {
+            id,
+            from_file,
+            lease_id,
+            mime,
+            yes,
+        } => {
+            let artifact = client.get_json(&format!("/artifacts/{id}")).await?;
+            let artifact_kluster = artifact
+                .get("kluster_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let active = load_active_workspace();
+            if lease_id.is_none() {
+                if let Some(active_kluster) = active.kluster_id.as_deref() {
+                    if !artifact_kluster.is_empty() && active_kluster != artifact_kluster && !yes {
+                        anyhow::bail!(
+                            "cross-kluster mutation without --lease-id requires -y (active={}, target={})",
+                            active_kluster,
+                            artifact_kluster
+                        );
+                    }
+                }
+            }
+            let bytes = fs::read(&from_file)
+                .with_context(|| format!("failed reading {}", from_file.display()))?;
+            let resolved_mime = mime.unwrap_or_else(|| infer_mime_from_path(&from_file).to_string());
+            let content_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            if let Some(lease_id) = lease_id {
+                // Security guard: ensure provided lease can access this artifact
+                // before permitting mutation.
+                let _ = mcp_tools::call_tool(
+                    &client,
+                    None,
+                    None,
+                    "fetch_workspace_artifact",
+                    json!({"lease_id": lease_id, "artifact_id": id, "mode": "content"}),
+                )
+                .await
+                .context("lease scope check failed for artifact replacement")?;
+            }
+            let response = client
+                .put_json(
+                    &format!("/artifacts/{id}"),
+                    &json!({"content_b64": content_b64, "mime_type": resolved_mime}),
+                )
+                .await?;
+            output::print_value(output_mode, &json!({"ok": true, "artifact_id": id, "mode": "direct_update", "artifact": response}));
+        }
+    }
     Ok(())
 }
 
