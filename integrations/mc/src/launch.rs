@@ -1310,7 +1310,9 @@ fn resolve_embed_token(no_embed_flag: bool, token: &str) -> bool {
         return false;
     }
     if crate::auth::is_session_token(token) {
-        mc_info!("session token (mcs_*) detected — embedding for MCP subprocess compatibility");
+        mc_info!("session token (mcs_*) detected — will NOT be embedded in agent config");
+        mc_info!("session token will be injected into the agent process at exec time");
+        return false;
     }
     if token.is_empty() {
         mc_warn!("MC_TOKEN is not set — implying --no-embed-token");
@@ -1988,6 +1990,11 @@ async fn enforce_profile_pin(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn resolve_embed_token_never_embeds_session_tokens() {
+        assert!(!resolve_embed_token(false, "mcs_example_session_token"));
+    }
 
     #[test]
     fn codex_config_writes_to_target_home() {

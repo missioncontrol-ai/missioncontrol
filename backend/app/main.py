@@ -89,7 +89,6 @@ AUTH_EXEMPT_WEBHOOK_PATHS = {
     "/integrations/google-chat/events",
     "/integrations/teams/events",
 }
-TOKEN_FALLBACK_PATH_PREFIXES = ("/mcp",)
 TOKEN_SUBJECT = "token-client"
 
 
@@ -110,6 +109,18 @@ def _as_float(value: str | None, default: float, *, minimum: float = 0.1) -> flo
     except ValueError:
         parsed = default
     return max(minimum, parsed)
+
+
+def _token_fallback_path_prefixes() -> tuple[str, ...]:
+    """Optional path prefixes that may accept static-token fallback in dual mode.
+
+    Default is disabled (empty) so OIDC-required deployments do not accidentally
+    expose fallback static-token auth on mutation-capable routes.
+    """
+    raw = (os.getenv("MC_ALLOW_TOKEN_FALLBACK_PATHS") or "").strip()
+    if not raw:
+        return ()
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
 @dataclass(frozen=True)
@@ -274,9 +285,11 @@ async def require_auth(request, call_next):
         return await _require_oidc_token(request, token, call_next, start)
 
     # AUTH_MODE=dual
-    token_fallback_allowed = not AUTH_SETTINGS.oidc_required or any(
-        path.startswith(prefix) for prefix in TOKEN_FALLBACK_PATH_PREFIXES
-    )
+    token_fallback_allowed = not AUTH_SETTINGS.oidc_required
+    if not token_fallback_allowed:
+        token_fallback_allowed = any(
+            path.startswith(prefix) for prefix in _token_fallback_path_prefixes()
+        )
     if (
         token_fallback_allowed
         and AUTH_SETTINGS.token_enabled()

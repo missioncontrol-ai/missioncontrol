@@ -19,7 +19,7 @@ pub struct CliOpts {
     base_url: Option<String>,
 
     /// Either MC_TOKEN or OIDC creds are used to authenticate against Mission Control.
-    #[arg(long, env = "MC_TOKEN")]
+    #[arg(long, env = "MC_TOKEN", hide_env_values = true)]
     token: Option<String>,
 
     /// Optional agent identifier that is propagated throughout approvals and sync calls.
