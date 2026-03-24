@@ -483,7 +483,7 @@ fn run_codex_approval_rules_check(config: &McConfig) -> DoctorCheck {
                     duration_ms: start.elapsed().as_millis(),
                     payload: Some(json!({"rules_path": rules_path, "missing": missing})),
                     repair_hint: Some(
-                        "Run `mc system doctor --fix` or `mc launch codex` to seed rules"
+                        "Run `mc doctor --fix` or `mc launch codex` to seed rules"
                             .into(),
                     ),
                 }
