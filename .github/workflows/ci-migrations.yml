@@ -1,10 +1,7 @@
 name: CI Migrations
 
 on:
-  pull_request:
-  push:
-    branches:
-      - main
+  workflow_dispatch: # disabled during pilot dev — re-enable before public release
 
 jobs:
   migrations:
