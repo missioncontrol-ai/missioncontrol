@@ -89,6 +89,7 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: build
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -100,17 +101,11 @@ jobs:
       - name: Generate checksums.txt
         working-directory: artifacts
         run: |
-          sha256sum mc-linux-x86_64 mc-linux-aarch64 mc-macos-x86_64 mc-macos-aarch64 mc-windows-x86_64.exe > checksums.txt
+          sha256sum $(ls) > checksums.txt
           cat checksums.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/mc-linux-x86_64
-            artifacts/mc-linux-aarch64
-            artifacts/mc-macos-x86_64
-            artifacts/mc-macos-aarch64
-            artifacts/mc-windows-x86_64.exe
-            artifacts/checksums.txt
+          files: artifacts/*
           generate_release_notes: true
