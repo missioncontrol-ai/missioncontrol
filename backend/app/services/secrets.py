@@ -145,3 +145,39 @@ def _profile_secret_ref(name: str) -> str | None:
         return None
     value = str(raw).strip()
     return value or None
+
+
+def secrets_status() -> dict:
+    profile_name = (os.getenv("MC_SECRETS_PROFILE") or os.getenv("MC_AGENT_PROFILE") or "default").strip() or "default"
+    mc_home = Path((os.getenv("MC_HOME") or "~/.missioncontrol")).expanduser()
+    profile_path = mc_home / "profiles" / profile_name / "secrets.json"
+    provider = _provider_name()
+
+    refs_count = 0
+    provider_from_profile = None
+    infisical = {}
+    if profile_path.exists():
+        try:
+            parsed = json.loads(profile_path.read_text(encoding="utf-8"))
+            refs = parsed.get("refs") if isinstance(parsed, dict) else None
+            refs_count = len(refs) if isinstance(refs, dict) else 0
+            profile_provider = parsed.get("provider") if isinstance(parsed, dict) else None
+            if isinstance(profile_provider, str) and profile_provider.strip():
+                provider_from_profile = profile_provider.strip().lower()
+            infisical = {
+                "project_id": parsed.get("infisical_project_id"),
+                "env": parsed.get("infisical_env"),
+                "path": parsed.get("infisical_path"),
+            } if isinstance(parsed, dict) else {}
+        except Exception:
+            pass
+
+    return {
+        "provider_env": provider,
+        "provider_profile": provider_from_profile,
+        "effective_profile": profile_name,
+        "profile_path": str(profile_path),
+        "profile_exists": profile_path.exists(),
+        "refs_count": refs_count,
+        "infisical": infisical,
+    }

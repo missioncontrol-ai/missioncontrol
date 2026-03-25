@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app.services.authz import actor_subject_from_request, ensure_platform_admin
 from app.services.ids import new_hash_id
+from app.services.secrets import secrets_status
 
 router = APIRouter(prefix="/ops", tags=["ops"])
 
@@ -70,3 +71,9 @@ def list_backups(request: Request):
     except Exception:
         records = []
     return {"backups": records}
+
+
+@router.get("/secrets/status")
+def get_secrets_status(request: Request):
+    ensure_platform_admin(request)
+    return {"secrets": secrets_status()}
