@@ -172,6 +172,13 @@ pub enum SecretsCommand {
         #[arg(long, default_value_t = false)]
         keep_existing: bool,
     },
+    /// Resolve mapped secrets and write a .env-style file.
+    ExportEnv {
+        #[arg(long, default_value = "default")]
+        profile: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1350,6 +1357,39 @@ async fn handle_secrets(command: SecretsCommand, output_mode: OutputMode) -> Res
                 "refs": cfg.refs,
             });
             output::print_value(output_mode, &payload);
+            Ok(())
+        }
+        SecretsCommand::ExportEnv { profile, out } => {
+            let profile_name = profile.trim();
+            let cfg = secrets::load_profile_secrets(profile_name);
+            if cfg.refs.is_empty() {
+                anyhow::bail!("no refs configured for profile '{}'", profile_name);
+            }
+            let mut lines: Vec<String> = Vec::new();
+            let mut names: Vec<String> = cfg.refs.keys().cloned().collect();
+            names.sort();
+            for name in names {
+                let reference = cfg
+                    .refs
+                    .get(&name)
+                    .ok_or_else(|| anyhow::anyhow!("missing ref for '{}'", name))?;
+                let value = secrets::resolve_maybe_secret_ref(reference).await?;
+                let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+                lines.push(format!("{name}=\"{escaped}\""));
+            }
+            if let Some(parent) = out.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&out, lines.join("\n") + "\n")?;
+            output::print_value(
+                output_mode,
+                &json!({
+                    "ok": true,
+                    "profile": profile_name,
+                    "out": out,
+                    "count": cfg.refs.len(),
+                }),
+            );
             Ok(())
         }
     }

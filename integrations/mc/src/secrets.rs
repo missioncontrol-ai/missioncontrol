@@ -19,12 +19,26 @@ pub async fn resolve_maybe_secret_ref(value: &str) -> Result<String> {
     let parsed = url::Url::parse(value).with_context(|| format!("invalid secret ref: {value}"))?;
     let provider = parsed.host_str().unwrap_or_default();
     match provider {
+        "env" => resolve_env(&parsed),
         "keychain" => resolve_keychain(&parsed),
         "pass" => resolve_pass(&parsed),
         "vault" => resolve_vault(&parsed).await,
         "infisical" => resolve_infisical(&parsed),
         _ => Err(anyhow!("unsupported secret provider '{}'", provider)),
     }
+}
+
+fn resolve_env(parsed: &url::Url) -> Result<String> {
+    let name = parsed.path().trim_start_matches('/');
+    if name.is_empty() {
+        anyhow::bail!("env ref must be secret://env/<NAME>");
+    }
+    let value = std::env::var(name).unwrap_or_default();
+    let trimmed = value.trim().to_string();
+    if trimmed.is_empty() {
+        anyhow::bail!("environment variable '{}' is not set", name);
+    }
+    Ok(trimmed)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
