@@ -60,8 +60,7 @@ jobs:
 
       - name: Build (cross)
         if: matrix.use_cross
-        working-directory: integrations/mc
-        run: cross build --release --target ${{ matrix.target }}
+        run: cross build --release --target ${{ matrix.target }} --manifest-path integrations/mc/Cargo.toml
 
       - name: Build (native)
         if: '!matrix.use_cross'
@@ -71,7 +70,8 @@ jobs:
       - name: Rename artifact (Unix)
         if: runner.os != 'Windows'
         run: |
-          cp integrations/mc/target/${{ matrix.target }}/release/mc ${{ matrix.artifact }}
+          BIN=$(find integrations/mc/target/${{ matrix.target }}/release target/${{ matrix.target }}/release -maxdepth 1 -name mc -type f 2>/dev/null | head -1)
+          cp "$BIN" ${{ matrix.artifact }}
           chmod +x ${{ matrix.artifact }}
 
       - name: Rename artifact (Windows)
