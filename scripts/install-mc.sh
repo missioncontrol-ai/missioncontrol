@@ -31,7 +31,7 @@ EOF
 }
 
 try_download_release() {
-  local os arch release_url
+  local os arch base_url artifact
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
   arch="$(uname -m)"
   case "$arch" in
@@ -44,16 +44,43 @@ try_download_release() {
     *) return 1 ;;
   esac
 
-  release_url="https://github.com/missioncontrol-ai/missioncontrol/releases/latest/download/mc-${os}-${arch}"
-  echo "trying binary download: $release_url"
-  if curl -fsSL --max-time 10 -o "$TARGET.tmp" "$release_url" 2>/dev/null; then
-    mv "$TARGET.tmp" "$TARGET"
-    chmod +x "$TARGET"
-    echo "installed mc from release binary"
-    return 0
+  artifact="mc-${os}-${arch}"
+  base_url="https://github.com/missioncontrol-ai/missioncontrol/releases/latest/download"
+
+  echo "trying binary download: ${base_url}/${artifact}"
+  if ! curl -fsSL --max-time 30 -o "$TARGET.tmp" "${base_url}/${artifact}" 2>/dev/null; then
+    rm -f "$TARGET.tmp"
+    return 1
   fi
-  rm -f "$TARGET.tmp"
-  return 1
+
+  # Verify checksum
+  if curl -fsSL --max-time 10 -o "$TARGET.checksums" "${base_url}/checksums.txt" 2>/dev/null; then
+    local expected actual
+    expected="$(grep " ${artifact}$" "$TARGET.checksums" | awk '{print $1}')"
+    if [[ -n "$expected" ]]; then
+      if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$TARGET.tmp" | awk '{print $1}')"
+      else
+        actual="$(shasum -a 256 "$TARGET.tmp" | awk '{print $1}')"
+      fi
+      if [[ "$expected" != "$actual" ]]; then
+        echo "checksum mismatch — aborting install" >&2
+        rm -f "$TARGET.tmp" "$TARGET.checksums"
+        return 1
+      fi
+      echo "checksum verified"
+    else
+      echo "warning: artifact not found in checksums.txt, skipping verification"
+    fi
+    rm -f "$TARGET.checksums"
+  else
+    echo "warning: could not download checksums.txt, skipping verification"
+  fi
+
+  mv "$TARGET.tmp" "$TARGET"
+  chmod +x "$TARGET"
+  echo "installed mc from release binary"
+  return 0
 }
 
 mkdir -p "$PREFIX"

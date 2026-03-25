@@ -31,7 +31,11 @@ queen hosts, or local planners that need an exceptional offline/online experienc
    2. `export MC_TOKEN=<missioncontrol token>`
    3. (Optional) `export MC_AGENT_ID=<agent identifier for approval traces>`
    4. (Optional) `export MC_ALLOW_INSECURE=true` when targeting a dev proxy or self-signed TLS endpoint.
-2. Build/install the binary: `cargo build --release && cp target/release/mc /usr/local/bin/mc` or `cargo install --path integrations/mc`.
+2. Install the binary — prebuilt binaries are the fastest option:
+   ```bash
+   bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/install-mc.sh)
+   ```
+   Or build from source: `cd integrations/mc && cargo build --release && cp target/release/mc ~/.local/bin/mc`.
 3. Use the command surface described below for tools, sync, governance, and approvals.
 4. Run `mc daemon --matrix-endpoint /events/stream` alongside your agents so the governance plane and matrix telemetry stay
    aligned with upstream Mission Control (pass `--mqtt-url` when you already have MQTT inbox wiring).

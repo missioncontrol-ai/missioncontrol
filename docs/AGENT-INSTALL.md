@@ -4,8 +4,14 @@
 
 **Step 1 — Install mc:**
 
+**Linux / macOS** (downloads prebuilt binary, falls back to source build):
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/install-mc.sh)
+```
+
+**Windows** (PowerShell):
+```powershell
+irm https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/install-mc.ps1 | iex
 ```
 
 **Step 2 — Authenticate:**
@@ -145,10 +151,16 @@ mc launch claude --no-embed-token
 
 Use this path when you need explicit control over config or are integrating into CI.
 
-### 1) Install Rust CLI
+### 1) Install mc
 
+Download prebuilt binary (recommended):
 ```bash
 bash scripts/install-mc.sh
+```
+
+Or build from source (requires Rust/cargo):
+```bash
+cd integrations/mc && cargo build --release && cp target/release/mc ~/.local/bin/mc
 ```
 
 ### 2) Set MissionControl Endpoint
