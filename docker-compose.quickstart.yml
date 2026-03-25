@@ -136,7 +136,7 @@ services:
   mcpd:
     build:
       context: .
-      dockerfile: integrations/missioncontrol-mcp/Dockerfile
+      dockerfile: integrations/mc/Dockerfile
     container_name: missioncontrol-mcpd
     depends_on:
       api:
@@ -151,7 +151,7 @@ services:
     ports:
       - "8765:8765"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('127.0.0.1',8765), 2); s.close()\" || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8765/healthz > /dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 8

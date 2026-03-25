@@ -32,6 +32,9 @@ else
 fi
 docker compose "${compose_args[@]}" up -d --build --remove-orphans
 
+# Cleanup rustfs-init container after 5 minutes so it does not linger.
+nohup bash -lc "sleep 300 && docker rm -f missioncontrol-rustfs-init >/dev/null 2>&1 || true" >/dev/null 2>&1 &
+
 # Keep only the 3 most recent dev-tagged builds; prune the rest to prevent disk bloat.
 _old_dev_images=$(docker images --format "{{.Repository}}:{{.Tag}}" \
   | grep -E "missioncontrol.*:dev-[0-9]" | sort -r | tail -n +4)
