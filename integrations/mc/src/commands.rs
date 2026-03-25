@@ -171,6 +171,23 @@ pub enum SecretsCommand {
         /// Do not overwrite existing refs.
         #[arg(long, default_value_t = false)]
         keep_existing: bool,
+        /// Call backend admin endpoint instead of local file mutation.
+        #[arg(long, default_value_t = false)]
+        via_api: bool,
+    },
+    /// Rotate one mapped secret for a profile.
+    Rotate {
+        #[arg(long, default_value = "default")]
+        profile: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        value: Option<String>,
+        #[arg(long, default_value = "token")]
+        generator: String,
+        /// Call backend admin endpoint instead of local mutation.
+        #[arg(long, default_value_t = false)]
+        via_api: bool,
     },
     /// Resolve mapped secrets and write a .env-style file.
     ExportEnv {
@@ -662,7 +679,7 @@ pub async fn run(
         McCommand::Init(args) => handle_init(args, client, &config, output_mode).await,
         McCommand::Serve(args) => mcp_server::run(&args, &client).await,
         McCommand::Profile(cmd) => handle_profile(cmd, client, output_mode).await,
-        McCommand::Secrets(cmd) => handle_secrets(cmd, output_mode).await,
+        McCommand::Secrets(cmd) => handle_secrets(cmd, client, output_mode).await,
     }
 }
 
@@ -1269,7 +1286,7 @@ async fn handle_auth(command: AuthCommand, client: MissionControlClient, config:
     }
 }
 
-async fn handle_secrets(command: SecretsCommand, output_mode: OutputMode) -> Result<()> {
+async fn handle_secrets(command: SecretsCommand, client: MissionControlClient, output_mode: OutputMode) -> Result<()> {
     match command {
         SecretsCommand::Status { profile } => {
             let cfg = secrets::load_profile_secrets(profile.trim());
@@ -1316,8 +1333,18 @@ async fn handle_secrets(command: SecretsCommand, output_mode: OutputMode) -> Res
         SecretsCommand::Bootstrap {
             profile,
             keep_existing,
+            via_api,
         } => {
             let profile_name = profile.trim();
+            if via_api {
+                let payload = json!({
+                    "profile": profile_name,
+                    "keep_existing": keep_existing,
+                });
+                let response = client.post_json("/ops/secrets/bootstrap", &payload).await?;
+                output::print_value(output_mode, &response);
+                return Ok(());
+            }
             let mut cfg = secrets::load_profile_secrets(profile_name);
             let provider = cfg
                 .provider
@@ -1355,6 +1382,91 @@ async fn handle_secrets(command: SecretsCommand, output_mode: OutputMode) -> Res
                 "path": secrets::profile_secrets_path(profile_name),
                 "refs_count": cfg.refs.len(),
                 "refs": cfg.refs,
+            });
+            output::print_value(output_mode, &payload);
+            Ok(())
+        }
+        SecretsCommand::Rotate {
+            profile,
+            name,
+            value,
+            generator,
+            via_api,
+        } => {
+            let profile_name = profile.trim();
+            let secret_name = name.trim();
+            if secret_name.is_empty() {
+                anyhow::bail!("--name cannot be empty");
+            }
+            if via_api {
+                let payload = json!({
+                    "profile": profile_name,
+                    "name": secret_name,
+                    "value": value,
+                    "generator": generator,
+                });
+                let response = client.post_json("/ops/secrets/rotate", &payload).await?;
+                output::print_value(output_mode, &response);
+                return Ok(());
+            }
+            let cfg = secrets::load_profile_secrets(profile_name);
+            let reference = cfg
+                .refs
+                .get(secret_name)
+                .ok_or_else(|| anyhow::anyhow!("no secret reference mapped for '{}'", secret_name))?
+                .to_string();
+            let rotated = if let Some(v) = value {
+                if v.trim().is_empty() {
+                    anyhow::bail!("--value cannot be empty when provided");
+                }
+                v
+            } else if generator.trim().eq_ignore_ascii_case("hex") {
+                uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string()
+            } else {
+                uuid::Uuid::new_v4().to_string() + "-" + &uuid::Uuid::new_v4().to_string()
+            };
+            let parsed = url::Url::parse(&reference).context("invalid secret reference URL")?;
+            let provider = parsed.host_str().unwrap_or_default();
+            let target_name = parsed.path().trim_start_matches('/').to_string();
+            match provider {
+                "env" => {
+                    std::env::set_var(&target_name, &rotated);
+                }
+                "infisical" => {
+                    let mut cmd = std::process::Command::new("infisical");
+                    cmd.args(["secrets", "set", &target_name, &rotated]);
+                    for (k, v) in parsed.query_pairs() {
+                        match k.as_ref() {
+                            "projectId" => {
+                                cmd.arg("--projectId");
+                                cmd.arg(v.as_ref());
+                            }
+                            "env" => {
+                                cmd.arg("--env");
+                                cmd.arg(v.as_ref());
+                            }
+                            "path" => {
+                                cmd.arg("--path");
+                                cmd.arg(v.as_ref());
+                            }
+                            _ => {}
+                        }
+                    }
+                    let out = cmd.output().context("failed to execute infisical CLI")?;
+                    if !out.status.success() {
+                        anyhow::bail!("infisical secrets set failed for '{}'", target_name);
+                    }
+                }
+                other => anyhow::bail!("provider '{}' is not mutable via local rotate", other),
+            }
+            let payload = json!({
+                "ok": true,
+                "profile": profile_name,
+                "name": secret_name,
+                "reference": reference,
+                "provider": provider,
+                "updated": true,
+                "value": if output_mode.is_machine() { rotated } else { "***redacted***".to_string() },
             });
             output::print_value(output_mode, &payload);
             Ok(())
