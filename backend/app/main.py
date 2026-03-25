@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 import hmac
+import json
 import os
 import secrets
 import time
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from app.auth import OidcValidationError, OidcValidator, load_auth_settings
@@ -621,6 +622,42 @@ def ops_metrics(request: Request):
 def ops_logs(request: Request, limit: int = 200):
     assert_platform_admin(request)
     return {"events": recent_logs(limit=limit)}
+
+
+@app.get("/events/stream")
+async def matrix_stream(request: Request, limit: int = 50):
+    safe_limit = max(1, min(int(limit), 200))
+
+    async def generator():
+        last_signature: tuple[str, str] | None = None
+        while True:
+            if await request.is_disconnected():
+                break
+            # Stream the most recent structured logs so dashboards and `mc system doctor`
+            # can observe live matrix telemetry from a stable SSE endpoint.
+            emitted = False
+            for item in recent_logs(limit=safe_limit):
+                signature = (
+                    str(item.get("timestamp") or ""),
+                    str(item.get("request_id") or item.get("event_type") or ""),
+                )
+                if last_signature is not None and signature <= last_signature:
+                    continue
+                payload = {"type": "matrix", "payload": item}
+                yield "event: matrix\n"
+                yield f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+                emitted = True
+                last_signature = signature
+            if not emitted:
+                yield "event: matrix\n"
+                yield "data: " + json.dumps(
+                    {"type": "matrix", "payload": {"event_type": "heartbeat"}},
+                    separators=(",", ":"),
+                ) + "\n\n"
+            await asyncio.sleep(1.0)
+
+    headers = {"cache-control": "no-cache", "connection": "keep-alive", "x-accel-buffering": "no"}
+    return StreamingResponse(generator(), media_type="text/event-stream", headers=headers)
 
 
 app.include_router(klusters.router)

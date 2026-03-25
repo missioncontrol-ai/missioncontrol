@@ -19,6 +19,7 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 url = "2.4"
+urlencoding = "2.1"
 futures-util = "0.3"
 axum = { version = "0.8", features = ["macros"] }
 async-stream = "0.3"

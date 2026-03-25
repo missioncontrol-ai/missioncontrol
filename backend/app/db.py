@@ -4,16 +4,17 @@ from urllib.parse import quote_plus
 
 from sqlalchemy import inspect, text
 from sqlmodel import Session, SQLModel, create_engine
+from app.services.secrets import get_secret
 
 
 def _build_database_url() -> str:
-    explicit_url = os.getenv("DATABASE_URL")
+    explicit_url = get_secret("DATABASE_URL")
     if explicit_url:
         return explicit_url
 
     host = os.getenv("POSTGRES_HOST")
-    user = os.getenv("POSTGRES_USER")
-    password = os.getenv("POSTGRES_PASSWORD")
+    user = get_secret("POSTGRES_USER")
+    password = get_secret("POSTGRES_PASSWORD")
     db = os.getenv("POSTGRES_DB")
     port = os.getenv("POSTGRES_PORT", "5432")
 

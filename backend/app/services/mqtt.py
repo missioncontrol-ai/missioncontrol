@@ -4,6 +4,7 @@ import sys
 from dataclasses import dataclass
 
 import paho.mqtt.client as mqtt
+from app.services.secrets import get_secret
 
 
 @dataclass
@@ -81,8 +82,8 @@ def build_mqtt_service() -> MqttService | None:
     settings = MqttSettings(
         host=host,
         port=port,
-        username=os.getenv("MQTT_USERNAME"),
-        password=os.getenv("MQTT_PASSWORD"),
+        username=get_secret("MQTT_USERNAME"),
+        password=get_secret("MQTT_PASSWORD"),
         client_id=os.getenv("MQTT_CLIENT_ID", "missioncontrol-api"),
         optional=_as_bool(os.getenv("MQTT_OPTIONAL"), default=True),
     )

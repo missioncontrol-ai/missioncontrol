@@ -30,6 +30,7 @@ os.environ["OIDC_ISSUER_URL"] = ""
 os.environ["OIDC_AUDIENCE"] = ""
 
 from app.main import _extract_mission_id, _finalize_response, _is_auth_exempt_path, _request_id
+from app.main import _validate_csrf
 
 
 class RequestTracingTests(unittest.TestCase):
@@ -70,6 +71,28 @@ class RequestTracingTests(unittest.TestCase):
     def test_auth_exempt_webhook_paths_still_exempt(self):
         self.assertTrue(_is_auth_exempt_path("/integrations/slack/events"))
         self.assertTrue(_is_auth_exempt_path("/integrations/google-chat/events"))
+
+    def test_finalize_response_sets_security_headers(self):
+        request = self._request()
+        response = _finalize_response(request, JSONResponse(status_code=200, content={"ok": True}), 0.0)
+        self.assertIn("content-security-policy", response.headers)
+        self.assertEqual(response.headers.get("referrer-policy"), "no-referrer")
+        self.assertEqual(response.headers.get("x-frame-options"), "DENY")
+        self.assertIn("permissions-policy", response.headers)
+
+    def test_validate_csrf_true_for_matching_cookie_and_header(self):
+        req = SimpleNamespace(
+            cookies={"mc_csrf_token": "abc"},
+            headers={"x-csrf-token": "abc"},
+        )
+        self.assertTrue(_validate_csrf(req))
+
+    def test_validate_csrf_false_when_missing(self):
+        req = SimpleNamespace(
+            cookies={},
+            headers={},
+        )
+        self.assertFalse(_validate_csrf(req))
 
 
 if __name__ == "__main__":

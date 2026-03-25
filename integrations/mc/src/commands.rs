@@ -10,6 +10,7 @@ use crate::{
     output::{self, OutputMode},
     remote,
     schema_pack::SchemaPack,
+    secrets,
     update,
 };
 use anyhow::{Context, Result};
@@ -44,6 +45,9 @@ pub enum McCommand {
     Release(ReleaseArgs),
     /// Tail local MissionControl logs.
     Logs(LogsArgs),
+    /// Legacy shortcut for `mc auth whoami`.
+    #[command(hide = true)]
+    Whoami(auth::WhoamiArgs),
     /// Generate shell completion scripts.
     Completion(CompletionArgs),
     /// Artifact retrieval and mutation helpers.
@@ -84,6 +88,9 @@ pub enum McCommand {
     /// Manage MissionControl user profiles.
     #[command(subcommand)]
     Profile(ProfileCommand),
+    /// Secrets provider + reference helpers.
+    #[command(subcommand)]
+    Secrets(SecretsCommand),
 }
 
 #[derive(Subcommand, Debug)]
@@ -135,6 +142,56 @@ pub enum AgentCommand {
     Remote(remote::RemoteCommand),
     /// Self-improvement loop for MissionControl itself (agent-driven backlog/code evolution).
     Evolve(evolve::EvolveArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SecretsCommand {
+    /// Inspect current secrets provider config for a profile.
+    Status {
+        #[arg(long, default_value = "default")]
+        profile: String,
+    },
+    /// Configure secrets provider for a profile.
+    #[command(subcommand)]
+    Provider(SecretsProviderCommand),
+    /// Resolve and print one named secret from the active profile mapping.
+    Get {
+        #[arg(long, default_value = "default")]
+        profile: String,
+        #[arg(long)]
+        name: String,
+        /// Show the value (default redacts in human mode).
+        #[arg(long, default_value_t = false)]
+        reveal: bool,
+    },
+    /// Seed standard secret refs for the selected provider.
+    Bootstrap {
+        #[arg(long, default_value = "default")]
+        profile: String,
+        /// Do not overwrite existing refs.
+        #[arg(long, default_value_t = false)]
+        keep_existing: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SecretsProviderCommand {
+    /// Set provider to env.
+    Env {
+        #[arg(long, default_value = "default")]
+        profile: String,
+    },
+    /// Set provider to Infisical and persist connection metadata.
+    Infisical {
+        #[arg(long, default_value = "default")]
+        profile: String,
+        #[arg(long)]
+        project_id: Option<String>,
+        #[arg(long)]
+        env: Option<String>,
+        #[arg(long)]
+        path: Option<String>,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -580,6 +637,7 @@ pub async fn run(
         McCommand::Use(args) => handle_use(args, client, output_mode).await,
         McCommand::Release(args) => handle_release(args, client, output_mode).await,
         McCommand::Logs(args) => handle_logs(args, output_mode),
+        McCommand::Whoami(_) => auth::whoami(&client).await,
         McCommand::Completion(args) => handle_completion(args),
         McCommand::Artifact(cmd) => handle_artifact(cmd, client, &booster, &config.schema_pack, output_mode).await,
         McCommand::Auth(cmd) => handle_auth(cmd, client, &config).await,
@@ -597,6 +655,7 @@ pub async fn run(
         McCommand::Init(args) => handle_init(args, client, &config, output_mode).await,
         McCommand::Serve(args) => mcp_server::run(&args, &client).await,
         McCommand::Profile(cmd) => handle_profile(cmd, client, output_mode).await,
+        McCommand::Secrets(cmd) => handle_secrets(cmd, output_mode).await,
     }
 }
 
@@ -1200,6 +1259,150 @@ async fn handle_auth(command: AuthCommand, client: MissionControlClient, config:
         AuthCommand::Login(args) => auth::login(args, &client, config.base_url.as_str()).await,
         AuthCommand::Logout(args) => auth::logout(args, &client).await,
         AuthCommand::Whoami(_) => auth::whoami(&client).await,
+    }
+}
+
+async fn handle_secrets(command: SecretsCommand, output_mode: OutputMode) -> Result<()> {
+    match command {
+        SecretsCommand::Status { profile } => {
+            let cfg = secrets::load_profile_secrets(profile.trim());
+            let payload = json!({
+                "profile": profile,
+                "path": secrets::profile_secrets_path(profile.trim()),
+                "provider": cfg.provider.unwrap_or_else(|| "env".to_string()),
+                "infisical_project_id": cfg.infisical_project_id,
+                "infisical_env": cfg.infisical_env,
+                "infisical_path": cfg.infisical_path,
+                "refs_count": cfg.refs.len(),
+                "refs": cfg.refs,
+            });
+            output::print_value(output_mode, &payload);
+            Ok(())
+        }
+        SecretsCommand::Provider(provider_cmd) => handle_secrets_provider(provider_cmd, output_mode).await,
+        SecretsCommand::Get {
+            profile,
+            name,
+            reveal,
+        } => {
+            let cfg = secrets::load_profile_secrets(profile.trim());
+            let reference = cfg
+                .refs
+                .get(name.trim())
+                .ok_or_else(|| anyhow::anyhow!("no secret reference mapped for '{}'", name.trim()))?
+                .to_string();
+            let resolved = secrets::resolve_maybe_secret_ref(&reference).await?;
+            let display = if reveal || output_mode.is_machine() {
+                resolved.clone()
+            } else {
+                "***redacted***".to_string()
+            };
+            let payload = json!({
+                "profile": profile,
+                "name": name,
+                "reference": reference,
+                "value": display,
+            });
+            output::print_value(output_mode, &payload);
+            Ok(())
+        }
+        SecretsCommand::Bootstrap {
+            profile,
+            keep_existing,
+        } => {
+            let profile_name = profile.trim();
+            let mut cfg = secrets::load_profile_secrets(profile_name);
+            let provider = cfg
+                .provider
+                .clone()
+                .unwrap_or_else(|| "env".to_string())
+                .to_ascii_lowercase();
+            let standard_names = [
+                "MC_TOKEN",
+                "MQTT_PASSWORD",
+                "POSTGRES_PASSWORD",
+                "MC_OBJECT_STORAGE_ACCESS_KEY",
+                "MC_OBJECT_STORAGE_ACCESS_SECRET",
+            ];
+            for name in standard_names {
+                if keep_existing && cfg.refs.contains_key(name) {
+                    continue;
+                }
+                let reference = if provider == "infisical" {
+                    secrets::build_infisical_ref(
+                        name,
+                        cfg.infisical_project_id.as_deref(),
+                        cfg.infisical_env.as_deref(),
+                        cfg.infisical_path.as_deref(),
+                    )
+                } else {
+                    format!("secret://env/{name}")
+                };
+                cfg.refs.insert(name.to_string(), reference);
+            }
+            secrets::save_profile_secrets(profile_name, &cfg)?;
+            let payload = json!({
+                "ok": true,
+                "profile": profile_name,
+                "provider": provider,
+                "path": secrets::profile_secrets_path(profile_name),
+                "refs_count": cfg.refs.len(),
+                "refs": cfg.refs,
+            });
+            output::print_value(output_mode, &payload);
+            Ok(())
+        }
+    }
+}
+
+async fn handle_secrets_provider(command: SecretsProviderCommand, output_mode: OutputMode) -> Result<()> {
+    match command {
+        SecretsProviderCommand::Env { profile } => {
+            let profile_name = profile.trim();
+            let mut cfg = secrets::load_profile_secrets(profile_name);
+            cfg.provider = Some("env".to_string());
+            cfg.infisical_project_id = None;
+            cfg.infisical_env = None;
+            cfg.infisical_path = None;
+            secrets::save_profile_secrets(profile_name, &cfg)?;
+            output::print_value(
+                output_mode,
+                &json!({
+                    "ok": true,
+                    "profile": profile_name,
+                    "provider": "env",
+                    "path": secrets::profile_secrets_path(profile_name),
+                }),
+            );
+            Ok(())
+        }
+        SecretsProviderCommand::Infisical {
+            profile,
+            project_id,
+            env,
+            path,
+        } => {
+            let profile_name = profile.trim();
+            let mut cfg = secrets::load_profile_secrets(profile_name);
+            cfg.provider = Some("infisical".to_string());
+            cfg.infisical_project_id = project_id.filter(|v| !v.trim().is_empty());
+            cfg.infisical_env = env.filter(|v| !v.trim().is_empty());
+            cfg.infisical_path = path.filter(|v| !v.trim().is_empty());
+            secrets::save_profile_secrets(profile_name, &cfg)?;
+            output::print_value(
+                output_mode,
+                &json!({
+                    "ok": true,
+                    "profile": profile_name,
+                    "provider": "infisical",
+                    "path": secrets::profile_secrets_path(profile_name),
+                    "infisical_project_id": cfg.infisical_project_id,
+                    "infisical_env": cfg.infisical_env,
+                    "infisical_path": cfg.infisical_path,
+                }),
+            );
+            Ok(())
+        }
     }
 }
 

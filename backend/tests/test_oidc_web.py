@@ -1,9 +1,12 @@
 import json
+import asyncio
 import unittest
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlparse
 
 from fastapi import HTTPException
+from fastapi import Response
+from fastapi.responses import JSONResponse
 from sqlmodel import SQLModel
 
 from app.auth.config import AuthSettings
@@ -28,6 +31,8 @@ class _FakeResponse:
 def _request():
     return SimpleNamespace(
         headers={"user-agent": "pytest"},
+        cookies={},
+        url=SimpleNamespace(hostname="localhost"),
         url_for=lambda name: "http://localhost:8008/auth/oidc/callback",
     )
 
@@ -38,6 +43,12 @@ class _Validator:
 
 
 class OidcWebTests(unittest.TestCase):
+    @staticmethod
+    def _await(value):
+        if hasattr(value, "__await__"):
+            return asyncio.run(value)
+        return value
+
     def setUp(self):
         SQLModel.metadata.drop_all(engine)
         SQLModel.metadata.create_all(engine)
@@ -81,17 +92,52 @@ class OidcWebTests(unittest.TestCase):
 
         cb = oidc_web.oidc_callback(req, code="abc", state=state)
         self.assertEqual(cb.status_code, 302)
-        cb_query = parse_qs(urlparse(cb.headers["location"]).query)
-        grant_id = cb_query["oidc_grant"][0]
+        cb_fragment = dict(parse_qsl(urlparse(cb.headers["location"]).fragment))
+        grant_id = cb_fragment["oidc_grant"]
         self.assertTrue(grant_id.startswith("olg_"))
 
-        first = oidc_web.exchange_oidc_grant(oidc_web.OidcGrantExchangeRequest(grant_id=grant_id), req)
+        response = Response()
+        first = oidc_web.exchange_oidc_grant(oidc_web.OidcGrantExchangeRequest(grant_id=grant_id), req, response)
         self.assertTrue(first.token.startswith("mcs_"))
         self.assertEqual(first.subject, "user@example.com")
+        self.assertIn("mc_session_token=", response.headers.get("set-cookie", ""))
 
         with self.assertRaises(HTTPException) as ctx:
-            oidc_web.exchange_oidc_grant(oidc_web.OidcGrantExchangeRequest(grant_id=grant_id), req)
+            oidc_web.exchange_oidc_grant(oidc_web.OidcGrantExchangeRequest(grant_id=grant_id), req, Response())
         self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_device_authorize_and_token_pending(self):
+        req = _request()
+
+        class _DeviceRequest:
+            async def form(self):
+                return {"client_id": "test-client"}
+
+            headers = {"user-agent": "pytest"}
+            cookies = {}
+            url = SimpleNamespace(hostname="localhost")
+            url_for = lambda self, name: "http://localhost:8008/auth/oidc/device/verify"
+
+        authorize = self._await(oidc_web.device_authorize(_DeviceRequest()))
+        self.assertIn("device_code", authorize)
+        self.assertIn("user_code", authorize)
+        self.assertEqual(authorize["verification_uri"], "http://localhost:8008/auth/oidc/device/verify")
+
+        class _TokenRequest:
+            def __init__(self, code: str):
+                self._code = code
+                self.headers = {"user-agent": "pytest"}
+
+            async def form(self):
+                return {
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                    "device_code": self._code,
+                }
+
+        token_resp = self._await(oidc_web.device_token(_TokenRequest(authorize["device_code"])))
+        self.assertIsInstance(token_resp, JSONResponse)
+        payload = json.loads(token_resp.body.decode("utf-8"))
+        self.assertEqual(payload.get("error"), "authorization_pending")
 
 
 if __name__ == "__main__":

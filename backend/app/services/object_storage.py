@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from typing import Any, Optional
+from app.services.secrets import get_secret
 
 try:
     import boto3
@@ -32,7 +33,7 @@ def _bool_env(name: str, default: bool) -> bool:
 
 def _env_first(*names: str, default: str = "") -> str:
     for name in names:
-        value = os.getenv(name)
+        value = get_secret(name)
         if value is not None and str(value).strip():
             return str(value).strip()
     return default
