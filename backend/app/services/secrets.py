@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import secrets
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -181,3 +182,133 @@ def secrets_status() -> dict:
         "refs_count": refs_count,
         "infisical": infisical,
     }
+
+
+def bootstrap_profile_secrets(
+    *,
+    profile_name: str,
+    provider: str,
+    keep_existing: bool,
+    infisical_project_id: str | None = None,
+    infisical_env: str | None = None,
+    infisical_path: str | None = None,
+) -> dict:
+    path = _profile_secrets_path(profile_name)
+    data = _load_profile_data(path)
+    refs = data.get("refs") if isinstance(data.get("refs"), dict) else {}
+    data["refs"] = refs
+    data["provider"] = provider
+    if provider == "infisical":
+        data["infisical_project_id"] = infisical_project_id
+        data["infisical_env"] = infisical_env
+        data["infisical_path"] = infisical_path
+    names = [
+        "MC_TOKEN",
+        "MQTT_PASSWORD",
+        "POSTGRES_PASSWORD",
+        "MC_OBJECT_STORAGE_ACCESS_KEY",
+        "MC_OBJECT_STORAGE_ACCESS_SECRET",
+    ]
+    for name in names:
+        if keep_existing and name in refs:
+            continue
+        refs[name] = _build_ref(
+            name,
+            provider=provider,
+            infisical_project_id=infisical_project_id,
+            infisical_env=infisical_env,
+            infisical_path=infisical_path,
+        )
+    _save_profile_data(path, data)
+    return {
+        "profile": profile_name,
+        "provider": provider,
+        "path": str(path),
+        "refs_count": len(refs),
+        "refs": refs,
+    }
+
+
+def rotate_profile_secret(
+    *,
+    profile_name: str,
+    name: str,
+    value: str | None = None,
+    generator: str = "token",
+) -> dict:
+    path = _profile_secrets_path(profile_name)
+    data = _load_profile_data(path)
+    refs = data.get("refs") if isinstance(data.get("refs"), dict) else {}
+    ref = str(refs.get(name) or "").strip()
+    if not ref:
+        raise RuntimeError(f"Secret '{name}' is not mapped in profile '{profile_name}'")
+    next_value = value if value is not None and value.strip() else _generate_secret(generator)
+    parsed = urlparse(ref)
+    provider = (parsed.netloc or "").strip().lower()
+    secret_name = parsed.path.strip("/")
+    if provider == "env":
+        EnvSecretsProvider().set(secret_name, next_value)
+    elif provider == "infisical":
+        query = parse_qs(parsed.query, keep_blank_values=False)
+        InfisicalSecretsProvider(
+            project_id=_first(query, "projectId") or data.get("infisical_project_id"),
+            environment=_first(query, "env") or data.get("infisical_env"),
+            path=_first(query, "path") or data.get("infisical_path"),
+            cli_bin=(os.getenv("MC_SECRETS_INFISICAL_CLI_BIN") or "infisical").strip() or "infisical",
+        ).set(secret_name, next_value)
+    else:
+        raise RuntimeError(f"Secret provider '{provider}' is not mutable via rotate")
+    return {
+        "profile": profile_name,
+        "name": name,
+        "provider": provider,
+        "reference": ref,
+        "updated": True,
+    }
+
+
+def _generate_secret(generator: str) -> str:
+    kind = (generator or "token").strip().lower()
+    if kind == "hex":
+        return secrets.token_hex(32)
+    return secrets.token_urlsafe(48)
+
+
+def _profile_secrets_path(profile_name: str) -> Path:
+    mc_home = Path((os.getenv("MC_HOME") or "~/.missioncontrol")).expanduser()
+    return mc_home / "profiles" / profile_name / "secrets.json"
+
+
+def _load_profile_data(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_profile_data(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _build_ref(
+    name: str,
+    *,
+    provider: str,
+    infisical_project_id: str | None,
+    infisical_env: str | None,
+    infisical_path: str | None,
+) -> str:
+    if provider == "infisical":
+        parts: list[str] = []
+        if infisical_project_id:
+            parts.append(f"projectId={infisical_project_id}")
+        if infisical_env:
+            parts.append(f"env={infisical_env}")
+        if infisical_path:
+            parts.append(f"path={infisical_path}")
+        query = f"?{'&'.join(parts)}" if parts else ""
+        return f"secret://infisical/{name}{query}"
+    return f"secret://env/{name}"

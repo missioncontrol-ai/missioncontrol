@@ -9,7 +9,8 @@ from pydantic import BaseModel
 
 from app.services.authz import actor_subject_from_request, ensure_platform_admin
 from app.services.ids import new_hash_id
-from app.services.secrets import secrets_status
+from app.services.log_export import emit_structured_log
+from app.services.secrets import bootstrap_profile_secrets, rotate_profile_secret, secrets_status
 
 router = APIRouter(prefix="/ops", tags=["ops"])
 
@@ -29,6 +30,22 @@ class BackupRecord(BaseModel):
     triggered_by: str
     status: str
     created_at: str
+
+
+class SecretsBootstrapRequest(BaseModel):
+    profile: str = "default"
+    provider: str = "env"
+    keep_existing: bool = True
+    infisical_project_id: str | None = None
+    infisical_env: str | None = None
+    infisical_path: str | None = None
+
+
+class SecretsRotateRequest(BaseModel):
+    profile: str = "default"
+    name: str
+    value: str | None = None
+    generator: str = "token"
 
 
 @router.post("/backups")
@@ -77,3 +94,60 @@ def list_backups(request: Request):
 def get_secrets_status(request: Request):
     ensure_platform_admin(request)
     return {"secrets": secrets_status()}
+
+
+@router.post("/secrets/bootstrap")
+def post_secrets_bootstrap(payload: SecretsBootstrapRequest, request: Request):
+    ensure_platform_admin(request)
+    profile_name = (payload.profile or "default").strip() or "default"
+    provider = (payload.provider or "env").strip().lower()
+    if provider not in {"env", "infisical"}:
+        return {"ok": False, "error": "provider must be env or infisical"}
+    result = bootstrap_profile_secrets(
+        profile_name=profile_name,
+        provider=provider,
+        keep_existing=bool(payload.keep_existing),
+        infisical_project_id=(payload.infisical_project_id or "").strip() or None,
+        infisical_env=(payload.infisical_env or "").strip() or None,
+        infisical_path=(payload.infisical_path or "").strip() or None,
+    )
+    emit_structured_log(
+        {
+            "event_type": "secrets.bootstrap",
+            "channel": "governance",
+            "actor_subject": actor_subject_from_request(request),
+            "profile": profile_name,
+            "provider": provider,
+            "refs_count": result.get("refs_count", 0),
+        }
+    )
+    return {"ok": True, "result": result}
+
+
+@router.post("/secrets/rotate")
+def post_secrets_rotate(payload: SecretsRotateRequest, request: Request):
+    ensure_platform_admin(request)
+    profile_name = (payload.profile or "default").strip() or "default"
+    secret_name = (payload.name or "").strip()
+    if not secret_name:
+        return {"ok": False, "error": "name is required"}
+    try:
+        result = rotate_profile_secret(
+            profile_name=profile_name,
+            name=secret_name,
+            value=payload.value,
+            generator=payload.generator,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    emit_structured_log(
+        {
+            "event_type": "secrets.rotate",
+            "channel": "governance",
+            "actor_subject": actor_subject_from_request(request),
+            "profile": profile_name,
+            "secret_name": secret_name,
+            "provider": result.get("provider", ""),
+        }
+    )
+    return {"ok": True, "result": result}
