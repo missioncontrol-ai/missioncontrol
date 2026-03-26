@@ -364,7 +364,7 @@ pub enum WorkspaceCommand {
         lease_id: String,
         #[arg(long)]
         artifact_id: i32,
-        #[arg(long, default_value = "download_url")]
+        #[arg(long, default_value = "content")]
         mode: String,
         #[arg(long, default_value_t = 60)]
         expires_seconds: u64,
