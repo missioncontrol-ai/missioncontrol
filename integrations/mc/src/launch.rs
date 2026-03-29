@@ -116,6 +116,14 @@ pub struct LaunchArgs {
     #[arg(long)]
     no_embed_token: bool,
 
+    /// Disable writing the experimental Claude channel MCP server entry.
+    ///
+    /// By default, `mc launch claude` writes both:
+    /// - `missioncontrol` (mc serve)
+    /// - `missioncontrol_channel` (mc channel claude webhook)
+    #[arg(long, default_value_t = false)]
+    no_claude_channel: bool,
+
     /// Extra args forwarded verbatim to the agent binary (after --)
     #[arg(last = true)]
     agent_args: Vec<String>,
@@ -703,6 +711,14 @@ fn write_hook_scripts(target_home: &Path) -> Result<()> {
 }
 
 fn write_json_missioncontrol_entry(config_path: &Path, mc_entry: serde_json::Value) -> Result<()> {
+    write_json_mcp_entry(config_path, "missioncontrol", mc_entry)
+}
+
+fn write_json_mcp_entry(
+    config_path: &Path,
+    server_name: &str,
+    entry: serde_json::Value,
+) -> Result<()> {
     let mut root: serde_json::Value = if config_path.exists() {
         let content = std::fs::read_to_string(config_path)?;
         serde_json::from_str(&content)
@@ -716,7 +732,7 @@ fn write_json_missioncontrol_entry(config_path: &Path, mc_entry: serde_json::Val
         .or_insert_with(|| serde_json::Value::Object(Default::default()))
         .as_object_mut()
         .ok_or_else(|| anyhow!("{} mcpServers is not an object", config_path.display()))?
-        .insert("missioncontrol".to_string(), mc_entry);
+        .insert(server_name.to_string(), entry);
     std::fs::write(config_path, serde_json::to_string_pretty(&root)?)?;
     Ok(())
 }
@@ -838,6 +854,29 @@ fn absolutize_mc_command(mut entry: serde_json::Value) -> serde_json::Value {
         }
     }
     entry
+}
+
+fn claude_channel_webhook_entry(
+    base_url: &str,
+    token: &str,
+    embed_token: bool,
+) -> serde_json::Value {
+    let mut env = serde_json::Map::new();
+    env.insert(
+        "MC_BASE_URL".to_string(),
+        serde_json::Value::String(base_url.to_string()),
+    );
+    if embed_token && !token.trim().is_empty() {
+        env.insert(
+            "MC_TOKEN".to_string(),
+            serde_json::Value::String(token.to_string()),
+        );
+    }
+    absolutize_mc_command(json!({
+        "command": "mc",
+        "args": ["channel", "claude", "webhook"],
+        "env": serde_json::Value::Object(env),
+    }))
 }
 
 // ── OpenClawDriver / CustomDriver ────────────────────────────────────────────
@@ -1131,6 +1170,41 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         &config_target_home,
         &instance_mc_home,
     )?;
+    if matches!(selected_agent, AgentKind::Claude) && !args.no_claude_channel {
+        mc_info!("claude launch: experimental channel MCP entry enabled (default)");
+        let channel_entry = claude_channel_webhook_entry(&base_url, &token, embed_token);
+        let local_claude_config = config_target_home.join(".claude.json");
+        if let Err(e) = write_json_mcp_entry(
+            &local_claude_config,
+            "missioncontrol_channel",
+            channel_entry.clone(),
+        ) {
+            mc_warn!(
+                "could not write experimental claude channel MCP entry (non-blocking): {}",
+                e
+            );
+        } else {
+            mc_info!(
+                "experimental claude channel MCP config written → {}",
+                local_claude_config.display()
+            );
+        }
+        if let Some(global_home) = dirs::home_dir() {
+            let global_path = global_home.join(".claude.json");
+            if global_path != local_claude_config {
+                if let Err(e) =
+                    write_json_mcp_entry(&global_path, "missioncontrol_channel", channel_entry)
+                {
+                    mc_warn!(
+                        "could not write global experimental claude channel MCP entry (non-blocking): {}",
+                        e
+                    );
+                }
+            }
+        }
+    } else if matches!(selected_agent, AgentKind::Claude) && args.no_claude_channel {
+        mc_info!("claude launch: experimental channel MCP entry disabled (--no-claude-channel)");
+    }
     if matches!(selected_agent, AgentKind::Codex) {
         codex_preflight_report(&agent_home);
     }
@@ -1468,7 +1542,9 @@ pub(crate) fn ensure_codex_approval_rules_for_profile(profile_home: &Path) -> Re
     Ok(inserted)
 }
 
-pub(crate) fn codex_approval_rules_for_profile(profile_home: &Path) -> Result<(PathBuf, Vec<String>)> {
+pub(crate) fn codex_approval_rules_for_profile(
+    profile_home: &Path,
+) -> Result<(PathBuf, Vec<String>)> {
     let rules_path = profile_home
         .join(".codex")
         .join("rules")

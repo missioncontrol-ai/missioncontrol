@@ -114,6 +114,12 @@ mc [--base-url URL] [--token TOKEN] [--agent-id ID] [--allow-insecure] \
 - `mc system doctor [--matrix-endpoint /events/stream] [--matrix-sample-seconds 5] [--fix]` — runs the health, tools, and matrix checks described in `[docs/REAL-TIME.md](../docs/REAL-TIME.md)` and prints a JSON report; `--fix` ensures local directories + agent_id metadata are available for future runs.
 - `mc daemon --matrix-endpoint /events/stream [--fanout-port <port>] [--mqtt-url mqtt://host:1884] [--mqtt-topic missioncontrol/inbox] [--shim-host 127.0.0.1] [--shim-port 8765] [--tools-cache-ttl-sec 60] [--tools-stale-sec 600] [--shim-token <token>]` — keeps an SSE stream alive for the matrix/inbox feed; fan-out and MQTT options replay the telemetry to local dashboards, and the shim API exposes local `/v1/*` control endpoints for MCP shim clients.
 
+### Claude channel bridge
+- `mc channel claude webhook [--listen-host 127.0.0.1] [--listen-port 8788] [--channel-name missioncontrol] [--enable-reply] [--instructions ...] [--debug-protocol]` — runs a Claude-channel MCP server over stdio, accepts inbound webhook `POST /` payloads (`text`/`content` + optional `meta`/`chat_id`) and emits `notifications/claude/channel`; optional `reply` tool writes to local SSE `GET /events` for integration testing.
+- `mc channel claude missioncontrol --session-id <ai_session_id> [--poll-interval-ms 500] [--channel-name missioncontrol] [--instructions ...] [--debug-protocol]` — bridges MissionControl AI session SSE (`/ai/sessions/{id}/stream`) into `notifications/claude/channel` for `user_message` events. Reply tool is intentionally disabled in this mode until a non-looping outbound endpoint is added.
+- `mc launch claude` enables the experimental Claude channel MCP entry (`missioncontrol_channel`) by default. Use `mc launch claude --no-claude-channel` to opt out. Channel entry failures are warning-only and never block launch.
+- Launch logging explicitly prints whether channel MCP setup was enabled (default) or disabled via `--no-claude-channel`.
+
 ## Real-time matrix and swarm integration
 
 The daemon mode connects to `/events/stream` and prints the chunked telemetry that powers the inbox,

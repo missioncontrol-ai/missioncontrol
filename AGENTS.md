@@ -11,3 +11,10 @@
   - `cd backend && uv run --python ../.venv/bin/python -m py_compile app/main.py`
 - Web build check:
   - `cd web && npm run build`
+- Rust `mc` check:
+  - `cd integrations/mc && cargo check -p mc`
+
+## Claude channel defaults (mc)
+- `mc launch claude` now writes the experimental `missioncontrol_channel` MCP entry by default.
+- Opt out with `mc launch claude --no-claude-channel`.
+- Channel entry write failures are warning-only and must never block launch.

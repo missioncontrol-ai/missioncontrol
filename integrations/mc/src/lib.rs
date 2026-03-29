@@ -1,6 +1,7 @@
 pub mod agent_context;
 pub mod auth;
 pub mod booster;
+pub mod channel;
 pub mod client;
 pub mod commands;
 pub mod compat;

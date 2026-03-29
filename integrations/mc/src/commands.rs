@@ -2,6 +2,7 @@ use crate::{
     agent_context::AgentContext,
     auth,
     booster::AgentBooster,
+    channel,
     client::MissionControlClient,
     compat,
     config::McConfig,
@@ -10,8 +11,7 @@ use crate::{
     output::{self, OutputMode},
     remote,
     schema_pack::SchemaPack,
-    secrets,
-    update,
+    secrets, update,
 };
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -85,6 +85,9 @@ pub enum McCommand {
     Init(InitArgs),
     /// Start an MCP server (stdio JSON-RPC 2.0) for LLM runtime connections.
     Serve(mcp_server::ServeMcpArgs),
+    /// Claude channel server integrations.
+    #[command(subcommand)]
+    Channel(channel::ChannelCommand),
     /// Manage MissionControl user profiles.
     #[command(subcommand)]
     Profile(ProfileCommand),
@@ -663,9 +666,13 @@ pub async fn run(
         McCommand::Logs(args) => handle_logs(args, output_mode),
         McCommand::Whoami(_) => auth::whoami(&client).await,
         McCommand::Completion(args) => handle_completion(args),
-        McCommand::Artifact(cmd) => handle_artifact(cmd, client, &booster, &config.schema_pack, output_mode).await,
+        McCommand::Artifact(cmd) => {
+            handle_artifact(cmd, client, &booster, &config.schema_pack, output_mode).await
+        }
         McCommand::Auth(cmd) => handle_auth(cmd, client, &config).await,
-        McCommand::Data(cmd) => handle_data(cmd, client, &booster, &config.schema_pack, output_mode).await,
+        McCommand::Data(cmd) => {
+            handle_data(cmd, client, &booster, &config.schema_pack, output_mode).await
+        }
         McCommand::Admin(cmd) => handle_admin(cmd, client).await,
         McCommand::System(cmd) => handle_system(cmd, client, &config).await,
         McCommand::Agent(cmd) => handle_agent(cmd, client, &booster, &config.schema_pack).await,
@@ -678,6 +685,7 @@ pub async fn run(
         McCommand::Launch(args) => launch::run(args, &client, &config).await,
         McCommand::Init(args) => handle_init(args, client, &config, output_mode).await,
         McCommand::Serve(args) => mcp_server::run(&args, &client).await,
+        McCommand::Channel(cmd) => channel::run(cmd, &client).await,
         McCommand::Profile(cmd) => handle_profile(cmd, client, output_mode).await,
         McCommand::Secrets(cmd) => handle_secrets(cmd, client, output_mode).await,
     }
@@ -803,7 +811,11 @@ fn handle_config(config: &McConfig, output_mode: OutputMode) -> Result<()> {
     Ok(())
 }
 
-async fn handle_use(args: UseArgs, client: MissionControlClient, output_mode: OutputMode) -> Result<()> {
+async fn handle_use(
+    args: UseArgs,
+    client: MissionControlClient,
+    output_mode: OutputMode,
+) -> Result<()> {
     if let Some(profile) = args.profile {
         return handle_profile(ProfileCommand::Use { name: profile }, client, output_mode).await;
     }
@@ -855,10 +867,14 @@ async fn handle_use(args: UseArgs, client: MissionControlClient, output_mode: Ou
     if let Some(label) = args.workspace_label {
         tool_args["workspace_label"] = json!(label);
     }
-    let response = mcp_tools::call_tool(&client, None, None, "load_kluster_workspace", tool_args).await?;
+    let response =
+        mcp_tools::call_tool(&client, None, None, "load_kluster_workspace", tool_args).await?;
     let state = extract_workspace_state(&response);
     save_active_workspace(&state)?;
-    output::print_value(output_mode, &json!({"ok": true, "workspace": state, "lease": response}));
+    output::print_value(
+        output_mode,
+        &json!({"ok": true, "workspace": state, "lease": response}),
+    );
     Ok(())
 }
 
@@ -870,7 +886,10 @@ async fn handle_release(
     let state = load_active_workspace();
     let Some(lease_id) = state.lease_id.clone() else {
         if args.ignore_missing {
-            output::print_value(output_mode, &json!({"ok": true, "released": false, "reason": "no_active_lease"}));
+            output::print_value(
+                output_mode,
+                &json!({"ok": true, "released": false, "reason": "no_active_lease"}),
+            );
             return Ok(());
         }
         anyhow::bail!("no active lease is tracked; nothing to release");
@@ -887,7 +906,10 @@ async fn handle_release(
     )
     .await?;
     clear_active_workspace()?;
-    output::print_value(output_mode, &json!({"ok": true, "released": true, "lease": response}));
+    output::print_value(
+        output_mode,
+        &json!({"ok": true, "released": true, "lease": response}),
+    );
     Ok(())
 }
 
@@ -1007,11 +1029,20 @@ async fn handle_artifact(
                     .map(|s| s.to_string())
                     .context("workspace artifact fetch did not return content_b64")?
             } else {
-                let mut req = client.request_builder(reqwest::Method::GET, &format!("/artifacts/{id}/content"))?;
+                let mut req = client
+                    .request_builder(reqwest::Method::GET, &format!("/artifacts/{id}/content"))?;
                 req = req.header("accept", "*/*");
-                let resp = req.send().await.context("artifact content request failed")?;
-                let resp = resp.error_for_status().context("artifact content request returned error status")?;
-                let bytes = resp.bytes().await.context("failed reading artifact content body")?;
+                let resp = req
+                    .send()
+                    .await
+                    .context("artifact content request failed")?;
+                let resp = resp
+                    .error_for_status()
+                    .context("artifact content request returned error status")?;
+                let bytes = resp
+                    .bytes()
+                    .await
+                    .context("failed reading artifact content body")?;
                 base64::engine::general_purpose::STANDARD.encode(bytes)
             };
             let bytes = base64::engine::general_purpose::STANDARD
@@ -1028,9 +1059,13 @@ async fn handle_artifact(
                     &json!({"ok": true, "artifact_id": id, "written_path": out_path.display().to_string(), "size_bytes": bytes.len(), "mime_type": mime}),
                 );
             } else if is_text_like_mime(mime) {
-                let text = String::from_utf8(bytes).context("artifact appears text-like but is not valid UTF-8; use --out")?;
+                let text = String::from_utf8(bytes)
+                    .context("artifact appears text-like but is not valid UTF-8; use --out")?;
                 if json_output {
-                    output::print_value(output_mode, &json!({"artifact_id": id, "mime_type": mime, "text": text}));
+                    output::print_value(
+                        output_mode,
+                        &json!({"artifact_id": id, "mime_type": mime, "text": text}),
+                    );
                 } else {
                     println!("{text}");
                 }
@@ -1098,19 +1133,27 @@ async fn handle_artifact(
                     .context("artifact content request failed")?
                     .error_for_status()
                     .context("artifact content request returned error status")?;
-                let bytes = resp.bytes().await.context("failed reading artifact content body")?;
+                let bytes = resp
+                    .bytes()
+                    .await
+                    .context("failed reading artifact content body")?;
                 base64::engine::general_purpose::STANDARD.encode(bytes)
             };
             let original_bytes = base64::engine::general_purpose::STANDARD
                 .decode(content_b64)
                 .context("artifact content decode failed")?;
-            let original_text = String::from_utf8(original_bytes.clone())
-                .context("artifact content is not UTF-8 text; use `mc artifact replace --from-file`")?;
+            let original_text = String::from_utf8(original_bytes.clone()).context(
+                "artifact content is not UTF-8 text; use `mc artifact replace --from-file`",
+            )?;
 
             let editor = std::env::var("VISUAL")
                 .ok()
                 .filter(|v| !v.trim().is_empty())
-                .or_else(|| std::env::var("EDITOR").ok().filter(|v| !v.trim().is_empty()))
+                .or_else(|| {
+                    std::env::var("EDITOR")
+                        .ok()
+                        .filter(|v| !v.trim().is_empty())
+                })
                 .unwrap_or_else(|| "vi".to_string());
             let stamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -1133,7 +1176,10 @@ async fn handle_artifact(
             let _ = fs::remove_file(&tmp);
 
             if new_bytes == original_bytes {
-                output::print_value(output_mode, &json!({"ok": true, "artifact_id": id, "changed": false}));
+                output::print_value(
+                    output_mode,
+                    &json!({"ok": true, "artifact_id": id, "changed": false}),
+                );
                 return Ok(());
             }
             let content_b64 = base64::engine::general_purpose::STANDARD.encode(&new_bytes);
@@ -1186,7 +1232,8 @@ async fn handle_artifact(
             }
             let bytes = fs::read(&from_file)
                 .with_context(|| format!("failed reading {}", from_file.display()))?;
-            let resolved_mime = mime.unwrap_or_else(|| infer_mime_from_path(&from_file).to_string());
+            let resolved_mime =
+                mime.unwrap_or_else(|| infer_mime_from_path(&from_file).to_string());
             let content_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
             if let Some(lease_id) = lease_id {
                 // Security guard: ensure provided lease can access this artifact
@@ -1207,7 +1254,10 @@ async fn handle_artifact(
                     &json!({"content_b64": content_b64, "mime_type": resolved_mime}),
                 )
                 .await?;
-            output::print_value(output_mode, &json!({"ok": true, "artifact_id": id, "mode": "direct_update", "artifact": response}));
+            output::print_value(
+                output_mode,
+                &json!({"ok": true, "artifact_id": id, "mode": "direct_update", "artifact": response}),
+            );
         }
     }
     Ok(())
@@ -1278,7 +1328,11 @@ async fn handle_status(
     Ok(())
 }
 
-async fn handle_auth(command: AuthCommand, client: MissionControlClient, config: &McConfig) -> Result<()> {
+async fn handle_auth(
+    command: AuthCommand,
+    client: MissionControlClient,
+    config: &McConfig,
+) -> Result<()> {
     match command {
         AuthCommand::Login(args) => auth::login(args, &client, config.base_url.as_str()).await,
         AuthCommand::Logout(args) => auth::logout(args, &client).await,
@@ -1286,7 +1340,11 @@ async fn handle_auth(command: AuthCommand, client: MissionControlClient, config:
     }
 }
 
-async fn handle_secrets(command: SecretsCommand, client: MissionControlClient, output_mode: OutputMode) -> Result<()> {
+async fn handle_secrets(
+    command: SecretsCommand,
+    client: MissionControlClient,
+    output_mode: OutputMode,
+) -> Result<()> {
     match command {
         SecretsCommand::Status { profile } => {
             let cfg = secrets::load_profile_secrets(profile.trim());
@@ -1303,7 +1361,9 @@ async fn handle_secrets(command: SecretsCommand, client: MissionControlClient, o
             output::print_value(output_mode, &payload);
             Ok(())
         }
-        SecretsCommand::Provider(provider_cmd) => handle_secrets_provider(provider_cmd, output_mode).await,
+        SecretsCommand::Provider(provider_cmd) => {
+            handle_secrets_provider(provider_cmd, output_mode).await
+        }
         SecretsCommand::Get {
             profile,
             name,
@@ -1421,7 +1481,8 @@ async fn handle_secrets(command: SecretsCommand, client: MissionControlClient, o
                 }
                 v
             } else if generator.trim().eq_ignore_ascii_case("hex") {
-                uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string()
+                uuid::Uuid::new_v4().simple().to_string()
+                    + &uuid::Uuid::new_v4().simple().to_string()
             } else {
                 uuid::Uuid::new_v4().to_string() + "-" + &uuid::Uuid::new_v4().to_string()
             };
@@ -1507,7 +1568,10 @@ async fn handle_secrets(command: SecretsCommand, client: MissionControlClient, o
     }
 }
 
-async fn handle_secrets_provider(command: SecretsProviderCommand, output_mode: OutputMode) -> Result<()> {
+async fn handle_secrets_provider(
+    command: SecretsProviderCommand,
+    output_mode: OutputMode,
+) -> Result<()> {
     match command {
         SecretsProviderCommand::Env { profile } => {
             let profile_name = profile.trim();
@@ -1566,7 +1630,9 @@ async fn handle_data(
     output_mode: OutputMode,
 ) -> Result<()> {
     match command {
-        DataCommand::Tools(cmd) => handle_tools(cmd, client, booster, schema_pack, output_mode).await,
+        DataCommand::Tools(cmd) => {
+            handle_tools(cmd, client, booster, schema_pack, output_mode).await
+        }
         DataCommand::Sync(cmd) => handle_sync(cmd, client).await,
         DataCommand::Explorer(cmd) => handle_explorer(cmd, client).await,
     }
@@ -1578,7 +1644,9 @@ async fn handle_system(
     config: &McConfig,
 ) -> Result<()> {
     match command {
-        SystemCommand::Doctor(args) => maintenance::run_doctor_command(&client, config, &args).await,
+        SystemCommand::Doctor(args) => {
+            maintenance::run_doctor_command(&client, config, &args).await
+        }
         SystemCommand::Backup(args) => maintenance::run_backup_command(&client, args).await,
         SystemCommand::ProfileGc(args) => maintenance::run_profile_gc_command(config, args),
         SystemCommand::Update(cmd) => update::run(cmd, config).await,
