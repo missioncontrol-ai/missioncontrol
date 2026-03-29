@@ -8,7 +8,14 @@ from sqlmodel import SQLModel, select
 
 from app.db import engine, get_session
 from app.models import Agent, AgentSession
-from app.routers.hooks import hook_session_start, hook_session_end, hook_tool_audit
+from app.routers.hooks import (
+    hook_codex_session_end,
+    hook_codex_session_start,
+    hook_codex_tool_audit,
+    hook_session_end,
+    hook_session_start,
+    hook_tool_audit,
+)
 
 
 def _request(subject: str):
@@ -143,3 +150,38 @@ class TestHooks(unittest.TestCase):
             ).first()
         lines = [l for l in sess.audit_log.strip().splitlines() if l]
         self.assertEqual(len(lines), 2)
+
+    # ── codex hooks parity ──────────────────────────────────────────────────
+
+    def test_codex_session_lifecycle_and_audit(self):
+        payload = {"session_id": "codex-sess-1", "source": "startup"}
+        result = hook_codex_session_start(payload, _request("codex@test.com"))
+        self.assertIn("codex-sess-1", result)
+        self.assertIn("codex@test.com", result)
+
+        hook_codex_tool_audit(
+            {
+                "session_id": "codex-sess-1",
+                "tool_name": "claim_task",
+                "tool_input": {"task_id": "t-1"},
+            },
+            _request("codex@test.com"),
+        )
+
+        with get_session() as db:
+            agent = db.exec(select(Agent).where(Agent.name == "codex@test.com")).first()
+            sess = db.exec(
+                select(AgentSession).where(AgentSession.claude_session_id == "codex-sess-1")
+            ).first()
+
+        self.assertIsNotNone(agent)
+        self.assertEqual(agent.capabilities, "codex-sdk")
+        self.assertIsNotNone(sess)
+        self.assertIn("claim_task", sess.audit_log)
+        self.assertIn("codex-sdk", sess.audit_log)
+
+        end_result = hook_codex_session_end(
+            {"session_id": "codex-sess-1", "source": "shutdown"},
+            _request("codex@test.com"),
+        )
+        self.assertEqual(end_result, {"ok": True})
