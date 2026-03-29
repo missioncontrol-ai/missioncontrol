@@ -427,7 +427,9 @@ fn perform_repairs(config: &McConfig) -> Vec<DoctorRepair> {
         .profile_name
         .clone()
         .unwrap_or_else(|| "default".to_string());
-    let profile_home = crate::config::mc_home_dir().join("profiles").join(&profile_name);
+    let profile_home = crate::config::mc_home_dir()
+        .join("profiles")
+        .join(&profile_name);
     match crate::launch::ensure_codex_approval_rules_for_profile(&profile_home) {
         Ok(inserted) => repairs.push(DoctorRepair::ok(
             "codex_approval_rules",
@@ -458,7 +460,9 @@ fn run_codex_approval_rules_check(config: &McConfig) -> DoctorCheck {
         .profile_name
         .clone()
         .unwrap_or_else(|| "default".to_string());
-    let profile_home = crate::config::mc_home_dir().join("profiles").join(&profile_name);
+    let profile_home = crate::config::mc_home_dir()
+        .join("profiles")
+        .join(&profile_name);
     let start = std::time::Instant::now();
     match crate::launch::codex_approval_rules_for_profile(&profile_home) {
         Ok((rules_path, missing)) => {
@@ -483,8 +487,7 @@ fn run_codex_approval_rules_check(config: &McConfig) -> DoctorCheck {
                     duration_ms: start.elapsed().as_millis(),
                     payload: Some(json!({"rules_path": rules_path, "missing": missing})),
                     repair_hint: Some(
-                        "Run `mc doctor --fix` or `mc launch codex` to seed rules"
-                            .into(),
+                        "Run `mc doctor --fix` or `mc launch codex` to seed rules".into(),
                     ),
                 }
             }
