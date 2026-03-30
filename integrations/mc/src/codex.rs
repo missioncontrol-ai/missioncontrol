@@ -87,6 +87,7 @@ struct CodexDoctorIssue {
 struct CodexDoctorReport {
     tool: String,
     profile: String,
+    auth_mode: String,
     ready: bool,
     fixable: bool,
     repaired: bool,
@@ -334,22 +335,13 @@ fn inspect_profile(profile: &str, config: &McConfig, repair: bool) -> Result<Cod
         }
     }
 
-    let has_auth_file = paths.runtime_home.join("auth.json").exists()
-        || paths.runtime_home.join("credentials.json").exists();
-    let has_api_key = std::env::var("OPENAI_API_KEY")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .is_some()
-        || std::env::var("CODEX_API_KEY")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .is_some();
-
-    if !has_auth_file && !has_api_key {
+    // OAuth-first default: rely on native Codex login status instead of API-key checks.
+    // This supports both file-backed and keyring-backed auth under CODEX_HOME.
+    if !is_codex_login_available(&paths.runtime_home, profile)? {
         issues.push(issue(
             "AUTH_STATE_MISSING",
             "error",
-            "no Codex auth detected in profile home and no API key env present",
+            "codex is not authenticated for this profile; run `CODEX_HOME=<profile-home> codex login`",
             false,
         ));
         has_unfixable = true;
@@ -378,6 +370,7 @@ fn inspect_profile(profile: &str, config: &McConfig, repair: bool) -> Result<Cod
     Ok(CodexDoctorReport {
         tool: "codex".to_string(),
         profile: profile.to_string(),
+        auth_mode: "chatgpt_native".to_string(),
         ready,
         fixable,
         repaired,
@@ -386,6 +379,18 @@ fn inspect_profile(profile: &str, config: &McConfig, repair: bool) -> Result<Cod
         repaired_actions,
         suggested_command: format!("mc codex doctor {} --fix", profile),
     })
+}
+
+fn is_codex_login_available(runtime_home: &Path, profile: &str) -> Result<bool> {
+    let mut cmd = std::process::Command::new("codex");
+    cmd.arg("login")
+        .arg("status")
+        .env("CODEX_HOME", runtime_home)
+        .env("MC_AGENT_PROFILE", profile);
+    let status = cmd
+        .status()
+        .context("failed to execute `codex login status`")?;
+    Ok(status.success())
 }
 
 fn issue(code: &str, severity: &str, detail: &str, fixable: bool) -> CodexDoctorIssue {

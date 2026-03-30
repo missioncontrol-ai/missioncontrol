@@ -197,7 +197,6 @@ async fn run_doctor(
     let checks = vec![
         run_health_check(client).await,
         run_tools_check(client).await,
-        run_codex_approval_rules_check(config),
         run_matrix_check(
             client,
             &args.matrix_endpoint,
@@ -422,86 +421,7 @@ fn perform_repairs(config: &McConfig) -> Vec<DoctorRepair> {
             "Agent ID already configured".into(),
         ));
     }
-    let profile_name = config
-        .agent_context
-        .profile_name
-        .clone()
-        .unwrap_or_else(|| "default".to_string());
-    let profile_home = crate::config::mc_home_dir()
-        .join("profiles")
-        .join(&profile_name);
-    match crate::launch::ensure_codex_approval_rules_for_profile(&profile_home) {
-        Ok(inserted) => repairs.push(DoctorRepair::ok(
-            "codex_approval_rules",
-            if inserted > 0 {
-                format!(
-                    "Seeded {} codex approval rules at {}",
-                    inserted,
-                    profile_home.join(".codex/rules/default.rules").display()
-                )
-            } else {
-                format!(
-                    "Codex approval rules already present at {}",
-                    profile_home.join(".codex/rules/default.rules").display()
-                )
-            },
-        )),
-        Err(err) => repairs.push(DoctorRepair::failed(
-            "codex_approval_rules",
-            err.to_string(),
-        )),
-    }
     repairs
-}
-
-fn run_codex_approval_rules_check(config: &McConfig) -> DoctorCheck {
-    let profile_name = config
-        .agent_context
-        .profile_name
-        .clone()
-        .unwrap_or_else(|| "default".to_string());
-    let profile_home = crate::config::mc_home_dir()
-        .join("profiles")
-        .join(&profile_name);
-    let start = std::time::Instant::now();
-    match crate::launch::codex_approval_rules_for_profile(&profile_home) {
-        Ok((rules_path, missing)) => {
-            if missing.is_empty() {
-                DoctorCheck {
-                    name: "codex_approval_rules".into(),
-                    ok: true,
-                    detail: format!("codex approval rules present at {}", rules_path.display()),
-                    duration_ms: start.elapsed().as_millis(),
-                    payload: Some(json!({"rules_path": rules_path, "missing": []})),
-                    repair_hint: None,
-                }
-            } else {
-                DoctorCheck {
-                    name: "codex_approval_rules".into(),
-                    ok: false,
-                    detail: format!(
-                        "{} required codex approval rules missing at {}",
-                        missing.len(),
-                        rules_path.display()
-                    ),
-                    duration_ms: start.elapsed().as_millis(),
-                    payload: Some(json!({"rules_path": rules_path, "missing": missing})),
-                    repair_hint: Some(
-                        "Run `mc doctor --fix` or `mc codex doctor <profile> --fix` to seed rules"
-                            .into(),
-                    ),
-                }
-            }
-        }
-        Err(err) => DoctorCheck {
-            name: "codex_approval_rules".into(),
-            ok: false,
-            detail: err.to_string(),
-            duration_ms: start.elapsed().as_millis(),
-            payload: None,
-            repair_hint: Some("Ensure profile directories are writable".into()),
-        },
-    }
 }
 
 #[derive(serde::Serialize)]

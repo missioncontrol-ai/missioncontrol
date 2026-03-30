@@ -1578,28 +1578,6 @@ pub(crate) fn ensure_codex_approval_rules_for_profile(profile_home: &Path) -> Re
     Ok(inserted)
 }
 
-pub(crate) fn codex_approval_rules_for_profile(
-    profile_home: &Path,
-) -> Result<(PathBuf, Vec<String>)> {
-    let rules_path = profile_home
-        .join(".codex")
-        .join("rules")
-        .join("default.rules");
-    if !rules_path.exists() {
-        return Ok((
-            rules_path,
-            CODEX_APPROVAL_RULES.iter().map(|s| s.to_string()).collect(),
-        ));
-    }
-    let content = fs::read_to_string(&rules_path)?;
-    let missing = CODEX_APPROVAL_RULES
-        .iter()
-        .filter(|rule| !content.contains(**rule))
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>();
-    Ok((rules_path, missing))
-}
-
 fn should_force_profile_refresh(rel: &str) -> bool {
     matches!(
         rel,
