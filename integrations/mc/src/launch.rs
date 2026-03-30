@@ -37,33 +37,6 @@ use std::{
 };
 use uuid::Uuid;
 
-const CODEX_APPROVAL_RULES: &[&str] = &[
-    // Primary allowlist: approve the entire Mission Control CLI tree.
-    r#"prefix_rule(pattern=["mc"], decision="allow")"#,
-    // Common absolute invocation path on developer workstations.
-    r#"prefix_rule(pattern=["/home/merlin/.local/bin/mc"], decision="allow")"#,
-    // Shell-wrapper invocation forms used by Codex runtimes.
-    r#"prefix_rule(pattern=["zsh", "-lc", "mc"], decision="allow")"#,
-    r#"prefix_rule(pattern=["/usr/bin/zsh", "-lc", "mc"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "whoami"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "auth"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "data"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "data", "tools", "call"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "data", "tools"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "data", "sync"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "data", "explorer"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "admin"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "system"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "agent"], decision="allow")"#,
-    // Legacy compatibility: older assistants may still emit pre-cutover paths.
-    r#"prefix_rule(pattern=["mc", "explorer"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "tools"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "profile"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "approvals"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "workspace"], decision="allow")"#,
-    r#"prefix_rule(pattern=["mc", "tools", "call"], decision="allow")"#,
-];
-
 // ── CLI args ────────────────────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
@@ -139,12 +112,14 @@ enum AgentKind {
 impl AgentKind {
     fn driver(&self) -> Box<dyn AgentDriver> {
         match self {
-            AgentKind::Codex => Box::new(CodexDriver),
+            AgentKind::Codex => unreachable!("codex is handled as a migration shim in mc launch"),
             AgentKind::Claude => Box::new(ClaudeDriver),
             AgentKind::Gemini => Box::new(GeminiDriver),
             AgentKind::Openclaw => Box::new(OpenClawDriver),
             AgentKind::Custom => Box::new(CustomDriver),
-            AgentKind::Resume => Box::new(CodexDriver),
+            AgentKind::Resume => {
+                unreachable!("resume is handled as a migration shim in mc launch")
+            }
         }
     }
 
@@ -191,178 +166,6 @@ trait AgentDriver {
     ) -> Result<()>;
     /// Build the Command to exec (binary + required flags).
     fn command(&self, extra_args: &[String], target_mc_home: &Path) -> std::process::Command;
-}
-
-// ── CodexDriver ──────────────────────────────────────────────────────────────
-
-struct CodexDriver;
-
-/// Sentinel comment that guards the MCP stanza for idempotency.
-const CODEX_MC_MARKER: &str = "# mc-launch: missioncontrol";
-
-impl AgentDriver for CodexDriver {
-    fn binary(&self) -> &str {
-        "codex"
-    }
-
-    fn install_hint(&self) -> &str {
-        "npm install -g @openai/codex"
-    }
-
-    fn install_config(
-        &self,
-        _staging_dir: &Path,
-        base_url: &str,
-        token: &str,
-        embed_token: bool,
-        target_home: &Path,
-        _target_mc_home: &Path,
-    ) -> Result<()> {
-        let config_path = target_home.join(".codex").join("config.toml");
-
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let existing = if config_path.exists() {
-            std::fs::read_to_string(&config_path)?
-        } else {
-            String::new()
-        };
-
-        let new_stanza = render_codex_stanza(base_url, token, embed_token);
-
-        // Detect existing missioncontrol section: either via our marker comment
-        // or the raw TOML key (handles configs written before the marker existed).
-        let has_marker = existing.contains(CODEX_MC_MARKER);
-        let has_key = existing.contains("[mcp_servers.missioncontrol]");
-
-        if has_marker || has_key {
-            // Extract current section and compare to what we'd write.
-            let current_section = extract_codex_mc_section(&existing);
-            if current_section.trim() == new_stanza.trim() {
-                mc_ok!("codex MCP config is up to date");
-                return Ok(());
-            }
-            // Config differs — prompt user to replace.
-            eprint!(
-                "{}⚑{} [mcp_servers.missioncontrol] differs from current template. Replace? [y/N] ",
-                crate::ui::YELLOW,
-                crate::ui::RESET
-            );
-            std::io::stderr().flush()?;
-            let mut answer = String::new();
-            std::io::stdin().read_line(&mut answer)?;
-            if !answer.trim().eq_ignore_ascii_case("y") {
-                mc_info!("keeping existing codex MCP config");
-                return Ok(());
-            }
-            // Remove the existing section (and its marker comment if present).
-            let cleaned = remove_codex_mc_section(&existing);
-            std::fs::write(&config_path, &cleaned)?;
-        }
-
-        let current = std::fs::read_to_string(&config_path).unwrap_or_default();
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&config_path)?;
-
-        if !current.is_empty() && !current.ends_with('\n') {
-            writeln!(file)?;
-        }
-        writeln!(file)?;
-        write!(file, "{}", new_stanza)?;
-        mc_ok!("codex MCP config written → {}", config_path.display());
-        Ok(())
-    }
-
-    fn command(&self, extra_args: &[String], _target_mc_home: &Path) -> std::process::Command {
-        let mut cmd = std::process::Command::new("codex");
-        cmd.args(extra_args);
-        cmd
-    }
-}
-
-fn render_codex_stanza(base_url: &str, token: &str, embed_token: bool) -> String {
-    let tmpl = include_str!("../../../distribution/templates/codex.mcp.toml.tmpl");
-    let rendered = tmpl.replace("__BASE_URL__", base_url);
-    // For the TOML inline table the token entry is `, MC_TOKEN = "__TOKEN__"`.
-    // When not embedding, strip it entirely so the agent reads from env.
-    let rendered = if embed_token {
-        rendered.replace("__TOKEN__", token)
-    } else {
-        rendered.replace(", MC_TOKEN = \"__TOKEN__\"", "")
-    };
-    format!("{}\n{}\n", CODEX_MC_MARKER, rendered)
-}
-
-/// Extract the missioncontrol MCP section lines from a codex config.toml string
-/// (including the marker comment if present), for comparison purposes.
-fn extract_codex_mc_section(content: &str) -> String {
-    let mut out = Vec::new();
-    let mut in_mc_section = false;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-
-        if trimmed == CODEX_MC_MARKER || trimmed == "[mcp_servers.missioncontrol]" {
-            in_mc_section = true;
-        }
-
-        if in_mc_section {
-            if trimmed.starts_with('[')
-                && trimmed != CODEX_MC_MARKER
-                && !trimmed.starts_with("[mcp_servers.missioncontrol")
-            {
-                break;
-            }
-            out.push(line);
-        }
-    }
-
-    out.join("\n")
-}
-
-/// Remove all lines belonging to the missioncontrol MCP section from a codex
-/// config.toml string. Handles both marker-prefixed stanzas (written by mc
-/// launch) and bare `[mcp_servers.missioncontrol]` sections written by hand or
-/// older tool versions.
-///
-/// The section is considered to end at the next `[` header or EOF.
-fn remove_codex_mc_section(content: &str) -> String {
-    let mut out = Vec::new();
-    let mut in_mc_section = false;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-
-        // Start of our section: the marker comment or the TOML key itself.
-        if trimmed == CODEX_MC_MARKER || trimmed == "[mcp_servers.missioncontrol]" {
-            in_mc_section = true;
-            continue;
-        }
-
-        if in_mc_section {
-            // A new section header ends the missioncontrol section.
-            if trimmed.starts_with('[') {
-                in_mc_section = false;
-            } else {
-                continue; // drop lines inside the old section
-            }
-        }
-
-        out.push(line);
-    }
-
-    // Trim trailing blank lines left behind, then ensure single trailing newline.
-    let joined = out.join("\n");
-    let trimmed_end = joined.trim_end_matches('\n');
-    if trimmed_end.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", trimmed_end)
-    }
 }
 
 // ── ClaudeDriver ─────────────────────────────────────────────────────────────
@@ -974,20 +777,13 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     if matches!(selected_agent, AgentKind::Codex | AgentKind::Resume) {
         bail!("`mc launch codex` has been replaced. Use `mc codex run <profile>`.");
     }
-    let want_resume = !args.new_session
-        && (args.resume
-            || args.session_id.is_some()
-            || matches!(args.agent, Some(AgentKind::Resume)));
+    let want_resume = !args.new_session && (args.resume || args.session_id.is_some());
     let base_mc_home = mc_home_dir();
     fs::create_dir_all(&base_mc_home)?;
 
     let profile_name = resolve_profile_name(
         &args.profile,
-        if matches!(selected_agent, AgentKind::Resume) {
-            None
-        } else {
-            Some(selected_agent.config_key())
-        },
+        Some(selected_agent.config_key()),
         client,
     )
     .await
@@ -1215,9 +1011,6 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     } else if matches!(selected_agent, AgentKind::Claude) && args.no_claude_channel {
         mc_info!("claude launch: experimental channel MCP entry disabled (--no-claude-channel)");
     }
-    if matches!(selected_agent, AgentKind::Codex) {
-        codex_preflight_report(&agent_home);
-    }
     if matches!(selected_agent, AgentKind::Claude) {
         claude_preflight_report(&agent_home);
     }
@@ -1293,37 +1086,6 @@ fn claude_preflight_report(agent_home: &Path) {
         mc_warn!("claude preflight: {}", line);
     }
     mc_warn!("claude may prompt for theme/login if these are not initialized for this profile");
-}
-
-fn codex_preflight_report(agent_home: &Path) {
-    let checks = [
-        (
-            agent_home.join(".codex").join("config.toml"),
-            "Codex config (.codex/config.toml)",
-        ),
-        (
-            agent_home.join(".codex").join("auth.json"),
-            "Codex auth (.codex/auth.json)",
-        ),
-        (
-            agent_home.join(".codex").join("credentials.json"),
-            "Codex credentials (.codex/credentials.json)",
-        ),
-    ];
-    let mut missing: Vec<String> = Vec::new();
-    for (path, label) in checks {
-        if !path.exists() {
-            missing.push(format!("{} missing at {}", label, path.display()));
-        }
-    }
-    if missing.is_empty() {
-        mc_info!("codex preflight: auth/settings artifacts detected");
-        return;
-    }
-    for line in missing {
-        mc_warn!("codex preflight: {}", line);
-    }
-    mc_warn!("codex may prompt for login if auth artifacts are not initialized for this profile");
 }
 
 /// Verify MCP backend connectivity and tool availability before exec.
@@ -1429,9 +1191,7 @@ fn resolve_embed_token(no_embed_flag: bool, token: &str) -> bool {
 
 fn resolve_agent_choice(agent: Option<AgentKind>) -> Result<AgentKind> {
     if let Some(kind) = agent {
-        if !matches!(kind, AgentKind::Resume) {
-            return Ok(kind);
-        }
+        return Ok(kind);
     }
     eprint!("mc launch: choose agent [gemini/openclaw/custom] (default gemini): ");
     io::stderr().flush()?;
@@ -1446,12 +1206,6 @@ fn resolve_agent_choice(agent: Option<AgentKind>) -> Result<AgentKind> {
 
 fn managed_config_relpaths(agent: &AgentKind) -> &'static [&'static str] {
     match agent {
-        AgentKind::Codex => &[
-            ".codex/config.toml",
-            ".codex/auth.json",
-            ".codex/credentials.json",
-            ".codex/rules",
-        ],
         AgentKind::Claude => &[
             ".claude.json",
             ".claude/.credentials.json",
@@ -1469,16 +1223,6 @@ fn initialize_profile_overlay(
     profile_home: &Path,
     global_home: &Path,
 ) -> Result<()> {
-    if matches!(agent, AgentKind::Codex) {
-        let inserted = ensure_codex_approval_rules_for_profile(profile_home)?;
-        if inserted > 0 {
-            mc_info!(
-                "seeded {} codex approval rules at {}",
-                inserted,
-                profile_home.join(".codex/rules/default.rules").display()
-            );
-        }
-    }
     for rel in managed_config_relpaths(agent) {
         let profile_path = profile_home.join(rel);
         let global_path = global_home.join(rel);
@@ -1549,42 +1293,10 @@ fn initialize_profile_overlay(
     Ok(())
 }
 
-pub(crate) fn ensure_codex_approval_rules_for_profile(profile_home: &Path) -> Result<usize> {
-    let rules_dir = profile_home.join(".codex").join("rules");
-    fs::create_dir_all(&rules_dir)?;
-    let rules_path = rules_dir.join("default.rules");
-    let existing = if rules_path.exists() {
-        fs::read_to_string(&rules_path)?
-    } else {
-        String::new()
-    };
-    let mut appended = String::new();
-    let mut inserted: usize = 0;
-    for rule in CODEX_APPROVAL_RULES {
-        if !existing.contains(rule) {
-            appended.push_str(rule);
-            appended.push('\n');
-            inserted += 1;
-        }
-    }
-    if inserted > 0 {
-        let mut content = existing;
-        if !content.is_empty() && !content.ends_with('\n') {
-            content.push('\n');
-        }
-        content.push_str(&appended);
-        fs::write(&rules_path, content)?;
-    }
-    Ok(inserted)
-}
-
 fn should_force_profile_refresh(rel: &str) -> bool {
     matches!(
         rel,
-        ".codex/auth.json"
-            | ".codex/credentials.json"
-            | ".claude.json"
-            | ".claude/.credentials.json"
+        ".claude.json" | ".claude/.credentials.json"
             | ".claude/settings.json"
     )
 }
@@ -1677,8 +1389,9 @@ fn merge_missing_dir_entries(src: &Path, dst: &Path) -> Result<usize> {
 
 fn parse_agent_kind(value: &str) -> Result<AgentKind> {
     match value.trim().to_lowercase().as_str() {
-        "codex" => Ok(AgentKind::Codex),
+        "codex" => bail!("`mc launch codex` has been replaced. Use `mc codex run <profile>`."),
         "claude" => bail!("`mc launch claude` has been replaced. Use `mc claude run <profile>`."),
+        "resume" => bail!("`mc launch resume` has been removed. Use `mc codex run <profile>`."),
         "gemini" => Ok(AgentKind::Gemini),
         "openclaw" => Ok(AgentKind::Openclaw),
         "custom" | "nanoclaw" => Ok(AgentKind::Custom),
@@ -2094,29 +1807,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_config_writes_to_target_home() {
-        let tmp = tempdir().expect("tempdir");
-        let target_home = tmp.path().join("agent-home");
-        let target_mc_home = tmp.path().join("mc-home");
-        fs::create_dir_all(&target_home).expect("target_home");
-        fs::create_dir_all(&target_mc_home).expect("target_mc_home");
-
-        let driver = CodexDriver;
-        driver
-            .install_config(
-                tmp.path(),
-                "http://localhost:8008",
-                "tok",
-                true,
-                &target_home,
-                &target_mc_home,
-            )
-            .expect("install codex config");
-
-        assert!(target_home.join(".codex/config.toml").exists());
-    }
-
-    #[test]
     fn claude_config_writes_to_target_home() {
         let tmp = tempdir().expect("tempdir");
         let target_home = tmp.path().join("agent-home");
@@ -2270,79 +1960,4 @@ mod tests {
         );
     }
 
-    #[test]
-    #[cfg(unix)]
-    fn overlay_seeds_codex_auth_files_and_links_instance() {
-        let tmp = tempdir().expect("tempdir");
-        let global_home = tmp.path().join("global-home");
-        let profile_home = tmp.path().join("profile-home");
-        let agent_home = tmp.path().join("agent-home");
-        fs::create_dir_all(global_home.join(".codex")).expect("global codex dir");
-        fs::create_dir_all(&profile_home).expect("profile home");
-        fs::create_dir_all(&agent_home).expect("agent home");
-
-        fs::write(
-            global_home.join(".codex").join("auth.json"),
-            r#"{"provider":"openai"}"#,
-        )
-        .expect("write auth");
-        fs::write(
-            global_home.join(".codex").join("credentials.json"),
-            r#"{"key":"secret-ref"}"#,
-        )
-        .expect("write creds");
-
-        initialize_profile_overlay(&AgentKind::Codex, &agent_home, &profile_home, &global_home)
-            .expect("initialize profile overlay");
-
-        assert!(
-            profile_home.join(".codex").join("auth.json").exists(),
-            "codex auth should be seeded"
-        );
-        assert!(
-            profile_home
-                .join(".codex")
-                .join("credentials.json")
-                .exists(),
-            "codex credentials should be seeded"
-        );
-        let instance_auth = agent_home.join(".codex").join("auth.json");
-        let meta = fs::symlink_metadata(&instance_auth).expect("instance auth metadata");
-        assert!(
-            meta.file_type().is_symlink(),
-            "instance auth should be symlink"
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn overlay_refreshes_stale_profile_codex_auth_from_global() {
-        let tmp = tempdir().expect("tempdir");
-        let global_home = tmp.path().join("global-home");
-        let profile_home = tmp.path().join("profile-home");
-        let agent_home = tmp.path().join("agent-home");
-        fs::create_dir_all(global_home.join(".codex")).expect("global codex dir");
-        fs::create_dir_all(profile_home.join(".codex")).expect("profile codex dir");
-        fs::create_dir_all(&agent_home).expect("agent home");
-
-        fs::write(
-            global_home.join(".codex").join("auth.json"),
-            r#"{"refresh":"fresh"}"#,
-        )
-        .expect("write global auth");
-        fs::write(
-            profile_home.join(".codex").join("auth.json"),
-            r#"{"refresh":"stale"}"#,
-        )
-        .expect("write stale profile auth");
-
-        initialize_profile_overlay(&AgentKind::Codex, &agent_home, &profile_home, &global_home)
-            .expect("initialize profile overlay");
-
-        assert_eq!(
-            fs::read_to_string(profile_home.join(".codex").join("auth.json"))
-                .expect("read profile auth"),
-            r#"{"refresh":"fresh"}"#
-        );
-    }
 }
