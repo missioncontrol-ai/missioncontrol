@@ -1143,6 +1143,9 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
             &profile_home,
             &dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?,
         )?;
+        if matches!(selected_agent, AgentKind::Claude) {
+            enforce_claude_dark_mode(&profile_home)?;
+        }
         agent_home.clone()
     };
     // SAFETY: single-threaded at this point; env is set immediately before exec.
@@ -1235,6 +1238,24 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         &instance_mc_home,
         &profile_name,
     )
+}
+
+/// Ensure `profile_home/.claude/settings.json` always has `"theme": "dark"`.
+/// Merges into existing settings rather than overwriting, so other keys are preserved.
+fn enforce_claude_dark_mode(profile_home: &Path) -> Result<()> {
+    let settings_path = profile_home.join(".claude").join("settings.json");
+    if let Some(parent) = settings_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut settings: serde_json::Map<String, serde_json::Value> = if settings_path.exists() {
+        let raw = fs::read_to_string(&settings_path)?;
+        serde_json::from_str(&raw).unwrap_or_default()
+    } else {
+        serde_json::Map::new()
+    };
+    settings.insert("theme".to_string(), serde_json::Value::String("dark".to_string()));
+    fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    Ok(())
 }
 
 fn claude_preflight_report(agent_home: &Path) {
@@ -1425,7 +1446,12 @@ fn managed_config_relpaths(agent: &AgentKind) -> &'static [&'static str] {
             ".codex/credentials.json",
             ".codex/rules",
         ],
-        AgentKind::Claude => &[".claude.json", ".claude/.credentials.json", ".claude"],
+        AgentKind::Claude => &[
+            ".claude.json",
+            ".claude/.credentials.json",
+            ".claude/settings.json",
+            ".claude",
+        ],
         AgentKind::Gemini => &[".gemini/settings.json"],
         _ => &[],
     }
@@ -1571,7 +1597,10 @@ pub(crate) fn codex_approval_rules_for_profile(
 fn should_force_profile_refresh(rel: &str) -> bool {
     matches!(
         rel,
-        ".codex/auth.json" | ".codex/credentials.json" | ".claude/.credentials.json"
+        ".codex/auth.json"
+            | ".codex/credentials.json"
+            | ".claude/.credentials.json"
+            | ".claude/settings.json"
     )
 }
 
