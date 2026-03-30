@@ -4,6 +4,7 @@ pub mod booster;
 pub mod channel;
 pub mod claude;
 pub mod client;
+pub mod codex;
 pub mod commands;
 pub mod compat;
 pub mod config;

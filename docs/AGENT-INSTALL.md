@@ -33,13 +33,13 @@ MC_TOKEN="<your-token>" mc auth login   # saves ~/.missioncontrol/session.json
 
 ```bash
 mc claude run default   # Claude Code
-mc launch codex         # OpenAI Codex CLI
+mc codex run default    # OpenAI Codex CLI
 mc launch gemini        # Google Gemini CLI
 mc launch openclaw      # OpenClaw
 mc launch custom        # Custom ACP agent
 ```
 
-That's it. `mc launch` handles: auth preflight, config generation, and exec.
+That's it. `mc claude run` / `mc codex run` are the primary paths for Claude/Codex. `mc launch` remains for gemini/openclaw/custom.
 
 ---
 
@@ -53,7 +53,7 @@ That's it. `mc launch` handles: auth preflight, config generation, and exec.
 6. Injects `MC_TOKEN` into the agent's process environment
 7. exec's the agent
 
-## `mc launch` flags (non-Claude agents)
+## `mc launch` flags (non-Claude/Codex agents)
 
 | Flag | Effect |
 |---|---|
@@ -69,7 +69,6 @@ That's it. `mc launch` handles: auth preflight, config generation, and exec.
 
 | Agent | Config written by `mc launch` |
 |---|---|
-| Codex | `~/.missioncontrol/instances/<runtime_session_id>/home/.codex/config.toml` |
 | Gemini CLI | `~/.missioncontrol/instances/<runtime_session_id>/home/.gemini/settings.json` |
 | OpenClaw | `~/.missioncontrol/instances/<runtime_session_id>/mc/config/openclaw.acp.json` |
 | Custom ACP agent | `~/.missioncontrol/instances/<runtime_session_id>/mc/config/custom.acp.json` |
@@ -115,7 +114,7 @@ MC_TOKEN="<static-token>" mc auth login
 
 # From now on — no MC_TOKEN needed in env
 mc claude run default   # session loaded from ~/.missioncontrol/session.json
-mc launch codex    # token injected into agent process at exec, not written to config
+mc codex run default # token injected into agent process at exec, not written to config
 mc auth whoami          # verify identity
 mc auth logout          # revoke when done
 ```
@@ -138,7 +137,7 @@ export MC_TOKEN="$(get-oidc-token)"
 mc claude run default
 ```
 
-**Token embedding rules in `mc launch` (non-Claude agents):**
+**Token embedding rules in `mc launch` (non-Claude/Codex agents):**
 - Session tokens (`mcs_*`) → never embedded, always injected at exec time
 - `--no-embed-token` flag → never embedded
 - `MC_TOKEN` absent → never embedded (auto-implied, notice printed)
@@ -268,7 +267,7 @@ mc data sync status --mission-id <mission-id> --kluster-id <optional-kluster-id>
 | Session token (`mcs_*`) | DB-backed, revocable, expiring | Interactive use, OIDC users |
 | OIDC JWT | Short-lived, identity-bound | SSO/Authentik environments |
 
-All auth types work with `mc launch`. Session tokens are always injected into the agent process at exec time rather than written to config files.
+All auth types work with `mc launch` for gemini/openclaw/custom. Codex/Claude use the dedicated command families.
 
 ## Troubleshooting: Startup Timeout
 

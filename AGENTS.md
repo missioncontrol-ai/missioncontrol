@@ -15,6 +15,6 @@
   - `cd integrations/mc && cargo check -p mc`
 
 ## Claude channel defaults (mc)
-- `mc launch claude` now writes the experimental `missioncontrol_channel` MCP entry by default.
-- Opt out with `mc launch claude --no-claude-channel`.
-- Channel entry write failures are warning-only and must never block launch.
+- Claude now uses the dedicated command family: `mc claude run|doctor|exec`.
+- Codex now uses the dedicated command family: `mc codex run|doctor|exec`.
+- `mc launch claude` and `mc launch codex` are cut over and no longer the primary path.

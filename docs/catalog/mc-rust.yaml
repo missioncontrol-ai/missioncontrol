@@ -22,10 +22,10 @@ entrypoints:
   run:
     - command: mc daemon
       purpose: Start local mc daemon (SSE fan-out, tool dispatch)
-    - command: mc launch claude
-      purpose: Launch Claude Code agent with mc integration
-    - command: mc launch codex
-      purpose: Launch Codex agent with mc integration
+    - command: mc claude run default
+      purpose: Launch Claude Code in a prepared profile runtime
+    - command: mc codex run default
+      purpose: Launch Codex in a prepared profile runtime
   verify:
     - command: mc system doctor
       purpose: Health check (backend connectivity, token, daemon)
@@ -41,7 +41,7 @@ interfaces:
     - mc auth whoami
     - mc auth logout
     - mc daemon
-    - mc launch <agent>
+    - mc launch <agent>   # gemini/openclaw/custom legacy launch surface
     - mc data tools list
     - mc data tools call <tool> <args>
     - mc data sync status
@@ -69,7 +69,7 @@ implemented:
   - profile management (list/use/push/pull/delete)
   - atomic symlink swap for profile activation (~/.missioncontrol/profiles/active)
   - mc system doctor health diagnostics
-  - env file loading on mc launch
+  - env file loading on mc launch (legacy launch surface)
 
 gaps:
   - mc binary not checked into repo (installed separately via scripts/install-mc.sh)

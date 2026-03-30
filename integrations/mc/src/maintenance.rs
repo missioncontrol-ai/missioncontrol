@@ -2,7 +2,7 @@ use crate::{client::MissionControlClient, config::McConfig};
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 use reqwest::Method;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fmt;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -315,7 +315,7 @@ async fn run_matrix_check(
                 duration_ms: start.elapsed().as_millis(),
                 payload: None,
                 repair_hint: Some("Invalid matrix endpoint; update --matrix-endpoint".into()),
-            }
+            };
         }
     };
     let response = match timeout(
@@ -350,7 +350,7 @@ async fn run_matrix_check(
                 duration_ms: start.elapsed().as_millis(),
                 payload: None,
                 repair_hint: Some("Verify the server is reachable and emitting events".into()),
-            }
+            };
         }
     };
     let status = response.status();
@@ -487,7 +487,8 @@ fn run_codex_approval_rules_check(config: &McConfig) -> DoctorCheck {
                     duration_ms: start.elapsed().as_millis(),
                     payload: Some(json!({"rules_path": rules_path, "missing": missing})),
                     repair_hint: Some(
-                        "Run `mc doctor --fix` or `mc launch codex` to seed rules".into(),
+                        "Run `mc doctor --fix` or `mc codex doctor <profile> --fix` to seed rules"
+                            .into(),
                     ),
                 }
             }

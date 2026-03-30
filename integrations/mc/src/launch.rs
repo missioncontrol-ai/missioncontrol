@@ -68,8 +68,8 @@ const CODEX_APPROVAL_RULES: &[&str] = &[
 
 #[derive(Args, Debug)]
 pub struct LaunchArgs {
-    /// Agent to launch: codex, gemini, openclaw, custom, resume
-    /// (`claude` moved to `mc claude run`)
+    /// Agent to launch: gemini, openclaw, custom
+    /// (`claude` moved to `mc claude run`; `codex` moved to `mc codex run`)
     agent: Option<AgentKind>,
 
     /// No-op (daemon is no longer started by mc launch; kept for backwards compat)
@@ -117,11 +117,7 @@ pub struct LaunchArgs {
     #[arg(long)]
     no_embed_token: bool,
 
-    /// Disable writing the experimental Claude channel MCP server entry.
-    ///
-    /// By default, `mc launch claude` writes both:
-    /// - `missioncontrol` (mc serve)
-    /// - `missioncontrol_channel` (mc channel claude webhook)
+    /// Legacy no-op for removed `mc launch claude` path.
     #[arg(long, default_value_t = false)]
     no_claude_channel: bool,
 
@@ -975,6 +971,9 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     if matches!(selected_agent, AgentKind::Claude) {
         bail!("`mc launch claude` has been replaced. Use `mc claude run <profile>`.");
     }
+    if matches!(selected_agent, AgentKind::Codex | AgentKind::Resume) {
+        bail!("`mc launch codex` has been replaced. Use `mc codex run <profile>`.");
+    }
     let want_resume = !args.new_session
         && (args.resume
             || args.session_id.is_some()
@@ -1434,13 +1433,13 @@ fn resolve_agent_choice(agent: Option<AgentKind>) -> Result<AgentKind> {
             return Ok(kind);
         }
     }
-    eprint!("mc launch: choose agent [codex/gemini/openclaw/custom] (default codex): ");
+    eprint!("mc launch: choose agent [gemini/openclaw/custom] (default gemini): ");
     io::stderr().flush()?;
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
     let trimmed = answer.trim().to_lowercase();
     if trimmed.is_empty() {
-        return Ok(AgentKind::Codex);
+        return Ok(AgentKind::Gemini);
     }
     parse_agent_kind(&trimmed)
 }

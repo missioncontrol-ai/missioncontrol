@@ -4,7 +4,7 @@ use crate::{
     booster::AgentBooster,
     channel, claude,
     client::MissionControlClient,
-    compat,
+    codex, compat,
     config::McConfig,
     daemon::{self, DaemonArgs},
     drift, evolve, governance, launch, maintenance, mcp_server, mcp_tools, ops,
@@ -91,6 +91,9 @@ pub enum McCommand {
     /// Claude profile runtime workflows.
     #[command(subcommand)]
     Claude(claude::ClaudeCommand),
+    /// Codex profile runtime workflows.
+    #[command(subcommand)]
+    Codex(codex::CodexCommand),
     /// Manage MissionControl user profiles.
     #[command(subcommand)]
     Profile(ProfileCommand),
@@ -690,6 +693,7 @@ pub async fn run(
         McCommand::Serve(args) => mcp_server::run(&args, &client).await,
         McCommand::Channel(cmd) => channel::run(cmd, &client).await,
         McCommand::Claude(cmd) => claude::run(cmd, &config).await,
+        McCommand::Codex(cmd) => codex::run(cmd, &config).await,
         McCommand::Profile(cmd) => handle_profile(cmd, client, output_mode).await,
         McCommand::Secrets(cmd) => handle_secrets(cmd, client, output_mode).await,
     }

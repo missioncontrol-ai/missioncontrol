@@ -1,0 +1,575 @@
+use crate::{
+    config::{McConfig, mc_home_dir},
+    mc_info, mc_ok,
+};
+use anyhow::{Context, Result, bail};
+use clap::{Args, Subcommand};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+const MC_CODEX_MARKER_BEGIN: &str = "# mc-codex: missioncontrol managed block (begin)";
+const MC_CODEX_MARKER_END: &str = "# mc-codex: missioncontrol managed block (end)";
+
+#[derive(Subcommand, Debug)]
+pub enum CodexCommand {
+    /// Run Codex in a prepared profile runtime (resume by default).
+    Run(CodexRunArgs),
+    /// Inspect/repair Codex profile runtime readiness.
+    Doctor(CodexDoctorArgs),
+    /// Thin native Codex execution with raw arg passthrough.
+    Exec(CodexExecArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct CodexRunArgs {
+    /// Profile name (preferred positional form).
+    profile: Option<String>,
+    /// Profile name.
+    #[arg(short = 'p', long)]
+    profile_name: Option<String>,
+    /// Force new Codex session instead of resume-last.
+    #[arg(long, default_value_t = false)]
+    new: bool,
+    /// Never prompt; fail on ambiguity.
+    #[arg(long, default_value_t = false)]
+    headless: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CodexDoctorArgs {
+    /// Profile name (preferred positional form).
+    profile: Option<String>,
+    /// Profile name.
+    #[arg(short = 'p', long)]
+    profile_name: Option<String>,
+    /// Apply safe deterministic repairs.
+    #[arg(long, default_value_t = false)]
+    fix: bool,
+    /// Never prompt; fail on ambiguity.
+    #[arg(long, default_value_t = false)]
+    headless: bool,
+    /// Emit machine-readable JSON.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CodexExecArgs {
+    /// Profile name (preferred positional form).
+    profile: Option<String>,
+    /// Profile name.
+    #[arg(short = 'p', long)]
+    profile_name: Option<String>,
+    /// Raw Codex CLI args (after --).
+    #[arg(last = true)]
+    codex_args: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CodexPaths {
+    profile_root: PathBuf,
+    runtime_home: PathBuf,
+    config_path: PathBuf,
+    ownership_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CodexDoctorIssue {
+    code: String,
+    severity: String,
+    detail: String,
+    #[serde(default)]
+    fixable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CodexDoctorReport {
+    tool: String,
+    profile: String,
+    ready: bool,
+    fixable: bool,
+    repaired: bool,
+    status: String,
+    issues: Vec<CodexDoctorIssue>,
+    repaired_actions: Vec<String>,
+    suggested_command: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OwnershipState {
+    schema_version: u32,
+    managed_files: Vec<String>,
+    managed_entries: Vec<String>,
+    last_repaired_at: Option<String>,
+}
+
+pub async fn run(command: CodexCommand, config: &McConfig) -> Result<()> {
+    match command {
+        CodexCommand::Run(args) => run_codex(args, config).await,
+        CodexCommand::Doctor(args) => doctor_codex(args, config).await,
+        CodexCommand::Exec(args) => exec_codex(args, config).await,
+    }
+}
+
+async fn run_codex(args: CodexRunArgs, config: &McConfig) -> Result<()> {
+    let profile = resolve_profile(args.profile, args.profile_name, config)?;
+    let report = inspect_profile(&profile, config, true)?;
+
+    if !report.ready {
+        bail!(
+            "{}: not ready; run `mc codex doctor {} --fix`",
+            profile,
+            profile
+        );
+    }
+
+    if report.repaired {
+        mc_ok!("{}: repaired drift", profile);
+    } else {
+        mc_ok!("{}: ready", profile);
+    }
+
+    let paths = codex_paths(&profile);
+    if args.new {
+        mc_info!("{}: starting new session", profile);
+        let status = run_codex_process(&[], &paths.runtime_home, config, &profile)?;
+        if !status.success() {
+            bail!("codex exited with status {}", status);
+        }
+        return Ok(());
+    }
+
+    mc_info!("{}: resuming", profile);
+    let resume_status = run_codex_process(
+        &["resume".into(), "--last".into()],
+        &paths.runtime_home,
+        config,
+        &profile,
+    )?;
+    if !resume_status.success() {
+        mc_info!("{}: resume unavailable; starting new session", profile);
+        let fresh_status = run_codex_process(&[], &paths.runtime_home, config, &profile)?;
+        if !fresh_status.success() {
+            bail!("codex exited with status {}", fresh_status);
+        }
+    }
+
+    let _ = args.headless;
+    Ok(())
+}
+
+async fn doctor_codex(args: CodexDoctorArgs, config: &McConfig) -> Result<()> {
+    let profile = resolve_profile(args.profile, args.profile_name, config)?;
+    let report = inspect_profile(&profile, config, args.fix)?;
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return if report.ready {
+            Ok(())
+        } else {
+            bail!("profile not ready")
+        };
+    }
+
+    println!("Profile: {}", report.profile);
+    println!(
+        "Status: {}",
+        if report.ready { "ready" } else { "not ready" }
+    );
+    if report.issues.is_empty() {
+        println!("Issues: none");
+    } else {
+        println!("Issues:");
+        for issue in &report.issues {
+            println!("  - {} ({}) {}", issue.code, issue.severity, issue.detail);
+        }
+    }
+    if !report.repaired_actions.is_empty() {
+        println!("Repaired:");
+        for action in &report.repaired_actions {
+            println!("  - {}", action);
+        }
+    }
+    if !report.ready {
+        println!("Fix: {}", report.suggested_command);
+    }
+    let _ = args.headless;
+
+    if report.ready {
+        Ok(())
+    } else {
+        bail!("profile not ready")
+    }
+}
+
+async fn exec_codex(args: CodexExecArgs, config: &McConfig) -> Result<()> {
+    let profile = resolve_profile(args.profile, args.profile_name, config)?;
+    let paths = codex_paths(&profile);
+
+    if which_binary("codex").is_err() {
+        bail!("native codex binary not found on PATH; install Codex CLI first");
+    }
+    if !paths.runtime_home.exists() || !paths.config_path.exists() {
+        bail!(
+            "{}: runtime is not prepared; run `mc codex doctor {} --fix`",
+            profile,
+            profile
+        );
+    }
+
+    let mut forwarded = args.codex_args;
+    if forwarded.first().map(|v| v.as_str()) == Some("--") {
+        forwarded.remove(0);
+    }
+
+    let status = run_codex_process(&forwarded, &paths.runtime_home, config, &profile)?;
+    if !status.success() {
+        bail!("codex exited with status {}", status);
+    }
+    Ok(())
+}
+
+fn resolve_profile(
+    positional: Option<String>,
+    flag: Option<String>,
+    config: &McConfig,
+) -> Result<String> {
+    if positional.is_some() && flag.is_some() {
+        bail!("profile provided both positionally and via --profile; choose one");
+    }
+    let resolved = positional
+        .or(flag)
+        .or_else(|| config.agent_context.profile_name.clone())
+        .unwrap_or_else(|| "default".to_string());
+    Ok(resolved.trim().to_string())
+}
+
+fn codex_paths(profile: &str) -> CodexPaths {
+    let profile_root = mc_home_dir().join("profiles").join("codex").join(profile);
+    let runtime_home = profile_root.join("codex-home");
+    CodexPaths {
+        config_path: runtime_home.join("config.toml"),
+        ownership_path: profile_root.join("meta").join("ownership.json"),
+        profile_root,
+        runtime_home,
+    }
+}
+
+fn inspect_profile(profile: &str, config: &McConfig, repair: bool) -> Result<CodexDoctorReport> {
+    let mut issues = Vec::<CodexDoctorIssue>::new();
+    let mut repaired_actions = Vec::<String>::new();
+    let mut repaired = false;
+    let mut has_unfixable = false;
+
+    let paths = codex_paths(profile);
+
+    if which_binary("codex").is_err() {
+        issues.push(issue(
+            "NATIVE_CODEX_NOT_FOUND",
+            "fatal",
+            "native `codex` binary is not on PATH",
+            false,
+        ));
+        has_unfixable = true;
+    }
+
+    if !paths.profile_root.exists() {
+        issues.push(issue(
+            "RUNTIME_HOME_MISSING",
+            "error",
+            "profile runtime root does not exist",
+            true,
+        ));
+        if repair {
+            fs::create_dir_all(paths.profile_root.join("meta"))?;
+            fs::create_dir_all(&paths.runtime_home)?;
+            repaired = true;
+            repaired_actions.push("created profile runtime layout".to_string());
+        }
+    }
+
+    if !paths.runtime_home.exists() {
+        issues.push(issue(
+            "RUNTIME_HOME_MISSING",
+            "error",
+            "CODEX_HOME directory missing",
+            true,
+        ));
+        if repair {
+            fs::create_dir_all(&paths.runtime_home)?;
+            repaired = true;
+            repaired_actions.push("created CODEX_HOME".to_string());
+        }
+    }
+
+    if !paths.config_path.exists() {
+        issues.push(issue(
+            "MC_CONFIG_MISSING",
+            "error",
+            "config.toml missing",
+            true,
+        ));
+        if repair {
+            write_codex_config(&paths.config_path, config, None)?;
+            repaired = true;
+            repaired_actions.push("wrote minimal config.toml".to_string());
+        }
+    }
+
+    if paths.config_path.exists() {
+        let raw = fs::read_to_string(&paths.config_path).unwrap_or_default();
+        if !raw.contains("[mcp_servers.missioncontrol]") {
+            issues.push(issue(
+                "MC_MCP_CONFIG_MISSING",
+                "error",
+                "Mission Control MCP entry missing from config.toml",
+                true,
+            ));
+            if repair {
+                write_codex_config(&paths.config_path, config, Some(&raw))?;
+                repaired = true;
+                repaired_actions.push("patched missioncontrol MCP entry".to_string());
+            }
+        }
+    }
+
+    let has_auth_file = paths.runtime_home.join("auth.json").exists()
+        || paths.runtime_home.join("credentials.json").exists();
+    let has_api_key = std::env::var("OPENAI_API_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .is_some()
+        || std::env::var("CODEX_API_KEY")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .is_some();
+
+    if !has_auth_file && !has_api_key {
+        issues.push(issue(
+            "AUTH_STATE_MISSING",
+            "error",
+            "no Codex auth detected in profile home and no API key env present",
+            false,
+        ));
+        has_unfixable = true;
+    }
+
+    if repair && !has_unfixable {
+        write_ownership(&paths)?;
+    }
+
+    let ready = !issues
+        .iter()
+        .any(|i| i.severity == "error" || i.severity == "fatal");
+    let fixable = issues
+        .iter()
+        .filter(|i| i.severity == "error" || i.severity == "fatal")
+        .all(|i| i.fixable);
+    let status = if ready {
+        "ok"
+    } else if fixable {
+        "repairable"
+    } else {
+        "blocked"
+    }
+    .to_string();
+
+    Ok(CodexDoctorReport {
+        tool: "codex".to_string(),
+        profile: profile.to_string(),
+        ready,
+        fixable,
+        repaired,
+        status,
+        issues,
+        repaired_actions,
+        suggested_command: format!("mc codex doctor {} --fix", profile),
+    })
+}
+
+fn issue(code: &str, severity: &str, detail: &str, fixable: bool) -> CodexDoctorIssue {
+    CodexDoctorIssue {
+        code: code.to_string(),
+        severity: severity.to_string(),
+        detail: detail.to_string(),
+        fixable,
+    }
+}
+
+fn write_ownership(paths: &CodexPaths) -> Result<()> {
+    if let Some(parent) = paths.ownership_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let state = OwnershipState {
+        schema_version: 1,
+        managed_files: vec![
+            rel_for_ownership(paths, &paths.config_path),
+            rel_for_ownership(paths, &paths.ownership_path),
+        ],
+        managed_entries: vec!["mcp_servers.missioncontrol".to_string()],
+        last_repaired_at: Some(chrono::Utc::now().to_rfc3339()),
+    };
+    fs::write(&paths.ownership_path, serde_json::to_string_pretty(&state)?)?;
+    Ok(())
+}
+
+fn rel_for_ownership(paths: &CodexPaths, value: &Path) -> String {
+    value
+        .strip_prefix(&paths.profile_root)
+        .map(|v| v.display().to_string())
+        .unwrap_or_else(|_| value.display().to_string())
+}
+
+fn write_codex_config(path: &Path, config: &McConfig, existing: Option<&str>) -> Result<()> {
+    let mut content = existing.unwrap_or_default().to_string();
+    if !content.is_empty() {
+        content = strip_mc_managed_block(&content);
+        if !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push('\n');
+    }
+
+    content.push_str(&render_mc_managed_block(
+        config.base_url.as_str().trim_end_matches('/'),
+        config.token.as_deref(),
+    ));
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, content)?;
+    Ok(())
+}
+
+fn strip_mc_managed_block(existing: &str) -> String {
+    let mut output = Vec::<String>::new();
+    let mut skip = false;
+
+    for line in existing.lines() {
+        if line.trim() == MC_CODEX_MARKER_BEGIN {
+            skip = true;
+            continue;
+        }
+        if line.trim() == MC_CODEX_MARKER_END {
+            skip = false;
+            continue;
+        }
+        if !skip {
+            output.push(line.to_string());
+        }
+    }
+
+    output.join("\n").trim_end().to_string()
+}
+
+fn render_mc_managed_block(base_url: &str, token: Option<&str>) -> String {
+    let mut buf = String::new();
+    buf.push_str(MC_CODEX_MARKER_BEGIN);
+    buf.push('\n');
+    buf.push_str("approval_policy = \"on-request\"\n");
+    buf.push_str("sandbox_mode = \"workspace-write\"\n\n");
+    buf.push_str("[mcp_servers.missioncontrol]\n");
+    buf.push_str("command = \"mc\"\n");
+    buf.push_str("args = [\"serve\"]\n");
+    buf.push_str("startup_timeout_sec = 30\n");
+    buf.push_str("tool_timeout_sec = 60\n");
+
+    match token {
+        Some(value) if !value.trim().is_empty() => {
+            buf.push_str(&format!(
+                "env = {{ MC_BASE_URL = \"{}\", MC_TOKEN = \"{}\" }}\n",
+                escape_toml(base_url),
+                escape_toml(value)
+            ));
+        }
+        _ => {
+            buf.push_str(&format!(
+                "env = {{ MC_BASE_URL = \"{}\" }}\n",
+                escape_toml(base_url)
+            ));
+        }
+    }
+
+    buf.push_str(MC_CODEX_MARKER_END);
+    buf.push('\n');
+    buf
+}
+
+fn run_codex_process(
+    args: &[String],
+    runtime_home: &Path,
+    config: &McConfig,
+    profile: &str,
+) -> Result<std::process::ExitStatus> {
+    let mut cmd = std::process::Command::new("codex");
+    cmd.args(args);
+    cmd.env("CODEX_HOME", runtime_home);
+    cmd.env("MC_AGENT_PROFILE", profile);
+    cmd.env("MC_BASE_URL", config.base_url.as_str());
+    if let Some(token) = &config.token {
+        if !token.trim().is_empty() {
+            cmd.env("MC_TOKEN", token);
+        }
+    }
+
+    cmd.status().context("failed to execute codex")
+}
+
+fn which_binary(name: &str) -> Result<PathBuf> {
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    bail!("binary `{}` not found on PATH", name)
+}
+
+fn escape_toml(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_block_removes_mc_managed_section_only() {
+        let input = r#"a = 1
+# mc-codex: missioncontrol managed block (begin)
+[mcp_servers.missioncontrol]
+command = \"mc\"
+# mc-codex: missioncontrol managed block (end)
+b = 2
+"#;
+        let out = strip_mc_managed_block(input);
+        assert!(out.contains("a = 1"));
+        assert!(out.contains("b = 2"));
+        assert!(!out.contains("mcp_servers.missioncontrol"));
+    }
+
+    #[test]
+    fn managed_block_without_token_omits_mc_token() {
+        let out = render_mc_managed_block("http://localhost:8008", None);
+        assert!(out.contains("MC_BASE_URL"));
+        assert!(!out.contains("MC_TOKEN"));
+    }
+
+    #[test]
+    fn managed_block_with_token_contains_mc_token() {
+        let out = render_mc_managed_block("http://localhost:8008", Some("abc123"));
+        assert!(out.contains("MC_BASE_URL"));
+        assert!(out.contains("MC_TOKEN"));
+        assert!(out.contains("abc123"));
+    }
+
+    #[test]
+    fn strip_block_without_markers_preserves_content() {
+        let input = "approval_policy = \"on-request\"\n";
+        let out = strip_mc_managed_block(input);
+        assert_eq!(out, "approval_policy = \"on-request\"");
+    }
+}
