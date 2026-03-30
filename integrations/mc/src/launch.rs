@@ -1145,10 +1145,13 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         )?;
         agent_home.clone()
     };
-    std::env::set_var("MC_HOME", &instance_mc_home);
-    std::env::set_var("MC_AGENT_PROFILE", &profile_name);
-    std::env::set_var("MC_RUNTIME_SESSION_ID", &runtime_session_id);
-    std::env::set_var("MC_INSTANCE_HOME", &instance_home);
+    // SAFETY: single-threaded at this point; env is set immediately before exec.
+    unsafe {
+        std::env::set_var("MC_HOME", &instance_mc_home);
+        std::env::set_var("MC_AGENT_PROFILE", &profile_name);
+        std::env::set_var("MC_RUNTIME_SESSION_ID", &runtime_session_id);
+        std::env::set_var("MC_INSTANCE_HOME", &instance_home);
+    }
     let launch_agent_base = config
         .agent_context
         .agent_id
@@ -1161,7 +1164,8 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         selected_agent.config_key(),
         &runtime_session_id[..12.min(runtime_session_id.len())]
     );
-    std::env::set_var("MC_AGENT_ID", &launch_agent_id);
+    // SAFETY: single-threaded at this point; env is set immediately before exec.
+    unsafe { std::env::set_var("MC_AGENT_ID", &launch_agent_id) };
     driver.install_config(
         &staging_dir,
         &base_url,
@@ -1421,7 +1425,7 @@ fn managed_config_relpaths(agent: &AgentKind) -> &'static [&'static str] {
             ".codex/credentials.json",
             ".codex/rules",
         ],
-        AgentKind::Claude => &[".claude.json", ".claude"],
+        AgentKind::Claude => &[".claude.json", ".claude/.credentials.json", ".claude"],
         AgentKind::Gemini => &[".gemini/settings.json"],
         _ => &[],
     }
@@ -1565,7 +1569,10 @@ pub(crate) fn codex_approval_rules_for_profile(
 }
 
 fn should_force_profile_refresh(rel: &str) -> bool {
-    matches!(rel, ".codex/auth.json" | ".codex/credentials.json")
+    matches!(
+        rel,
+        ".codex/auth.json" | ".codex/credentials.json" | ".claude/.credentials.json"
+    )
 }
 
 fn seed_profile_path(global_path: &Path, profile_path: &Path) -> Result<()> {

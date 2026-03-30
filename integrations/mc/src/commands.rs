@@ -1491,7 +1491,8 @@ async fn handle_secrets(
             let target_name = parsed.path().trim_start_matches('/').to_string();
             match provider {
                 "env" => {
-                    std::env::set_var(&target_name, &rotated);
+                    // SAFETY: no other threads access env at this point.
+                    unsafe { std::env::set_var(&target_name, &rotated) };
                 }
                 "infisical" => {
                     let mut cmd = std::process::Command::new("infisical");

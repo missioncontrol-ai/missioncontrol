@@ -55,18 +55,9 @@ pub struct CliOpts {
     #[arg(long, env = "MC_ALLOW_BOOSTER_SHORT_CIRCUIT", default_value_t = false)]
     allow_booster_short_circuit: bool,
 
-    /// Emit JSON output (machine-readable). Compatibility alias for `--output json`.
-    #[arg(
-        long,
-        global = true,
-        default_value_t = false,
-        conflicts_with = "output"
-    )]
+    /// Emit machine-readable JSON output.
+    #[arg(long, global = true, default_value_t = false)]
     json: bool,
-
-    /// Output format for command responses.
-    #[arg(long, global = true, env = "MC_OUTPUT", value_enum, default_value_t = OutputMode::Human)]
-    output: OutputMode,
 
     #[command(subcommand)]
     command: McCommand,
@@ -123,11 +114,7 @@ async fn main() -> anyhow::Result<()> {
     let client = MissionControlClient::new(&config)?;
     let booster = AgentBooster::load(&config)?;
 
-    let output_mode = if opts.json {
-        OutputMode::Json
-    } else {
-        opts.output
-    };
+    let output_mode = if opts.json { OutputMode::Json } else { OutputMode::Human };
 
     let ctx = config.agent_context.clone();
     mc::commands::run(opts.command, client, ctx, booster, config, output_mode).await
