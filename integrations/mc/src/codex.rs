@@ -15,6 +15,8 @@ const MC_CODEX_MARKER_END: &str = "# mc-codex: missioncontrol managed block (end
 pub enum CodexCommand {
     /// Run Codex in a prepared profile runtime (resume by default).
     Run(CodexRunArgs),
+    /// Read-only profile readiness and auth status (no mutation).
+    Status(CodexStatusArgs),
     /// Inspect/repair Codex profile runtime readiness.
     Doctor(CodexDoctorArgs),
     /// Thin native Codex execution with raw arg passthrough.
@@ -51,6 +53,19 @@ pub struct CodexDoctorArgs {
     /// Never prompt; fail on ambiguity.
     #[arg(long, default_value_t = false)]
     headless: bool,
+    /// Emit machine-readable JSON.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CodexStatusArgs {
+    /// Profile name (preferred positional form).
+    #[arg(value_name = "PROFILE")]
+    profile_positional: Option<String>,
+    /// Profile name.
+    #[arg(short = 'p', long = "profile")]
+    profile_name: Option<String>,
     /// Emit machine-readable JSON.
     #[arg(long, default_value_t = false)]
     json: bool,
@@ -100,6 +115,17 @@ struct CodexDoctorReport {
     suggested_command: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct CodexStatusReport {
+    tool: String,
+    profile: String,
+    auth_mode: String,
+    ready: bool,
+    status: String,
+    issues: Vec<CodexDoctorIssue>,
+    suggested_command: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OwnershipState {
     schema_version: u32,
@@ -111,6 +137,7 @@ struct OwnershipState {
 pub async fn run(command: CodexCommand, config: &McConfig) -> Result<()> {
     match command {
         CodexCommand::Run(args) => run_codex(args, config).await,
+        CodexCommand::Status(args) => status_codex(args, config).await,
         CodexCommand::Doctor(args) => doctor_codex(args, config).await,
         CodexCommand::Exec(args) => exec_codex(args, config).await,
     }
@@ -210,6 +237,41 @@ async fn doctor_codex(args: CodexDoctorArgs, config: &McConfig) -> Result<()> {
     } else {
         bail!("profile not ready")
     }
+}
+
+async fn status_codex(args: CodexStatusArgs, config: &McConfig) -> Result<()> {
+    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
+    let report = inspect_profile(&profile, config, false)?;
+    let status = CodexStatusReport {
+        tool: report.tool,
+        profile: report.profile,
+        auth_mode: report.auth_mode,
+        ready: report.ready,
+        status: report.status,
+        issues: report.issues,
+        suggested_command: report.suggested_command,
+    };
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+        return Ok(());
+    }
+
+    println!("Profile: {}", status.profile);
+    println!("Status: {}", if status.ready { "ready" } else { "not ready" });
+    println!("Auth: {}", status.auth_mode);
+    if status.issues.is_empty() {
+        println!("Issues: none");
+    } else {
+        println!("Issues:");
+        for issue in &status.issues {
+            println!("  - {} ({}) {}", issue.code, issue.severity, issue.detail);
+        }
+    }
+    if !status.ready {
+        println!("Fix: {}", status.suggested_command);
+    }
+    Ok(())
 }
 
 async fn exec_codex(args: CodexExecArgs, config: &McConfig) -> Result<()> {
@@ -683,5 +745,36 @@ b = 2
         assert!(repaired.contains("model = \"gpt-5\""));
         assert!(repaired.contains("[mcp_servers.missioncontrol]"));
         assert!(repaired.contains("MC_BASE_URL"));
+    }
+
+    #[test]
+    fn status_json_contract_contains_expected_top_level_fields() {
+        let report = CodexStatusReport {
+            tool: "codex".to_string(),
+            profile: "default".to_string(),
+            auth_mode: "chatgpt_native".to_string(),
+            ready: false,
+            status: "blocked".to_string(),
+            issues: vec![CodexDoctorIssue {
+                code: "AUTH_STATE_MISSING".to_string(),
+                severity: "error".to_string(),
+                detail: "not logged in".to_string(),
+                fixable: false,
+            }],
+            suggested_command: "mc codex doctor default --fix".to_string(),
+        };
+        let value = serde_json::to_value(report).expect("serialize");
+        let obj = value.as_object().expect("json object");
+        for key in [
+            "tool",
+            "profile",
+            "auth_mode",
+            "ready",
+            "status",
+            "issues",
+            "suggested_command",
+        ] {
+            assert!(obj.contains_key(key), "missing key: {key}");
+        }
     }
 }

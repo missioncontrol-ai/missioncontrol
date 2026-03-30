@@ -25,7 +25,7 @@ use crate::{
     mc_info, mc_ok, mc_warn, ui,
 };
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Args, ValueEnum};
+use clap::Args;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs;
@@ -43,7 +43,7 @@ use uuid::Uuid;
 pub struct LaunchArgs {
     /// Agent to launch: gemini, openclaw, custom
     /// (`claude` moved to `mc claude run`; `codex` moved to `mc codex run`)
-    agent: Option<AgentKind>,
+    agent: Option<String>,
 
     /// No-op (daemon is no longer started by mc launch; kept for backwards compat)
     #[arg(long)]
@@ -83,9 +83,9 @@ pub struct LaunchArgs {
     agent_args: Vec<String>,
 }
 
-#[derive(ValueEnum, Debug, Clone)]
+#[derive(Debug, Clone)]
 enum AgentKind {
-    Codex,
+    #[cfg(test)]
     Claude,
     Gemini,
     Openclaw,
@@ -95,7 +95,7 @@ enum AgentKind {
 impl AgentKind {
     fn driver(&self) -> Box<dyn AgentDriver> {
         match self {
-            AgentKind::Codex => unreachable!("codex is handled as a migration shim in mc launch"),
+            #[cfg(test)]
             AgentKind::Claude => Box::new(ClaudeDriver),
             AgentKind::Gemini => Box::new(GeminiDriver),
             AgentKind::Openclaw => Box::new(OpenClawDriver),
@@ -105,7 +105,7 @@ impl AgentKind {
 
     fn config_key(&self) -> &str {
         match self {
-            AgentKind::Codex => "codex",
+            #[cfg(test)]
             AgentKind::Claude => "claude",
             AgentKind::Gemini => "gemini",
             AgentKind::Openclaw => "openclaw",
@@ -149,8 +149,10 @@ trait AgentDriver {
 
 // ── ClaudeDriver ─────────────────────────────────────────────────────────────
 
+#[cfg(test)]
 struct ClaudeDriver;
 
+#[cfg(test)]
 impl AgentDriver for ClaudeDriver {
     fn binary(&self) -> &str {
         "claude"
@@ -248,6 +250,7 @@ impl AgentDriver for ClaudeDriver {
 /// - PreCompact: dump current context summary to stdout
 ///
 /// Idempotent — safe to call on every launch.
+#[cfg(test)]
 fn inject_mc_lifecycle_hooks(settings_path: &Path, backend_url: &str) -> Result<()> {
     let mut root: Value = if settings_path.exists() {
         let content = fs::read_to_string(settings_path)?;
@@ -460,6 +463,7 @@ fn inject_mc_lifecycle_hooks(settings_path: &Path, backend_url: &str) -> Result<
 
 /// Write the MC hook shell scripts into `<target_home>/.claude/hooks/`.
 /// Scripts are embedded at compile time from `distribution/hooks/`.
+#[cfg(test)]
 fn write_hook_scripts(target_home: &Path) -> Result<()> {
     const PRECOMPACT: &str = include_str!("../../../distribution/hooks/mc-precompact.sh");
     const RECOMPACT: &str = include_str!("../../../distribution/hooks/mc-recompact-context.sh");
@@ -489,10 +493,12 @@ fn write_hook_scripts(target_home: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn write_json_missioncontrol_entry(config_path: &Path, mc_entry: serde_json::Value) -> Result<()> {
     write_json_mcp_entry(config_path, "missioncontrol", mc_entry)
 }
 
+#[cfg(test)]
 fn write_json_mcp_entry(
     config_path: &Path,
     server_name: &str,
@@ -727,12 +733,6 @@ fn install_acp_config(
 
 pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McConfig) -> Result<()> {
     let selected_agent = resolve_agent_choice(args.agent.clone())?;
-    if matches!(selected_agent, AgentKind::Claude) {
-        bail!("`mc launch claude` has been replaced. Use `mc claude run <profile>`.");
-    }
-    if matches!(selected_agent, AgentKind::Codex) {
-        bail!("`mc launch codex` has been replaced. Use `mc codex run <profile>`.");
-    }
     let base_mc_home = mc_home_dir();
     fs::create_dir_all(&base_mc_home)?;
 
@@ -878,9 +878,6 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
             &profile_home,
             &dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?,
         )?;
-        if matches!(selected_agent, AgentKind::Claude) {
-            enforce_claude_dark_mode(&profile_home)?;
-        }
         agent_home.clone()
     };
     // SAFETY: single-threaded at this point; env is set immediately before exec.
@@ -912,10 +909,6 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         &config_target_home,
         &instance_mc_home,
     )?;
-    if matches!(selected_agent, AgentKind::Claude) {
-        claude_preflight_report(&agent_home);
-    }
-
     // 7b. MCP connectivity preflight — verify backend is reachable and tools
     //     are available before handing off to the agent. A failure here is
     //     non-fatal (warn only): the MCP server's retry loop will recover if
@@ -935,58 +928,6 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         &instance_mc_home,
         &profile_name,
     )
-}
-
-/// Ensure `profile_home/.claude/settings.json` always has `"theme": "dark"`.
-/// Merges into existing settings rather than overwriting, so other keys are preserved.
-fn enforce_claude_dark_mode(profile_home: &Path) -> Result<()> {
-    let settings_path = profile_home.join(".claude").join("settings.json");
-    if let Some(parent) = settings_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut settings: serde_json::Map<String, serde_json::Value> = if settings_path.exists() {
-        let raw = fs::read_to_string(&settings_path)?;
-        serde_json::from_str(&raw).unwrap_or_default()
-    } else {
-        serde_json::Map::new()
-    };
-    settings.insert(
-        "theme".to_string(),
-        serde_json::Value::String("dark".to_string()),
-    );
-    fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
-    Ok(())
-}
-
-fn claude_preflight_report(agent_home: &Path) {
-    let checks = [
-        (
-            agent_home.join(".claude.json"),
-            "Claude config (.claude.json)",
-        ),
-        (
-            agent_home.join(".claude").join("settings.json"),
-            "Claude settings (.claude/settings.json)",
-        ),
-        (
-            agent_home.join(".claude").join(".credentials.json"),
-            "Claude auth (.claude/.credentials.json)",
-        ),
-    ];
-    let mut missing: Vec<String> = Vec::new();
-    for (path, label) in checks {
-        if !path.exists() {
-            missing.push(format!("{} missing at {}", label, path.display()));
-        }
-    }
-    if missing.is_empty() {
-        mc_info!("claude preflight: auth/settings artifacts detected");
-        return;
-    }
-    for line in missing {
-        mc_warn!("claude preflight: {}", line);
-    }
-    mc_warn!("claude may prompt for theme/login if these are not initialized for this profile");
 }
 
 /// Verify MCP backend connectivity and tool availability before exec.
@@ -1090,9 +1031,9 @@ fn resolve_embed_token(no_embed_flag: bool, token: &str) -> bool {
     true
 }
 
-fn resolve_agent_choice(agent: Option<AgentKind>) -> Result<AgentKind> {
+fn resolve_agent_choice(agent: Option<String>) -> Result<AgentKind> {
     if let Some(kind) = agent {
-        return Ok(kind);
+        return parse_agent_kind(&kind);
     }
     eprint!("mc launch: choose agent [gemini/openclaw/custom] (default gemini): ");
     io::stderr().flush()?;
@@ -1107,6 +1048,7 @@ fn resolve_agent_choice(agent: Option<AgentKind>) -> Result<AgentKind> {
 
 fn managed_config_relpaths(agent: &AgentKind) -> &'static [&'static str] {
     match agent {
+        #[cfg(test)]
         AgentKind::Claude => &[
             ".claude.json",
             ".claude/.credentials.json",

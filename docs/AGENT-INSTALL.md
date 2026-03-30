@@ -41,6 +41,13 @@ mc launch custom        # Custom ACP agent
 
 That's it. `mc claude run` / `mc codex run` are the primary paths for Claude/Codex. `mc launch` remains for gemini/openclaw/custom.
 
+Codex quick checks:
+```bash
+mc codex status default         # read-only quick status (human)
+mc codex status default --json  # read-only quick status (machine)
+mc codex doctor default --json  # detailed readiness diagnostics (machine)
+```
+
 ---
 
 ## What `mc launch` does
