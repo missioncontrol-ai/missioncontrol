@@ -29,9 +29,10 @@ pub enum ClaudeCommand {
 #[derive(Args, Debug)]
 pub struct ClaudeRunArgs {
     /// Profile name (preferred positional form).
-    profile: Option<String>,
+    #[arg(value_name = "PROFILE")]
+    profile_positional: Option<String>,
     /// Profile name.
-    #[arg(short = 'p', long)]
+    #[arg(short = 'p', long = "profile")]
     profile_name: Option<String>,
     /// Force new Claude session.
     #[arg(long, default_value_t = false)]
@@ -44,9 +45,10 @@ pub struct ClaudeRunArgs {
 #[derive(Args, Debug)]
 pub struct ClaudeDoctorArgs {
     /// Profile name (preferred positional form).
-    profile: Option<String>,
+    #[arg(value_name = "PROFILE")]
+    profile_positional: Option<String>,
     /// Profile name.
-    #[arg(short = 'p', long)]
+    #[arg(short = 'p', long = "profile")]
     profile_name: Option<String>,
     /// Apply safe deterministic repairs.
     #[arg(long, default_value_t = false)]
@@ -62,9 +64,10 @@ pub struct ClaudeDoctorArgs {
 #[derive(Args, Debug)]
 pub struct ClaudeExecArgs {
     /// Profile name (preferred positional form).
-    profile: Option<String>,
+    #[arg(value_name = "PROFILE")]
+    profile_positional: Option<String>,
     /// Profile name.
-    #[arg(short = 'p', long)]
+    #[arg(short = 'p', long = "profile")]
     profile_name: Option<String>,
     /// Raw Claude CLI args (after --).
     #[arg(last = true)]
@@ -124,7 +127,7 @@ pub async fn run(command: ClaudeCommand, config: &McConfig) -> Result<()> {
 }
 
 async fn run_claude(args: ClaudeRunArgs, config: &McConfig) -> Result<()> {
-    let profile = resolve_profile(args.profile, args.profile_name, config)?;
+    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
     let report = inspect_profile(&profile, config, true)?;
     if !report.ready {
         bail!(
@@ -172,7 +175,7 @@ async fn run_claude(args: ClaudeRunArgs, config: &McConfig) -> Result<()> {
 }
 
 async fn doctor_claude(args: ClaudeDoctorArgs, config: &McConfig) -> Result<()> {
-    let profile = resolve_profile(args.profile, args.profile_name, config)?;
+    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
     let report = inspect_profile(&profile, config, args.fix)?;
 
     if args.json {
@@ -212,7 +215,7 @@ async fn doctor_claude(args: ClaudeDoctorArgs, config: &McConfig) -> Result<()> 
 }
 
 async fn exec_claude(args: ClaudeExecArgs, config: &McConfig) -> Result<()> {
-    let profile = resolve_profile(args.profile, args.profile_name, config)?;
+    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
     let paths = claude_paths(&profile);
 
     if !which_binary("claude").is_ok() {

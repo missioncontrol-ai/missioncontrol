@@ -24,9 +24,10 @@ pub enum CodexCommand {
 #[derive(Args, Debug)]
 pub struct CodexRunArgs {
     /// Profile name (preferred positional form).
-    profile: Option<String>,
+    #[arg(value_name = "PROFILE")]
+    profile_positional: Option<String>,
     /// Profile name.
-    #[arg(short = 'p', long)]
+    #[arg(short = 'p', long = "profile")]
     profile_name: Option<String>,
     /// Force new Codex session instead of resume-last.
     #[arg(long, default_value_t = false)]
@@ -39,9 +40,10 @@ pub struct CodexRunArgs {
 #[derive(Args, Debug)]
 pub struct CodexDoctorArgs {
     /// Profile name (preferred positional form).
-    profile: Option<String>,
+    #[arg(value_name = "PROFILE")]
+    profile_positional: Option<String>,
     /// Profile name.
-    #[arg(short = 'p', long)]
+    #[arg(short = 'p', long = "profile")]
     profile_name: Option<String>,
     /// Apply safe deterministic repairs.
     #[arg(long, default_value_t = false)]
@@ -57,9 +59,10 @@ pub struct CodexDoctorArgs {
 #[derive(Args, Debug)]
 pub struct CodexExecArgs {
     /// Profile name (preferred positional form).
-    profile: Option<String>,
+    #[arg(value_name = "PROFILE")]
+    profile_positional: Option<String>,
     /// Profile name.
-    #[arg(short = 'p', long)]
+    #[arg(short = 'p', long = "profile")]
     profile_name: Option<String>,
     /// Raw Codex CLI args (after --).
     #[arg(last = true)]
@@ -114,7 +117,7 @@ pub async fn run(command: CodexCommand, config: &McConfig) -> Result<()> {
 }
 
 async fn run_codex(args: CodexRunArgs, config: &McConfig) -> Result<()> {
-    let profile = resolve_profile(args.profile, args.profile_name, config)?;
+    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
     let report = inspect_profile(&profile, config, true)?;
 
     if !report.ready {
@@ -161,7 +164,7 @@ async fn run_codex(args: CodexRunArgs, config: &McConfig) -> Result<()> {
 }
 
 async fn doctor_codex(args: CodexDoctorArgs, config: &McConfig) -> Result<()> {
-    let profile = resolve_profile(args.profile, args.profile_name, config)?;
+    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
     let report = inspect_profile(&profile, config, args.fix)?;
 
     if args.json {
@@ -205,7 +208,7 @@ async fn doctor_codex(args: CodexDoctorArgs, config: &McConfig) -> Result<()> {
 }
 
 async fn exec_codex(args: CodexExecArgs, config: &McConfig) -> Result<()> {
-    let profile = resolve_profile(args.profile, args.profile_name, config)?;
+    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
     let paths = codex_paths(&profile);
 
     if which_binary("codex").is_err() {
