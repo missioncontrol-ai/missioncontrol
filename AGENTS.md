@@ -14,7 +14,7 @@
 - Rust `mc` check:
   - `cd integrations/mc && cargo check -p mc`
 
-## Claude channel defaults (mc)
+## Agent launch defaults (mc)
 - Claude now uses the dedicated command family: `mc claude run|doctor|exec`.
 - Codex now uses the dedicated command family: `mc codex run|doctor|exec`.
-- `mc launch claude` and `mc launch codex` are cut over and no longer the primary path.
+- `mc launch` remains for `gemini|openclaw|custom`.

@@ -64,8 +64,9 @@ When no `MC_AGENT_ID` is provided, `mc` looks for `~/.missioncontrol/agent_id` a
 ## Command surface
 
 ### Launch isolation
-- `mc launch <agent>` now writes agent config into session-local runtime paths under `~/.missioncontrol/instances/<runtime_session_id>/...` by default.
-- Use `mc launch --legacy-global-config <agent>` only for compatibility scenarios that still require mutating global files such as `~/.codex/config.toml`.
+- Claude uses `mc claude run <profile>` with profile-scoped runtime preparation + native execution.
+- Codex uses `mc codex run <profile>` with profile-scoped `CODEX_HOME` + native execution.
+- `mc launch <agent>` remains for `gemini|openclaw|custom` and legacy compatibility paths.
 
 ### Data + admin surface
 - `mc data tools list` / `mc data tools call --tool <tool> --payload '{...}'` map directly to `/mcp/tools` and `/mcp/call`.
@@ -158,7 +159,7 @@ Current next build sequence:
 5. `MC-MCP-005`: standardize MCP response/error envelope and compatibility assertions before release gating.
 
 Open launch parity gap to close:
-- `MC-LAUNCH-CODEX-AUTH-001`: `mc launch claude` now supports working auth pass-through/profile seeding, but Codex launch/auth behavior is not yet equivalently standardized. Either align Codex to the same pass-through + profile-overlay model or enforce a shared MCP-standard launch/auth layer across both agents.
+- none (Claude and Codex have completed dedicated command-family cutovers).
 
 Post-cutover follow-ups:
 - `MC-PERSIST-002`: implement full GitHub App installation-token lease flow (server-side) for mission-scoped publish providers.

@@ -258,7 +258,7 @@ Set `MC_LOG_EXPORT_PATH=/abs/path/missioncontrol.jsonl` to export structured eve
 
 ## Agent Integration
 
-### Launch any agent with one command
+### Launch agents with mc
 
 Install `mc`:
 
@@ -272,20 +272,21 @@ Then launch:
 export MC_TOKEN="<your-token>"
 export MC_BASE_URL="https://your-mc.example.com"
 
-mc launch claude    # Claude Code — writes ~/.claude.json
-mc launch codex     # OpenAI Codex CLI — appends ~/.codex/config.toml
+mc claude run default   # Claude Code (profile runtime)
+mc codex run default    # OpenAI Codex CLI (profile runtime)
 mc launch gemini    # Google Gemini CLI — writes ~/.gemini/settings.json
 mc launch openclaw  # OpenClaw — writes ~/.missioncontrol/config/openclaw.acp.json
 ```
 
-`mc launch` auto-starts the daemon, validates auth, writes agent config, and exec's the agent.
+`mc claude run` / `mc codex run` are the primary paths for Claude and Codex.  
+`mc launch` remains the launch surface for gemini/openclaw/custom.
 
 Use `mc auth login` to create a server-issued session token (`mcs_*`) stored locally — no more
 token in agent config files, revocable any time, auto-loaded by `mc` on next run:
 
 ```bash
 MC_TOKEN="<static-token>" mc auth login   # exchange for session token
-mc launch claude                     # session auto-loaded, token injected at exec
+mc claude run default               # session auto-loaded, token injected at exec
 mc auth whoami                       # verify identity
 mc auth logout                       # revoke session
 ```
