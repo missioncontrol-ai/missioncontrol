@@ -23,6 +23,7 @@ This is the authoritative `mc` CLI command hierarchy.
 - `mc ops`
 - `mc daemon`
 - `mc launch`
+- `mc claude`
 - `mc init`
 - `mc serve`
 - `mc profile`
@@ -40,6 +41,9 @@ This is the authoritative `mc` CLI command hierarchy.
 - `mc release [--reason <text>] [--ignore-missing]` — top-level lease release shortcut.
 - `mc logs` — local log tail helper (local-only utility).
 - `mc completion <shell>` — shell completion generator (local-only utility).
+- `mc claude run <profile>` — primary Claude launch path (profile runtime + safe auto-repair).
+- `mc claude doctor <profile> [--fix]` — inspect/repair Claude runtime readiness.
+- `mc claude exec <profile> -- [args]` — raw Claude passthrough in prepared runtime.
 
 ## auth
 
@@ -84,6 +88,7 @@ This is the authoritative `mc` CLI command hierarchy.
 - `mc ops ...`
 - `mc daemon ...`
 - `mc launch ...`
+- `mc claude ...`
 - `mc init ...`
 - `mc serve ...`
 - `mc profile ...`

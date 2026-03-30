@@ -2,7 +2,7 @@ use crate::{
     agent_context::AgentContext,
     auth,
     booster::AgentBooster,
-    channel,
+    channel, claude,
     client::MissionControlClient,
     compat,
     config::McConfig,
@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use clap::{Args, CommandFactory, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -88,6 +88,9 @@ pub enum McCommand {
     /// Claude channel server integrations.
     #[command(subcommand)]
     Channel(channel::ChannelCommand),
+    /// Claude profile runtime workflows.
+    #[command(subcommand)]
+    Claude(claude::ClaudeCommand),
     /// Manage MissionControl user profiles.
     #[command(subcommand)]
     Profile(ProfileCommand),
@@ -686,6 +689,7 @@ pub async fn run(
         McCommand::Init(args) => handle_init(args, client, &config, output_mode).await,
         McCommand::Serve(args) => mcp_server::run(&args, &client).await,
         McCommand::Channel(cmd) => channel::run(cmd, &client).await,
+        McCommand::Claude(cmd) => claude::run(cmd, &config).await,
         McCommand::Profile(cmd) => handle_profile(cmd, client, output_mode).await,
         McCommand::Secrets(cmd) => handle_secrets(cmd, client, output_mode).await,
     }

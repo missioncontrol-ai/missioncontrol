@@ -21,7 +21,7 @@ use crate::{
     config::{load_saved_config, mc_home_dir, save_config},
     ui,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -411,7 +411,7 @@ fn finish_session_login(resp: serde_json::Value, base_url: &str, print_token: bo
         );
         eprintln!();
         eprintln!(
-            "  {}Next:{}  {}mc launch claude{}  ·  {}mc auth whoami{}",
+            "  {}Next:{}  {}mc claude run default{}  ·  {}mc auth whoami{}",
             ui::BOLD,
             ui::RESET,
             ui::CYAN,

@@ -21,13 +21,13 @@
 use crate::{
     auth,
     client::MissionControlClient,
-    config::{mc_home_dir, McConfig},
+    config::{McConfig, mc_home_dir},
     mc_info, mc_ok, mc_warn, ui,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs as unix_fs;
@@ -68,7 +68,8 @@ const CODEX_APPROVAL_RULES: &[&str] = &[
 
 #[derive(Args, Debug)]
 pub struct LaunchArgs {
-    /// Agent to launch: codex, claude, gemini, openclaw, custom, resume
+    /// Agent to launch: codex, gemini, openclaw, custom, resume
+    /// (`claude` moved to `mc claude run`)
     agent: Option<AgentKind>,
 
     /// No-op (daemon is no longer started by mc launch; kept for backwards compat)
@@ -971,6 +972,9 @@ fn install_acp_config(
 
 pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McConfig) -> Result<()> {
     let mut selected_agent = resolve_agent_choice(args.agent.clone())?;
+    if matches!(selected_agent, AgentKind::Claude) {
+        bail!("`mc launch claude` has been replaced. Use `mc claude run <profile>`.");
+    }
     let want_resume = !args.new_session
         && (args.resume
             || args.session_id.is_some()
@@ -1253,7 +1257,10 @@ fn enforce_claude_dark_mode(profile_home: &Path) -> Result<()> {
     } else {
         serde_json::Map::new()
     };
-    settings.insert("theme".to_string(), serde_json::Value::String("dark".to_string()));
+    settings.insert(
+        "theme".to_string(),
+        serde_json::Value::String("dark".to_string()),
+    );
     fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
     Ok(())
 }
@@ -1427,7 +1434,7 @@ fn resolve_agent_choice(agent: Option<AgentKind>) -> Result<AgentKind> {
             return Ok(kind);
         }
     }
-    eprint!("mc launch: choose agent [codex/claude/gemini/openclaw/custom] (default codex): ");
+    eprint!("mc launch: choose agent [codex/gemini/openclaw/custom] (default codex): ");
     io::stderr().flush()?;
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
@@ -1694,7 +1701,7 @@ fn merge_missing_dir_entries(src: &Path, dst: &Path) -> Result<usize> {
 fn parse_agent_kind(value: &str) -> Result<AgentKind> {
     match value.trim().to_lowercase().as_str() {
         "codex" => Ok(AgentKind::Codex),
-        "claude" => Ok(AgentKind::Claude),
+        "claude" => bail!("`mc launch claude` has been replaced. Use `mc claude run <profile>`."),
         "gemini" => Ok(AgentKind::Gemini),
         "openclaw" => Ok(AgentKind::Openclaw),
         "custom" | "nanoclaw" => Ok(AgentKind::Custom),

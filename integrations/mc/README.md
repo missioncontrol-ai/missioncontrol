@@ -117,8 +117,11 @@ mc [--base-url URL] [--token TOKEN] [--agent-id ID] [--allow-insecure] \
 ### Claude channel bridge
 - `mc channel claude webhook [--listen-host 127.0.0.1] [--listen-port 8788] [--channel-name missioncontrol] [--enable-reply] [--instructions ...] [--debug-protocol]` — runs a Claude-channel MCP server over stdio, accepts inbound webhook `POST /` payloads (`text`/`content` + optional `meta`/`chat_id`) and emits `notifications/claude/channel`; optional `reply` tool writes to local SSE `GET /events` for integration testing.
 - `mc channel claude missioncontrol --session-id <ai_session_id> [--poll-interval-ms 500] [--channel-name missioncontrol] [--instructions ...] [--debug-protocol]` — bridges MissionControl AI session SSE (`/ai/sessions/{id}/stream`) into `notifications/claude/channel` for `user_message` events. Reply tool is intentionally disabled in this mode until a non-looping outbound endpoint is added.
-- `mc launch claude` enables the experimental Claude channel MCP entry (`missioncontrol_channel`) by default. Use `mc launch claude --no-claude-channel` to opt out. Channel entry failures are warning-only and never block launch.
-- Launch logging explicitly prints whether channel MCP setup was enabled (default) or disabled via `--no-claude-channel`.
+
+### Claude runtime
+- `mc claude run [PROFILE] [--new] [--headless]` — profile-centric Claude launch with readiness checks and safe auto-repair.
+- `mc claude doctor [PROFILE] [--fix] [--headless] [--json]` — inspect Claude profile runtime readiness and apply deterministic repairs with `--fix`.
+- `mc claude exec [PROFILE] [-- ARGS...]` — thin native Claude execution in the prepared profile runtime.
 
 ## Real-time matrix and swarm integration
 

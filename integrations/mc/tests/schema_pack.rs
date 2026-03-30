@@ -41,9 +41,10 @@ fn load_prefers_env_schema_pack() {
         }
     }"#;
     fs::write(temp.path(), content).expect("write schema pack");
-    env::set_var("MC_SCHEMA_PACK_FILE", temp.path());
+    // Rust 2024 marks environment mutation as unsafe because it is process-global.
+    unsafe { env::set_var("MC_SCHEMA_PACK_FILE", temp.path()) };
     let pack = SchemaPack::load();
-    env::remove_var("MC_SCHEMA_PACK_FILE");
+    unsafe { env::remove_var("MC_SCHEMA_PACK_FILE") };
     assert_eq!(pack.version, "v2");
     assert_eq!(pack.name, "override");
     assert!(pack.entities.contains_key("custom"));

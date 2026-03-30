@@ -32,7 +32,7 @@ MC_TOKEN="<your-token>" mc auth login   # saves ~/.missioncontrol/session.json
 **Step 3 — Launch your agent:**
 
 ```bash
-mc launch claude        # Claude Code
+mc claude run default   # Claude Code
 mc launch codex         # OpenAI Codex CLI
 mc launch gemini        # Google Gemini CLI
 mc launch openclaw      # OpenClaw
@@ -53,7 +53,7 @@ That's it. `mc launch` handles: auth preflight, config generation, and exec.
 6. Injects `MC_TOKEN` into the agent's process environment
 7. exec's the agent
 
-## Flags
+## `mc launch` flags (non-Claude agents)
 
 | Flag | Effect |
 |---|---|
@@ -61,7 +61,7 @@ That's it. `mc launch` handles: auth preflight, config generation, and exec.
 | `--no-daemon` | Skip daemon management (daemon externally managed) |
 | `--skip-config-gen` | Use existing config, skip manifest fetch |
 | `--no-embed-token` | Omit `MC_TOKEN` from written config file (auto-implied for session tokens) |
-| `--legacy-global-config` | Write config to global agent paths (`~/.codex`, `~/.claude.json`, `~/.gemini`) for compatibility |
+| `--legacy-global-config` | Write config to global agent paths (`~/.codex`, `~/.gemini`) for compatibility |
 | `--daemon-timeout N` | Seconds to wait for daemon ready (default: 15) |
 | `-- <args>` | Pass remaining args verbatim to the agent |
 
@@ -69,7 +69,6 @@ That's it. `mc launch` handles: auth preflight, config generation, and exec.
 
 | Agent | Config written by `mc launch` |
 |---|---|
-| Claude Code | `~/.missioncontrol/instances/<runtime_session_id>/home/.claude.json` |
 | Codex | `~/.missioncontrol/instances/<runtime_session_id>/home/.codex/config.toml` |
 | Gemini CLI | `~/.missioncontrol/instances/<runtime_session_id>/home/.gemini/settings.json` |
 | OpenClaw | `~/.missioncontrol/instances/<runtime_session_id>/mc/config/openclaw.acp.json` |
@@ -115,7 +114,7 @@ export MC_BASE_URL="https://your-mc.example.com"
 MC_TOKEN="<static-token>" mc auth login
 
 # From now on — no MC_TOKEN needed in env
-mc launch claude   # session loaded from ~/.missioncontrol/session.json
+mc claude run default   # session loaded from ~/.missioncontrol/session.json
 mc launch codex    # token injected into agent process at exec, not written to config
 mc auth whoami          # verify identity
 mc auth logout          # revoke when done
@@ -129,17 +128,17 @@ The recommended pattern is to exchange it for a session token immediately:
 ```bash
 # Exchange OIDC JWT for a longer-lived mc session token
 MC_TOKEN="$(get-oidc-token)" mc auth login --ttl-hours 8
-mc launch claude
+mc claude run default
 ```
 
-Or use `--no-embed-token` to keep the OIDC JWT in env only (never written to disk):
+Or run Claude directly with an env token (Claude profile runtime path):
 
 ```bash
 export MC_TOKEN="$(get-oidc-token)"
-mc launch claude --no-embed-token
+mc claude run default
 ```
 
-**Token embedding rules in `mc launch`:**
+**Token embedding rules in `mc launch` (non-Claude agents):**
 - Session tokens (`mcs_*`) → never embedded, always injected at exec time
 - `--no-embed-token` flag → never embedded
 - `MC_TOKEN` absent → never embedded (auto-implied, notice printed)
