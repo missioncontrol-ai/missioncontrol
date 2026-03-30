@@ -1599,6 +1599,7 @@ fn should_force_profile_refresh(rel: &str) -> bool {
         rel,
         ".codex/auth.json"
             | ".codex/credentials.json"
+            | ".claude.json"
             | ".claude/.credentials.json"
             | ".claude/settings.json"
     )
