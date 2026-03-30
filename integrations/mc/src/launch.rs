@@ -61,18 +61,6 @@ pub struct LaunchArgs {
     #[arg(long)]
     profile: Option<String>,
 
-    /// Resume the most recent launch session for the selected agent/profile.
-    #[arg(long)]
-    resume: bool,
-
-    /// Resume a specific runtime session id.
-    #[arg(long)]
-    session_id: Option<String>,
-
-    /// Force starting a new runtime session (default when not resuming).
-    #[arg(long)]
-    new_session: bool,
-
     /// Write agent config to global locations (~/.codex, ~/.claude.json, ~/.gemini)
     /// instead of the instance-local runtime home. Compatibility escape hatch only.
     #[arg(long)]
@@ -90,10 +78,6 @@ pub struct LaunchArgs {
     #[arg(long)]
     no_embed_token: bool,
 
-    /// Legacy no-op for removed `mc launch claude` path.
-    #[arg(long, default_value_t = false)]
-    no_claude_channel: bool,
-
     /// Extra args forwarded verbatim to the agent binary (after --)
     #[arg(last = true)]
     agent_args: Vec<String>,
@@ -106,7 +90,6 @@ enum AgentKind {
     Gemini,
     Openclaw,
     Custom,
-    Resume,
 }
 
 impl AgentKind {
@@ -117,9 +100,6 @@ impl AgentKind {
             AgentKind::Gemini => Box::new(GeminiDriver),
             AgentKind::Openclaw => Box::new(OpenClawDriver),
             AgentKind::Custom => Box::new(CustomDriver),
-            AgentKind::Resume => {
-                unreachable!("resume is handled as a migration shim in mc launch")
-            }
         }
     }
 
@@ -130,7 +110,6 @@ impl AgentKind {
             AgentKind::Gemini => "gemini",
             AgentKind::Openclaw => "openclaw",
             AgentKind::Custom => "custom",
-            AgentKind::Resume => "resume",
         }
     }
 }
@@ -656,29 +635,6 @@ fn absolutize_mc_command(mut entry: serde_json::Value) -> serde_json::Value {
     entry
 }
 
-fn claude_channel_webhook_entry(
-    base_url: &str,
-    token: &str,
-    embed_token: bool,
-) -> serde_json::Value {
-    let mut env = serde_json::Map::new();
-    env.insert(
-        "MC_BASE_URL".to_string(),
-        serde_json::Value::String(base_url.to_string()),
-    );
-    if embed_token && !token.trim().is_empty() {
-        env.insert(
-            "MC_TOKEN".to_string(),
-            serde_json::Value::String(token.to_string()),
-        );
-    }
-    absolutize_mc_command(json!({
-        "command": "mc",
-        "args": ["channel", "claude", "webhook"],
-        "env": serde_json::Value::Object(env),
-    }))
-}
-
 // ── OpenClawDriver / CustomDriver ────────────────────────────────────────────
 
 struct OpenClawDriver;
@@ -770,14 +726,13 @@ fn install_acp_config(
 // ── Orchestration ─────────────────────────────────────────────────────────────
 
 pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McConfig) -> Result<()> {
-    let mut selected_agent = resolve_agent_choice(args.agent.clone())?;
+    let selected_agent = resolve_agent_choice(args.agent.clone())?;
     if matches!(selected_agent, AgentKind::Claude) {
         bail!("`mc launch claude` has been replaced. Use `mc claude run <profile>`.");
     }
-    if matches!(selected_agent, AgentKind::Codex | AgentKind::Resume) {
+    if matches!(selected_agent, AgentKind::Codex) {
         bail!("`mc launch codex` has been replaced. Use `mc codex run <profile>`.");
     }
-    let want_resume = !args.new_session && (args.resume || args.session_id.is_some());
     let base_mc_home = mc_home_dir();
     fs::create_dir_all(&base_mc_home)?;
 
@@ -789,26 +744,7 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     .await
     .unwrap_or_else(|_| "default".to_string());
 
-    let resumed = if want_resume {
-        find_resume_session(&base_mc_home, args.session_id.as_deref(), &profile_name)?
-    } else {
-        None
-    };
-    if let Some(record) = &resumed {
-        if let Ok(kind) = parse_agent_kind(&record.agent) {
-            selected_agent = kind;
-            mc_info!(
-                "resuming runtime session {} ({})",
-                record.runtime_session_id,
-                record.agent
-            );
-        }
-    }
-
-    let runtime_session_id = resumed
-        .as_ref()
-        .map(|r| r.runtime_session_id.clone())
-        .unwrap_or_else(|| format!("rs_{}", Uuid::new_v4().simple()));
+    let runtime_session_id = format!("rs_{}", Uuid::new_v4().simple());
     let instance_home = base_mc_home.join("instances").join(&runtime_session_id);
     let profile_home = base_mc_home.join("profiles").join(&profile_name);
     fs::create_dir_all(&instance_home)?;
@@ -976,41 +912,6 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
         &config_target_home,
         &instance_mc_home,
     )?;
-    if matches!(selected_agent, AgentKind::Claude) && !args.no_claude_channel {
-        mc_info!("claude launch: experimental channel MCP entry enabled (default)");
-        let channel_entry = claude_channel_webhook_entry(&base_url, &token, embed_token);
-        let local_claude_config = config_target_home.join(".claude.json");
-        if let Err(e) = write_json_mcp_entry(
-            &local_claude_config,
-            "missioncontrol_channel",
-            channel_entry.clone(),
-        ) {
-            mc_warn!(
-                "could not write experimental claude channel MCP entry (non-blocking): {}",
-                e
-            );
-        } else {
-            mc_info!(
-                "experimental claude channel MCP config written → {}",
-                local_claude_config.display()
-            );
-        }
-        if let Some(global_home) = dirs::home_dir() {
-            let global_path = global_home.join(".claude.json");
-            if global_path != local_claude_config {
-                if let Err(e) =
-                    write_json_mcp_entry(&global_path, "missioncontrol_channel", channel_entry)
-                {
-                    mc_warn!(
-                        "could not write global experimental claude channel MCP entry (non-blocking): {}",
-                        e
-                    );
-                }
-            }
-        }
-    } else if matches!(selected_agent, AgentKind::Claude) && args.no_claude_channel {
-        mc_info!("claude launch: experimental channel MCP entry disabled (--no-claude-channel)");
-    }
     if matches!(selected_agent, AgentKind::Claude) {
         claude_preflight_report(&agent_home);
     }
@@ -1523,54 +1424,6 @@ fn upsert_launch_session(base_mc_home: &Path, record: LaunchSessionRecord) -> Re
         .join("\n");
     fs::write(session_index_path(base_mc_home), format!("{}\n", body))?;
     Ok(())
-}
-
-fn find_resume_session(
-    base_mc_home: &Path,
-    session_id: Option<&str>,
-    profile: &str,
-) -> Result<Option<LaunchSessionRecord>> {
-    let mut sessions = read_launch_sessions(base_mc_home)?;
-    sessions.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-    if let Some(id) = session_id {
-        return Ok(sessions.into_iter().find(|s| s.runtime_session_id == id));
-    }
-    let mut candidates: Vec<LaunchSessionRecord> = sessions
-        .into_iter()
-        .filter(|s| s.profile == profile)
-        .collect();
-    candidates.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-    candidates.reverse();
-    if candidates.is_empty() {
-        return Ok(None);
-    }
-    if candidates.len() == 1 {
-        return Ok(candidates.into_iter().next());
-    }
-    eprintln!("mc launch resume: select session to resume");
-    for (idx, candidate) in candidates.iter().take(10).enumerate() {
-        eprintln!(
-            "  {}) {}  agent={}  created_at={}",
-            idx + 1,
-            candidate.runtime_session_id,
-            candidate.agent,
-            candidate.created_at
-        );
-    }
-    eprint!("choice [1]: ");
-    io::stderr().flush()?;
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    let picked = answer
-        .trim()
-        .parse::<usize>()
-        .ok()
-        .filter(|n| *n > 0)
-        .unwrap_or(1);
-    let picked_idx = picked
-        .saturating_sub(1)
-        .min(candidates.len().saturating_sub(1));
-    Ok(Some(candidates[picked_idx].clone()))
 }
 
 /// Write (or refresh) `$MC_INSTANCE_HOME/mc/context.json` with the current

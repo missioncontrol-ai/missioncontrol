@@ -137,7 +137,7 @@ async fn run_codex(args: CodexRunArgs, config: &McConfig) -> Result<()> {
     let paths = codex_paths(&profile);
     if args.new {
         mc_info!("{}: starting new session", profile);
-        let status = run_codex_process(&[], &paths.runtime_home, config, &profile)?;
+        let status = run_codex_process(&build_new_session_args(), &paths.runtime_home, config, &profile)?;
         if !status.success() {
             bail!("codex exited with status {}", status);
         }
@@ -146,14 +146,19 @@ async fn run_codex(args: CodexRunArgs, config: &McConfig) -> Result<()> {
 
     mc_info!("{}: resuming", profile);
     let resume_status = run_codex_process(
-        &["resume".into(), "--last".into()],
+        &build_resume_args(),
         &paths.runtime_home,
         config,
         &profile,
     )?;
     if !resume_status.success() {
         mc_info!("{}: resume unavailable; starting new session", profile);
-        let fresh_status = run_codex_process(&[], &paths.runtime_home, config, &profile)?;
+        let fresh_status = run_codex_process(
+            &build_new_session_args(),
+            &paths.runtime_home,
+            config,
+            &profile,
+        )?;
         if !fresh_status.success() {
             bail!("codex exited with status {}", fresh_status);
         }
@@ -222,10 +227,7 @@ async fn exec_codex(args: CodexExecArgs, config: &McConfig) -> Result<()> {
         );
     }
 
-    let mut forwarded = args.codex_args;
-    if forwarded.first().map(|v| v.as_str()) == Some("--") {
-        forwarded.remove(0);
-    }
+    let forwarded = normalize_exec_args(args.codex_args);
 
     let status = run_codex_process(&forwarded, &paths.runtime_home, config, &profile)?;
     if !status.success() {
@@ -405,6 +407,21 @@ fn issue(code: &str, severity: &str, detail: &str, fixable: bool) -> CodexDoctor
     }
 }
 
+fn build_resume_args() -> Vec<String> {
+    vec!["resume".to_string(), "--last".to_string()]
+}
+
+fn build_new_session_args() -> Vec<String> {
+    Vec::new()
+}
+
+fn normalize_exec_args(mut args: Vec<String>) -> Vec<String> {
+    if args.first().map(|v| v.as_str()) == Some("--") {
+        args.remove(0);
+    }
+    args
+}
+
 fn write_ownership(paths: &CodexPaths) -> Result<()> {
     if let Some(parent) = paths.ownership_path.parent() {
         fs::create_dir_all(parent)?;
@@ -579,5 +596,92 @@ b = 2
         let input = "approval_policy = \"on-request\"\n";
         let out = strip_mc_managed_block(input);
         assert_eq!(out, "approval_policy = \"on-request\"");
+    }
+
+    #[test]
+    fn resume_mode_args_are_stable() {
+        assert_eq!(
+            build_resume_args(),
+            vec!["resume".to_string(), "--last".to_string()]
+        );
+        assert!(build_new_session_args().is_empty());
+    }
+
+    #[test]
+    fn normalize_exec_args_strips_passthrough_sentinel_only() {
+        assert_eq!(
+            normalize_exec_args(vec!["--".into(), "--help".into()]),
+            vec!["--help".to_string()]
+        );
+        assert_eq!(
+            normalize_exec_args(vec!["exec".into(), "--json".into()]),
+            vec!["exec".to_string(), "--json".to_string()]
+        );
+    }
+
+    #[test]
+    fn doctor_json_contract_contains_expected_top_level_fields() {
+        let report = CodexDoctorReport {
+            tool: "codex".to_string(),
+            profile: "default".to_string(),
+            auth_mode: "chatgpt_native".to_string(),
+            ready: false,
+            fixable: true,
+            repaired: false,
+            status: "repairable".to_string(),
+            issues: vec![CodexDoctorIssue {
+                code: "MC_CONFIG_MISSING".to_string(),
+                severity: "error".to_string(),
+                detail: "config.toml missing".to_string(),
+                fixable: true,
+            }],
+            repaired_actions: vec![],
+            suggested_command: "mc codex doctor default --fix".to_string(),
+        };
+
+        let value = serde_json::to_value(report).expect("serialize");
+        let obj = value.as_object().expect("json object");
+        for key in [
+            "tool",
+            "profile",
+            "auth_mode",
+            "ready",
+            "fixable",
+            "repaired",
+            "status",
+            "issues",
+            "repaired_actions",
+            "suggested_command",
+        ] {
+            assert!(obj.contains_key(key), "missing key: {key}");
+        }
+    }
+
+    #[test]
+    fn write_codex_config_repairs_missing_managed_block_and_preserves_user_content() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, "model = \"gpt-5\"\n").expect("seed config");
+
+        let cfg = McConfig::from_parts(
+            "http://localhost:8008",
+            Some("tok".to_string()),
+            None,
+            None,
+            None,
+            10,
+            false,
+            false,
+            false,
+            None,
+        )
+        .expect("config");
+
+        let existing = std::fs::read_to_string(&config_path).expect("read existing");
+        write_codex_config(&config_path, &cfg, Some(&existing)).expect("repair write");
+        let repaired = std::fs::read_to_string(&config_path).expect("read repaired");
+        assert!(repaired.contains("model = \"gpt-5\""));
+        assert!(repaired.contains("[mcp_servers.missioncontrol]"));
+        assert!(repaired.contains("MC_BASE_URL"));
     }
 }
