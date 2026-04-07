@@ -77,6 +77,7 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 |---|---|
 | Docker full stack (default) | `bash scripts/dev-up.sh` |
 | Install mc CLI | `bash scripts/install-mc.sh` (pre-built binary or source build) |
+| Curl bootstrap mc | `bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/bootstrap-mc.sh)` |
 | Bootstrap remote node | `curl -fsSL "$BASE_URL/runtime/nodes/$NODE_ID/install-script" | sh` |
 | Philosophy & vision | [MISSIONCONTROL_PHILOSOPHY.md](MISSIONCONTROL_PHILOSOPHY.md) |
 | API reference | `/api/docs` (Swagger UI, when running locally) |
@@ -270,7 +271,7 @@ Set `MC_LOG_EXPORT_PATH=/abs/path/missioncontrol.jsonl` to export structured eve
 Install `mc`:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/install-mc.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/bootstrap-mc.sh)
 ```
 
 Then launch:
