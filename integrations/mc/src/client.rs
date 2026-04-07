@@ -135,6 +135,10 @@ impl MissionControlClient {
         Ok(())
     }
 
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_deref()
+    }
+
     pub fn ws_url(&self, path: &str) -> Result<url::Url> {
         let mut url = self.base_url.clone();
         match url.scheme() {

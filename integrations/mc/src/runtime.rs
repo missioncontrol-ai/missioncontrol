@@ -666,7 +666,10 @@ async fn execute_pty_job(
 }
 
 async fn attach_session(args: RuntimeSessionAttachArgs, client: &MissionControlClient) -> Result<()> {
-    let url = client.ws_url(&format!("/runtime/execution-sessions/{}/pty", args.session_id))?;
+    let mut url = client.ws_url(&format!("/runtime/execution-sessions/{}/pty", args.session_id))?;
+    if let Some(token) = client.token() {
+        url.query_pairs_mut().append_pair("token", token);
+    }
     let (ws, _) = connect_async(url.as_str()).await?;
     let (mut sink, mut stream) = ws.split();
     let mut stdin = tokio::io::stdin();

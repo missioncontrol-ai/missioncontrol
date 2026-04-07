@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 import uuid
@@ -159,6 +160,25 @@ def _lease_payload(lease: JobLease) -> dict:
         "created_at": lease.created_at,
         "updated_at": lease.updated_at,
     }
+
+
+def _session_from_token(token: str):
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    now = datetime.utcnow()
+    with get_session() as db:
+        row = db.exec(
+            select(UserSession)
+            .where(UserSession.token_hash == token_hash)
+            .where(UserSession.revoked == False)  # noqa: E712
+            .where(UserSession.expires_at > now)
+        ).first()
+        if row is None:
+            raise HTTPException(status_code=401, detail="Unauthorized: invalid or expired session token")
+        return {
+            "subject": row.subject,
+            "session_id": row.id,
+            "expires_at": row.expires_at,
+        }
 
 
 def _execution_session_payload(session: ExecutionSession) -> dict:
@@ -500,6 +520,32 @@ def attach_execution_session(session_id: str, body: ExecutionAttachCreate, reque
 
 @router.websocket("/execution-sessions/{session_id}/pty")
 async def execution_session_pty(websocket: WebSocket, session_id: str):
+    token = websocket.query_params.get("token") or websocket.headers.get("authorization", "")
+    if token.startswith("Bearer "):
+        token = token.split(" ", 1)[1].strip()
+    if not token:
+        await websocket.close(code=1008)
+        return
+    try:
+        principal = _session_from_token(token)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+
+    with get_session() as db:
+        session = db.get(ExecutionSession, session_id)
+        if not session:
+            await websocket.close(code=1008)
+            return
+        lease = db.get(JobLease, session.lease_id)
+        if not lease:
+            await websocket.close(code=1008)
+            return
+        job = db.get(RuntimeJob, lease.job_id)
+        if not job or job.owner_subject != principal["subject"]:
+            await websocket.close(code=1008)
+            return
+
     await websocket.accept()
     clients = _execution_ws_clients.setdefault(session_id, set())
     clients.add(websocket)
