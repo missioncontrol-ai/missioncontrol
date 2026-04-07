@@ -1,12 +1,12 @@
 use crate::{client::MissionControlClient, output, output::OutputMode};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde_json::{json, Value};
 use std::{fs, io::{Read, Write}, path::PathBuf, process::Stdio, time::Duration};
 use tokio::{
-    io::{AsyncBufReadExt, BufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     process::Command,
     time::sleep,
 };
@@ -24,6 +24,9 @@ pub enum RuntimeCommand {
     /// Runtime lease helpers.
     #[command(subcommand)]
     Leases(RuntimeLeasesCommand),
+    /// Runtime execution-session helpers.
+    #[command(subcommand)]
+    Sessions(RuntimeSessionsCommand),
 }
 
 #[derive(Subcommand, Debug)]
@@ -54,6 +57,11 @@ pub enum RuntimeLeasesCommand {
     Create(RuntimeLeaseCreateArgs),
     Status(RuntimeLeaseStatusArgs),
     Complete(RuntimeLeaseCompleteArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RuntimeSessionsCommand {
+    Attach(RuntimeSessionAttachArgs),
 }
 
 #[derive(Args, Debug)]
@@ -148,6 +156,14 @@ pub struct RuntimeLeaseCompleteArgs {
     pub error_message: String,
 }
 
+#[derive(Args, Debug)]
+pub struct RuntimeSessionAttachArgs {
+    #[arg(long)]
+    pub session_id: String,
+    #[arg(long, default_value_t = false)]
+    pub raw: bool,
+}
+
 #[derive(Args, Debug, Default)]
 pub struct RuntimeListArgs {
     #[arg(long)]
@@ -159,6 +175,7 @@ pub async fn run(command: RuntimeCommand, client: &MissionControlClient, output_
         RuntimeCommand::Nodes(cmd) => run_nodes(cmd, client, output_mode).await,
         RuntimeCommand::Jobs(cmd) => run_jobs(cmd, client, output_mode).await,
         RuntimeCommand::Leases(cmd) => run_leases(cmd, client, output_mode).await,
+        RuntimeCommand::Sessions(cmd) => run_sessions(cmd, client, output_mode).await,
     }
 }
 
@@ -252,6 +269,13 @@ async fn run_leases(command: RuntimeLeasesCommand, client: &MissionControlClient
         }
     }
     Ok(())
+}
+
+async fn run_sessions(command: RuntimeSessionsCommand, client: &MissionControlClient, output_mode: OutputMode) -> Result<()> {
+    let _ = output_mode;
+    match command {
+        RuntimeSessionsCommand::Attach(args) => attach_session(args, client).await,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -639,6 +663,51 @@ async fn execute_pty_job(
     let status = child.wait()?;
     stdin_task.abort();
     Ok(status.exit_code() as i32)
+}
+
+async fn attach_session(args: RuntimeSessionAttachArgs, client: &MissionControlClient) -> Result<()> {
+    let url = client.ws_url(&format!("/runtime/execution-sessions/{}/pty", args.session_id))?;
+    let (ws, _) = connect_async(url.as_str()).await?;
+    let (mut sink, mut stream) = ws.split();
+    let mut stdin = tokio::io::stdin();
+    let mut stdout = tokio::io::stdout();
+
+    let writer = tokio::spawn(async move {
+        let mut buf = [0u8; 1024];
+        loop {
+            let n = stdin.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            let text = String::from_utf8_lossy(&buf[..n]).to_string();
+            sink.send(Message::Text(json!({"type":"input","content":text}).to_string()))
+                .await
+                .map_err(|err| anyhow::anyhow!(err))?;
+        }
+        Ok::<(), anyhow::Error>(())
+    });
+
+    while let Some(msg) = stream.next().await {
+        match msg? {
+            Message::Text(text) => {
+                if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                    if let Some(content) = value.get("content").and_then(Value::as_str) {
+                        stdout.write_all(content.as_bytes()).await?;
+                        stdout.flush().await?;
+                    }
+                }
+            }
+            Message::Binary(bytes) => {
+                stdout.write_all(&bytes).await?;
+                stdout.flush().await?;
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+
+    writer.abort();
+    Ok(())
 }
 
 fn build_host_command(
