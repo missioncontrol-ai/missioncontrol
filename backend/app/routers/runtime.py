@@ -30,7 +30,7 @@ from app.services.authz import actor_subject_from_request
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
 
-RUNTIME_RELEASE_VERSION = os.getenv("MC_RUNTIME_RELEASE_VERSION", "0.1.7")
+RUNTIME_RELEASE_VERSION = os.getenv("MC_RUNTIME_RELEASE_VERSION", "0.2.0")
 RUNTIME_RELEASE_BASE_URL = os.getenv(
     "MC_RUNTIME_RELEASE_BASE_URL",
     "https://github.com/missioncontrol-ai/missioncontrol/releases/latest/download",

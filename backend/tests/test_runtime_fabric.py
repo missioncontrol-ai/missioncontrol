@@ -104,7 +104,7 @@ class RuntimeFabricTests(unittest.TestCase):
             self.assertEqual(bundle["service"]["name"], "mc-node.service")
 
             release = runtime.get_runtime_release_manifest()
-            self.assertEqual(release["version"], "0.1.7")
+            self.assertEqual(release["version"], "0.2.0")
             self.assertEqual(release["files"][0]["os"], "linux")
             self.assertEqual(release["files"][0]["arch"], "x86_64")
             self.assertEqual(
