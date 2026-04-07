@@ -8,6 +8,10 @@ backend/dev-data/
 # Vector store
 backend/chroma/
 
+# MCP
+.mcp.json
+
+
 # OS
 .DS_Store
 Thumbs.db

@@ -9,7 +9,7 @@ use crate::{
     daemon::{self, DaemonArgs},
     drift, evolve, governance, launch, maintenance, mcp_server, mcp_tools, ops,
     output::{self, OutputMode},
-    remote,
+    remote, runtime,
     schema_pack::SchemaPack,
     secrets, update,
 };
@@ -68,6 +68,9 @@ pub enum McCommand {
     /// Agent control workflows (remote, evolve, swarm/subagent workflows).
     #[command(subcommand)]
     Agent(AgentCommand),
+    /// Runtime fabric workflows (nodes, jobs, leases).
+    #[command(subcommand)]
+    Runtime(runtime::RuntimeCommand),
     /// Approval workflow commands (requests, decisions).
     #[command(subcommand)]
     Approvals(ApprovalCommand),
@@ -149,6 +152,9 @@ pub enum AgentCommand {
     /// Remote agent control verbs.
     #[command(subcommand)]
     Remote(remote::RemoteCommand),
+    /// Resident node-agent control verbs.
+    #[command(subcommand)]
+    Node(runtime::NodeAgentCommand),
     /// Self-improvement loop for MissionControl itself (agent-driven backlog/code evolution).
     Evolve(evolve::EvolveArgs),
 }
@@ -682,6 +688,7 @@ pub async fn run(
         McCommand::Admin(cmd) => handle_admin(cmd, client).await,
         McCommand::System(cmd) => handle_system(cmd, client, &config).await,
         McCommand::Agent(cmd) => handle_agent(cmd, client, &booster, &config.schema_pack).await,
+        McCommand::Runtime(cmd) => handle_runtime(cmd, client, output_mode).await,
         McCommand::Workspace(cmd) => {
             handle_workspace(cmd, client, &booster, &config.schema_pack, output_mode).await
         }
@@ -1673,8 +1680,17 @@ async fn handle_agent(
     let _ = (booster, schema_pack);
     match command {
         AgentCommand::Remote(cmd) => remote::run(cmd, &client).await,
+        AgentCommand::Node(cmd) => runtime::run_node_agent(cmd, &client).await,
         AgentCommand::Evolve(args) => evolve::run(args, &client).await,
     }
+}
+
+async fn handle_runtime(
+    command: runtime::RuntimeCommand,
+    client: MissionControlClient,
+    output_mode: OutputMode,
+) -> Result<()> {
+    runtime::run(command, &client, output_mode).await
 }
 
 async fn handle_init(

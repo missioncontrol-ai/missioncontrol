@@ -20,6 +20,7 @@ pub mod mcp_tools;
 pub mod ops;
 pub mod output;
 pub mod remote;
+pub mod runtime;
 pub mod schema_pack;
 pub mod secrets;
 pub mod ui;

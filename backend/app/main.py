@@ -44,6 +44,7 @@ from app.routers import (
     governance,
     approvals,
     slack_integrations,
+    runtime,
     feedback,
     skills,
     google_chat_integrations,
@@ -676,6 +677,7 @@ app.include_router(governance.router)
 app.include_router(approvals.router)
 app.include_router(ops.router)
 app.include_router(slack_integrations.router)
+app.include_router(runtime.router)
 app.include_router(chat_integrations.router)
 app.include_router(feedback.router)
 app.include_router(skills.router)

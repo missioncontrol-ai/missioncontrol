@@ -630,3 +630,80 @@ class RemoteLaunchRecord(SQLModel, table=True):
     mc_version: str = Field(default="")
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RuntimeNode(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("node_name", name="uq_runtimenode_name"),)
+    id: str = Field(primary_key=True)
+    owner_subject: str = Field(index=True)
+    node_name: str = Field(index=True)
+    hostname: str = Field(default="")
+    status: str = Field(default="offline", index=True)
+    trust_tier: str = Field(default="untrusted")
+    labels_json: str = Field(default="{}", sa_column=Column(Text))
+    capacity_json: str = Field(default="{}", sa_column=Column(Text))
+    capabilities_json: str = Field(default="[]", sa_column=Column(Text))
+    runtime_version: str = Field(default="")
+    bootstrap_token_prefix: str = Field(default="")
+    last_heartbeat_at: Optional[datetime] = None
+    registered_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RuntimeJob(SQLModel, table=True):
+    id: str = Field(primary_key=True)
+    owner_subject: str = Field(index=True)
+    mission_id: str = Field(default="", index=True)
+    task_id: Optional[int] = Field(default=None, index=True)
+    runtime_session_id: str = Field(default="", index=True)
+    runtime_class: str = Field(default="container", index=True)
+    image: str = Field(default="")
+    command: str = Field(default="", sa_column=Column(Text))
+    args_json: str = Field(default="[]", sa_column=Column(Text))
+    env_json: str = Field(default="{}", sa_column=Column(Text))
+    cwd: str = Field(default="")
+    mounts_json: str = Field(default="[]", sa_column=Column(Text))
+    artifact_rules_json: str = Field(default="{}", sa_column=Column(Text))
+    timeout_seconds: int = Field(default=3600)
+    restart_policy: str = Field(default="never")
+    required_capabilities_json: str = Field(default="[]", sa_column=Column(Text))
+    preferred_labels_json: str = Field(default="{}", sa_column=Column(Text))
+    status: str = Field(default="queued", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class JobLease(SQLModel, table=True):
+    id: str = Field(primary_key=True)
+    job_id: str = Field(index=True)
+    node_id: str = Field(index=True)
+    status: str = Field(default="leased", index=True)
+    claimed_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    heartbeat_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    exit_code: Optional[int] = None
+    error_message: str = Field(default="", sa_column=Column(Text))
+    cleanup_status: str = Field(default="pending")
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ExecutionSession(SQLModel, table=True):
+    id: str = Field(primary_key=True)
+    lease_id: str = Field(index=True)
+    runtime_class: str = Field(default="container", index=True)
+    pty_requested: bool = False
+    attach_token_prefix: str = Field(default="")
+    status: str = Field(default="active", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class NodeEvent(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    node_id: Optional[str] = Field(default=None, index=True)
+    lease_id: Optional[str] = Field(default=None, index=True)
+    event_type: str = Field(index=True)
+    payload_json: str = Field(default="{}", sa_column=Column(Text))
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
