@@ -430,18 +430,27 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
                     &json!({"status":"running"}),
                 )
                 .await;
-            let _ = client
+            let pty_requested = runtime_class == "host_process";
+            let session = client
                 .post_json(
                     "/runtime/execution-sessions",
                     &json!({
                         "lease_id": lease_id,
                         "runtime_class": runtime_class,
-                        "pty_requested": false
+                        "pty_requested": pty_requested
                     }),
                 )
-                .await;
+                .await
+                .ok();
+            let session_id = session
+                .as_ref()
+                .and_then(|value| value.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let result = execute_job(
                 client,
+                &session_id,
                 &lease_id,
                 runtime_class,
                 command,
@@ -476,6 +485,7 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
 
 async fn execute_job(
     client: &MissionControlClient,
+    session_id: &str,
     lease_id: &str,
     runtime_class: &str,
     command: &str,
@@ -492,10 +502,17 @@ async fn execute_job(
     let mut child = cmd.spawn().context("failed to spawn runtime job")?;
     if let Some(stdout) = child.stdout.take() {
         let client = client.clone();
+        let session_id = session_id.to_string();
         let lease_id = lease_id.to_string();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                let _ = client
+                    .post_json(
+                        &format!("/runtime/execution-sessions/{}/attach", session_id),
+                        &json!({"session_id": session_id,"stream":"stdout","content":line}),
+                    )
+                    .await;
                 let _ = client
                     .post_json(
                         &format!("/runtime/leases/{}/logs", lease_id),
@@ -507,10 +524,17 @@ async fn execute_job(
     }
     if let Some(stderr) = child.stderr.take() {
         let client = client.clone();
+        let session_id = session_id.to_string();
         let lease_id = lease_id.to_string();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                let _ = client
+                    .post_json(
+                        &format!("/runtime/execution-sessions/{}/attach", session_id),
+                        &json!({"session_id": session_id,"stream":"stderr","content":line}),
+                    )
+                    .await;
                 let _ = client
                     .post_json(
                         &format!("/runtime/leases/{}/logs", lease_id),
@@ -561,7 +585,8 @@ fn build_container_command(
     env_map: &serde_json::Map<String, Value>,
     cwd: &str,
 ) -> Result<Command> {
-    let runtime = container_runtime_binary().ok_or_else(|| anyhow::anyhow!("no container runtime found on PATH"))?;
+    let runtime = container_runtime_binary()
+        .ok_or_else(|| anyhow::anyhow!("no container runtime found on PATH"))?;
     let mut cmd = Command::new(runtime);
     cmd.arg("run").arg("--rm").arg("-i");
     if !cwd.trim().is_empty() {

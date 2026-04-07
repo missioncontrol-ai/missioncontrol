@@ -11,13 +11,17 @@ from app.routers.runtime import (
     LeaseCreate,
     LeaseStatus,
     LeaseLogChunk,
+    ExecutionSessionCreate,
+    ExecutionAttachCreate,
     NodeHeartbeat,
     NodeRegister,
     append_lease_logs,
+    attach_execution_session,
     claim_lease,
     complete_lease,
     create_job,
     create_lease,
+    create_execution_session,
     heartbeat_node,
     list_jobs,
     list_nodes,
@@ -221,6 +225,36 @@ class RuntimeFabricTests(unittest.TestCase):
                 request=_req(),
             )
         self.assertEqual(result["ok"], True)
+
+    def test_create_execution_session_and_attach(self):
+        job = _job()
+        lease = _lease()
+        lease.job_id = job.id
+        session_row = SimpleNamespace(
+            id="session-1",
+            lease_id=lease.id,
+            runtime_class="host_process",
+            pty_requested=True,
+            attach_token_prefix="abcd1234",
+            status="active",
+            created_at=None,
+            updated_at=None,
+        )
+        with patch("app.routers.runtime.get_session", _session([lease, job])):
+            created = create_execution_session(
+                body=ExecutionSessionCreate(lease_id=lease.id, runtime_class="host_process", pty_requested=True),
+                request=_req(),
+            )
+        self.assertEqual(created["runtime_class"], "host_process")
+        self.assertTrue(created["pty_requested"])
+
+        with patch("app.routers.runtime.get_session", _session([session_row, lease, job])):
+            attached = attach_execution_session(
+                session_id=session_row.id,
+                body=ExecutionAttachCreate(session_id=session_row.id, stream="stdin", content="echo hi"),
+                request=_req(),
+            )
+        self.assertTrue(attached["ok"])
 
 
 if __name__ == "__main__":

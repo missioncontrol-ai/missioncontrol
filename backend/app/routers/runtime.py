@@ -6,6 +6,7 @@ import json
 import secrets
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -88,6 +89,12 @@ class LeaseLogChunk(BaseModel):
     content: str
 
 
+class ExecutionAttachCreate(BaseModel):
+    session_id: str
+    stream: str = "stdin"
+    content: str
+
+
 def _json_dump(value: object) -> str:
     return json.dumps(value, separators=(",", ":"))
 
@@ -150,6 +157,19 @@ def _lease_payload(lease: JobLease) -> dict:
         "cleanup_status": lease.cleanup_status,
         "created_at": lease.created_at,
         "updated_at": lease.updated_at,
+    }
+
+
+def _execution_session_payload(session: ExecutionSession) -> dict:
+    return {
+        "id": session.id,
+        "lease_id": session.lease_id,
+        "runtime_class": session.runtime_class,
+        "pty_requested": session.pty_requested,
+        "attach_token_prefix": session.attach_token_prefix,
+        "status": session.status,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
     }
 
 
@@ -428,16 +448,7 @@ def create_execution_session(body: ExecutionSessionCreate, request: Request):
         db.add(session)
         db.commit()
         db.refresh(session)
-        return {
-            "id": session.id,
-            "lease_id": session.lease_id,
-            "runtime_class": session.runtime_class,
-            "pty_requested": session.pty_requested,
-            "attach_token_prefix": session.attach_token_prefix,
-            "status": session.status,
-            "created_at": session.created_at,
-            "updated_at": session.updated_at,
-        }
+        return _execution_session_payload(session)
 
 
 @router.get("/execution-sessions/{session_id}/attach-token")
@@ -459,6 +470,31 @@ def get_execution_session_attach_token(session_id: str, request: Request):
             "attach_token_prefix": session.attach_token_prefix,
             "status": session.status,
         }
+
+
+@router.post("/execution-sessions/{session_id}/attach")
+def attach_execution_session(session_id: str, body: ExecutionAttachCreate, request: Request):
+    subject = actor_subject_from_request(request)
+    with get_session() as db:
+        session = db.get(ExecutionSession, session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Execution session not found")
+        lease = db.get(JobLease, session.lease_id)
+        if not lease:
+            raise HTTPException(status_code=404, detail="Lease not found")
+        job = db.get(RuntimeJob, lease.job_id)
+        if not job or job.owner_subject != subject:
+            raise HTTPException(status_code=404, detail="Job not found")
+        db.add(
+            NodeEvent(
+                node_id=lease.node_id,
+                lease_id=lease.id,
+                event_type=f"execution.attach.{body.stream}",
+                payload_json=_json_dump(body.model_dump()),
+            )
+        )
+        db.commit()
+        return {"ok": True}
 
 
 @router.get("/leases/{lease_id}")
