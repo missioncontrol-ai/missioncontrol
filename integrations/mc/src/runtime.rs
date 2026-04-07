@@ -430,6 +430,16 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
                     &json!({"status":"running"}),
                 )
                 .await;
+            let _ = client
+                .post_json(
+                    "/runtime/execution-sessions",
+                    &json!({
+                        "lease_id": lease_id,
+                        "runtime_class": runtime_class,
+                        "pty_requested": false
+                    }),
+                )
+                .await;
             let result = execute_job(
                 client,
                 &lease_id,
@@ -473,23 +483,11 @@ async fn execute_job(
     env_map: serde_json::Map<String, Value>,
     cwd: &str,
 ) -> Result<i32> {
-    let mut cmd = if command.trim().is_empty() {
-        let mut shell = Command::new("sh");
-        shell.arg("-lc").arg("true");
-        shell
+    let mut cmd = if runtime_class == "container" {
+        build_container_command(command, args, &env_map, cwd)?
     } else {
-        let mut process = Command::new(command);
-        process.args(args);
-        process
+        build_host_command(command, args, &env_map, cwd)
     };
-    if !cwd.trim().is_empty() {
-        cmd.current_dir(cwd);
-    }
-    for (key, value) in env_map {
-        if let Some(value) = value.as_str() {
-            cmd.env(key, value);
-        }
-    }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().context("failed to spawn runtime job")?;
     if let Some(stdout) = child.stdout.take() {
@@ -529,6 +527,80 @@ async fn execute_job(
         info!(exit_code = status.code().unwrap_or(1), "container job complete");
     }
     Ok(status.code().unwrap_or(1))
+}
+
+fn build_host_command(
+    command: &str,
+    args: &[String],
+    env_map: &serde_json::Map<String, Value>,
+    cwd: &str,
+) -> Command {
+    let mut cmd = if command.trim().is_empty() {
+        let mut shell = Command::new("sh");
+        shell.arg("-lc").arg("true");
+        shell
+    } else {
+        let mut process = Command::new(command);
+        process.args(args);
+        process
+    };
+    if !cwd.trim().is_empty() {
+        cmd.current_dir(cwd);
+    }
+    for (key, value) in env_map {
+        if let Some(value) = value.as_str() {
+            cmd.env(key, value);
+        }
+    }
+    cmd
+}
+
+fn build_container_command(
+    command: &str,
+    args: &[String],
+    env_map: &serde_json::Map<String, Value>,
+    cwd: &str,
+) -> Result<Command> {
+    let runtime = container_runtime_binary().ok_or_else(|| anyhow::anyhow!("no container runtime found on PATH"))?;
+    let mut cmd = Command::new(runtime);
+    cmd.arg("run").arg("--rm").arg("-i");
+    if !cwd.trim().is_empty() {
+        cmd.arg("-w").arg(cwd);
+    }
+    for (key, value) in env_map {
+        if let Some(value) = value.as_str() {
+            cmd.arg("-e").arg(format!("{key}={value}"));
+        }
+    }
+    let image = default_container_image();
+    if image.is_empty() {
+        return Err(anyhow::anyhow!("container job missing image"));
+    }
+    cmd.arg(image);
+    if command.trim().is_empty() {
+        cmd.arg("sh").arg("-lc").arg("true");
+    } else {
+        cmd.arg(command);
+        cmd.args(args);
+    }
+    Ok(cmd)
+}
+
+fn container_runtime_binary() -> Option<String> {
+    ["docker", "podman"]
+        .iter()
+        .find_map(|candidate| {
+            std::process::Command::new("sh")
+                .arg("-lc")
+                .arg(format!("command -v {candidate} >/dev/null 2>&1"))
+                .status()
+                .ok()
+                .and_then(|status| if status.success() { Some((*candidate).to_string()) } else { None })
+        })
+}
+
+fn default_container_image() -> String {
+    std::env::var("MC_RUNTIME_DEFAULT_IMAGE").unwrap_or_else(|_| "alpine:3".to_string())
 }
 
 fn parse_kv_pairs(input: &str) -> Value {
