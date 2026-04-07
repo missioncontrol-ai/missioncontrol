@@ -134,4 +134,21 @@ impl MissionControlClient {
             .context("unexpected status code")?;
         Ok(())
     }
+
+    pub fn ws_url(&self, path: &str) -> Result<url::Url> {
+        let mut url = self.base_url.clone();
+        match url.scheme() {
+            "http" => {
+                url.set_scheme("ws").ok();
+            }
+            "https" => {
+                url.set_scheme("wss").ok();
+            }
+            _ => {}
+        }
+        url = url
+            .join(path)
+            .with_context(|| format!("invalid websocket path: {path}"))?;
+        Ok(url)
+    }
 }

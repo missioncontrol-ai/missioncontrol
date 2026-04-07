@@ -1,13 +1,16 @@
 use crate::{client::MissionControlClient, output, output::OutputMode};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
+use futures_util::StreamExt;
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf, process::Stdio, time::Duration};
+use std::{fs, io::{Read, Write}, path::PathBuf, process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command,
     time::sleep,
 };
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::info;
 
 #[derive(Subcommand, Debug)]
@@ -457,6 +460,7 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
                 &args_vec,
                 env_map,
                 cwd,
+                pty_requested,
             )
             .await;
             match result {
@@ -492,7 +496,11 @@ async fn execute_job(
     args: &[String],
     env_map: serde_json::Map<String, Value>,
     cwd: &str,
+    pty_requested: bool,
 ) -> Result<i32> {
+    if pty_requested {
+        return execute_pty_job(client, session_id, lease_id, command, args, env_map, cwd).await;
+    }
     let mut cmd = if runtime_class == "container" {
         build_container_command(command, args, &env_map, cwd)?
     } else {
@@ -551,6 +559,86 @@ async fn execute_job(
         info!(exit_code = status.code().unwrap_or(1), "container job complete");
     }
     Ok(status.code().unwrap_or(1))
+}
+
+async fn execute_pty_job(
+    client: &MissionControlClient,
+    session_id: &str,
+    lease_id: &str,
+    command: &str,
+    args: &[String],
+    env_map: serde_json::Map<String, Value>,
+    cwd: &str,
+) -> Result<i32> {
+    let pty_system = native_pty_system();
+    let pair = pty_system.openpty(PtySize {
+        rows: 24,
+        cols: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    })?;
+    let mut builder = if command.trim().is_empty() {
+        CommandBuilder::new("sh")
+    } else {
+        CommandBuilder::new(command)
+    };
+    if !command.trim().is_empty() {
+        for arg in args {
+            builder.arg(arg);
+        }
+    } else {
+        builder.arg("-lc");
+        builder.arg("true");
+    }
+    for (key, value) in env_map {
+        if let Some(value) = value.as_str() {
+            builder.env(key, value);
+        }
+    }
+    if !cwd.trim().is_empty() {
+        builder.cwd(cwd);
+    }
+    let mut child = pair.slave.spawn_command(builder)?;
+    let mut reader = pair.master.try_clone_reader()?;
+    let mut writer = pair.master.take_writer()?;
+    let url = client.ws_url(&format!("/runtime/execution-sessions/{}/pty", session_id))?;
+    let (mut ws, _) = connect_async(url.as_str()).await?;
+    let stdin_task = tokio::spawn(async move {
+        while let Some(msg) = ws.next().await {
+            match msg {
+                Ok(Message::Text(text)) => {
+                    if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                        if value.get("type").and_then(Value::as_str) == Some("input") {
+                            if let Some(content) = value.get("content").and_then(Value::as_str) {
+                                let _ = writer.write_all(content.as_bytes());
+                            }
+                        }
+                    }
+                }
+                Ok(Message::Binary(bytes)) => {
+                    let _ = writer.write_all(&bytes);
+                }
+                _ => break,
+            }
+        }
+    });
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        let text = String::from_utf8_lossy(&buf[..n]).to_string();
+        let _ = client
+            .post_json(
+                &format!("/runtime/leases/{}/logs", lease_id),
+                &json!({"stream":"pty","content":text}),
+            )
+            .await;
+    }
+    let status = child.wait()?;
+    stdin_task.abort();
+    Ok(status.exit_code() as i32)
 }
 
 fn build_host_command(

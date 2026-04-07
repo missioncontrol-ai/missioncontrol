@@ -6,10 +6,9 @@ import json
 import secrets
 import uuid
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
@@ -18,6 +17,8 @@ from app.models import ExecutionSession, JobLease, NodeEvent, RuntimeJob, Runtim
 from app.services.authz import actor_subject_from_request
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
+
+_execution_ws_clients: dict[str, set[WebSocket]] = {}
 
 
 class NodeRegister(BaseModel):
@@ -495,6 +496,40 @@ def attach_execution_session(session_id: str, body: ExecutionAttachCreate, reque
         )
         db.commit()
         return {"ok": True}
+
+
+@router.websocket("/execution-sessions/{session_id}/pty")
+async def execution_session_pty(websocket: WebSocket, session_id: str):
+    await websocket.accept()
+    clients = _execution_ws_clients.setdefault(session_id, set())
+    clients.add(websocket)
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            for client in list(_execution_ws_clients.get(session_id, set())):
+                if client is websocket:
+                    continue
+                try:
+                    await client.send_json(payload)
+                except Exception:
+                    continue
+    except WebSocketDisconnect:
+        pass
+    finally:
+        clients = _execution_ws_clients.get(session_id)
+        if clients is not None:
+            clients.discard(websocket)
+            if not clients:
+                _execution_ws_clients.pop(session_id, None)
+
+
+async def broadcast_execution_session(session_id: str, payload: dict) -> None:
+    clients = list(_execution_ws_clients.get(session_id, set()))
+    for client in clients:
+        try:
+            await client.send_json(payload)
+        except Exception:
+            continue
 
 
 @router.get("/leases/{lease_id}")
