@@ -284,8 +284,46 @@ struct NodeState {
     node_name: String,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct NodeRuntimeConfig {
+    node_name: String,
+    hostname: String,
+    trust_tier: String,
+    bootstrap_token: String,
+    upgrade_channel: String,
+    desired_version: String,
+    poll_seconds: u64,
+    heartbeat_seconds: u64,
+    capabilities: Vec<String>,
+    labels: serde_json::Map<String, Value>,
+    upgrade_manifest_url: String,
+}
+
+impl Default for NodeRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            node_name: String::new(),
+            hostname: String::new(),
+            trust_tier: "untrusted".to_string(),
+            bootstrap_token: String::new(),
+            upgrade_channel: "stable".to_string(),
+            desired_version: String::new(),
+            poll_seconds: 30,
+            heartbeat_seconds: 15,
+            capabilities: Vec::new(),
+            labels: serde_json::Map::new(),
+            upgrade_manifest_url: String::new(),
+        }
+    }
+}
+
 fn node_state_path() -> PathBuf {
     crate::config::mc_home_dir().join("runtime").join("node.json")
+}
+
+fn node_config_path() -> PathBuf {
+    crate::config::mc_home_dir().join("runtime").join("node-config.json")
 }
 
 fn load_node_state() -> Result<Option<NodeState>> {
@@ -326,15 +364,70 @@ fn persist_node_state(state: &NodeState) -> Result<()> {
     Ok(())
 }
 
+fn load_node_config() -> Result<Option<NodeRuntimeConfig>> {
+    let path = node_config_path();
+    let raw = match fs::read_to_string(&path) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    let config: NodeRuntimeConfig = serde_json::from_str(&raw).context("invalid node config json")?;
+    Ok(Some(config))
+}
+
+fn persist_node_config(config: &NodeRuntimeConfig) -> Result<()> {
+    let path = node_config_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_string_pretty(config)?)?;
+    Ok(())
+}
+
+fn default_node_config(args: &NodeAgentRunArgs) -> NodeRuntimeConfig {
+    NodeRuntimeConfig {
+        node_name: std::env::var("MC_NODE_NAME").unwrap_or_else(|_| args.node_name.clone()),
+        hostname: std::env::var("MC_NODE_HOSTNAME").unwrap_or_else(|_| args.hostname.clone()),
+        trust_tier: std::env::var("MC_NODE_TRUST_TIER").unwrap_or_else(|_| args.trust_tier.clone()),
+        bootstrap_token: std::env::var("MC_NODE_BOOTSTRAP_TOKEN").unwrap_or_default(),
+        upgrade_channel: std::env::var("MC_NODE_UPGRADE_CHANNEL").unwrap_or_else(|_| "stable".to_string()),
+        desired_version: std::env::var("MC_NODE_DESIRED_VERSION").unwrap_or_default(),
+        poll_seconds: std::env::var("MC_NODE_POLL_SECONDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(args.poll_seconds),
+        heartbeat_seconds: std::env::var("MC_NODE_HEARTBEAT_SECONDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(args.heartbeat_seconds),
+        capabilities: args
+            .capabilities
+            .split(',')
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect(),
+        labels: parse_kv_pairs(&args.labels).as_object().cloned().unwrap_or_default(),
+        upgrade_manifest_url: std::env::var("MC_NODE_UPGRADE_MANIFEST_URL").unwrap_or_default(),
+    }
+}
+
 async fn run_node_register(args: NodeAgentRegisterArgs, client: &MissionControlClient) -> Result<()> {
+    let config = load_node_config()?.unwrap_or_else(|| NodeRuntimeConfig {
+        node_name: args.node_name.clone(),
+        hostname: args.hostname.clone(),
+        trust_tier: args.trust_tier.clone(),
+        ..NodeRuntimeConfig::default()
+    });
     let response = client
         .post_json(
             "/runtime/nodes/register",
             &json!({
-                "node_name": args.node_name,
-                "hostname": args.hostname,
-                "trust_tier": args.trust_tier,
-                "bootstrap_token": "",
+                "node_name": config.node_name,
+                "hostname": config.hostname,
+                "trust_tier": config.trust_tier,
+                "bootstrap_token": config.bootstrap_token,
+                "labels": config.labels,
+                "capabilities": config.capabilities,
+                "runtime_version": config.desired_version,
             }),
         )
         .await?;
@@ -357,17 +450,31 @@ async fn run_node_register(args: NodeAgentRegisterArgs, client: &MissionControlC
 
 async fn run_node_doctor(args: NodeAgentDoctorArgs) -> Result<()> {
     let state = load_node_state()?;
+    let config = load_node_config()?;
     let payload = json!({
-        "ok": state.is_some(),
+        "ok": state.is_some() && config.is_some(),
         "node_name": args.node_name,
         "state_path": node_state_path(),
+        "config_path": node_config_path(),
         "registered": state.as_ref().map(|s| s.node_name.clone()),
+        "configured": config.as_ref().map(|c| c.node_name.clone()),
     });
     output::print_value(OutputMode::Json, &payload);
     Ok(())
 }
 
 async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> Result<()> {
+    let mut config = load_node_config()?.unwrap_or_else(|| default_node_config(&args));
+    if config.bootstrap_token.is_empty() {
+        config.bootstrap_token = std::env::var("MC_NODE_BOOTSTRAP_TOKEN").unwrap_or_default();
+    }
+    if config.bootstrap_token.is_empty() {
+        return Err(anyhow::anyhow!("node bootstrap token missing; seed ~/.missioncontrol/runtime/node-config.json or MC_NODE_BOOTSTRAP_TOKEN"));
+    }
+    persist_node_config(&config)?;
+
+    let heartbeat_interval = Duration::from_secs(config.heartbeat_seconds.max(1));
+    let poll_interval = Duration::from_secs(config.poll_seconds.max(1));
     let state = match load_node_state()? {
         Some(state) => state,
         None => {
@@ -375,10 +482,13 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
                 .post_json(
                     "/runtime/nodes/register",
                     &json!({
-                        "node_name": args.node_name,
-                        "hostname": args.hostname,
-                        "trust_tier": args.trust_tier,
-                        "bootstrap_token": "",
+                        "node_name": config.node_name,
+                        "hostname": config.hostname,
+                        "trust_tier": config.trust_tier,
+                        "labels": config.labels,
+                        "capabilities": config.capabilities,
+                        "runtime_version": config.desired_version,
+                        "bootstrap_token": config.bootstrap_token,
                     }),
                 )
                 .await?;
@@ -399,16 +509,6 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
         }
     };
 
-    let heartbeat_interval = Duration::from_secs(args.heartbeat_seconds.max(1));
-    let poll_interval = Duration::from_secs(args.poll_seconds.max(1));
-    let capabilities: Vec<String> = args
-        .capabilities
-        .split(',')
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect();
-    let labels = parse_kv_pairs(&args.labels);
-
     info!(node_id = %state.node_id, node_name = %state.node_name, "runtime node loop starting");
     let mut last_heartbeat = tokio::time::Instant::now() - heartbeat_interval;
     loop {
@@ -416,10 +516,50 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
             let _ = client
                 .post_json(
                     &format!("/runtime/nodes/{}/heartbeat", state.node_id),
-                    &json!({"status":"online","capabilities":capabilities,"labels":labels,"runtime_version":"mc-runtime-node"}),
+                    &json!({"status":"online","capabilities":config.capabilities,"labels":config.labels,"runtime_version":config.desired_version}),
                 )
                 .await;
             last_heartbeat = tokio::time::Instant::now();
+        }
+
+        if let Ok(remote) = client.get_json(&format!("/runtime/nodes/{}/config", state.node_id)).await {
+            if let Some(spec) = remote.get("spec") {
+                let desired = spec.get("desired_version").and_then(Value::as_str).unwrap_or("").to_string();
+                if !desired.is_empty() && desired != config.desired_version {
+                    config.desired_version = desired;
+                    persist_node_config(&config)?;
+                }
+                if let Some(drain_state) = spec.get("drain_state").and_then(Value::as_str) {
+                    if drain_state == "cordoned" || drain_state == "draining" {
+                        sleep(poll_interval).await;
+                        continue;
+                    }
+                    if drain_state == "upgrading" && !config.upgrade_manifest_url.trim().is_empty() {
+                        let _ = client
+                            .post_json(
+                                &format!("/runtime/nodes/{}/reconcile", state.node_id),
+                                &json!({
+                                    "desired_version": config.desired_version,
+                                    "drain_state": "upgrading",
+                                    "health_summary": "self-update requested",
+                                }),
+                            )
+                            .await;
+                        let mut child = Command::new(std::env::current_exe()?);
+                        child.args([
+                            "system",
+                            "update",
+                            "self-update",
+                            "--manifest-url",
+                            &config.upgrade_manifest_url,
+                        ]);
+                        let status = child.status().await.context("failed to launch self-update")?;
+                        if status.success() {
+                            break Ok(());
+                        }
+                    }
+                }
+            }
         }
 
         let claim = client

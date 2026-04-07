@@ -15,6 +15,7 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 ## Enterprise Positioning
 
 - **Rust-native agent gateway (`mc`)** — a single compiled binary for MCP/CLI/runtime orchestration, designed for predictable performance and reduced local attack surface.
+- **Remote node management** — MissionControl can bootstrap and manage resident `mc node` daemons with join tokens, rendered config, and release-artifact installs.
 - **Security-first control plane** — policy-gated mutations, approvals, mission-scoped permissions, session tokens (`mcs_*`), and auditable publication provenance.
 - **IT-operable by design** — explicit API/MCP contracts, health endpoints, environment-driven deployment, and cloud-compatible primitives (Postgres + S3 + Git projection).
 - **Built for regulated collaboration** — mission boundaries, profile isolation, and publication records help teams satisfy internal governance and change-control requirements.
@@ -76,6 +77,7 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 |---|---|
 | Docker full stack (default) | `bash scripts/dev-up.sh` |
 | Install mc CLI | `bash scripts/install-mc.sh` (pre-built binary or source build) |
+| Bootstrap remote node | `curl -fsSL "$BASE_URL/runtime/nodes/$NODE_ID/install-script" | sh` |
 | Philosophy & vision | [MISSIONCONTROL_PHILOSOPHY.md](MISSIONCONTROL_PHILOSOPHY.md) |
 | API reference | `/api/docs` (Swagger UI, when running locally) |
 | Web UI (SvelteKit) | `web/README.md` (AI Console + dashboard tabs, dev server, build, OIDC login) |
@@ -94,6 +96,11 @@ Optional (auto-load env on new shells):
 ```bash
 MC_INSTALL_SHELL_HOOK=1 MC_ENV_FILE=/home/merlin/nas/code/missioncontrol/.env bash scripts/install-mc.sh
 ```
+
+Remote nodes use the same `mc` binary but a separate bootstrap path:
+- MissionControl renders a node install bundle and one-shot bootstrap script at `/runtime/nodes/{id}/install-bundle` and `/runtime/nodes/{id}/install-script`
+- The bootstrap script downloads the release artifact, writes `mc-node.service`, and starts the resident service
+- Join tokens are single-use and the node agent persists its local config under `~/.missioncontrol/runtime/node-config.json`
 
 Then open:
 - API docs: `http://localhost:8008/api/docs`

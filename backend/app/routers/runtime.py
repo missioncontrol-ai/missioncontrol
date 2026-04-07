@@ -4,20 +4,50 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
 from app.db import get_session
-from app.models import ExecutionSession, JobLease, NodeEvent, RuntimeJob, RuntimeNode, UserSession
+from app.models import (
+    ExecutionSession,
+    JobLease,
+    NodeEvent,
+    RuntimeJob,
+    RuntimeNode,
+    RuntimeNodeSpec,
+    RuntimeJoinToken,
+    UserSession,
+)
 from app.services.authz import actor_subject_from_request
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
+
+RUNTIME_RELEASE_VERSION = os.getenv("MC_RUNTIME_RELEASE_VERSION", "0.1.7")
+RUNTIME_RELEASE_BASE_URL = os.getenv(
+    "MC_RUNTIME_RELEASE_BASE_URL",
+    "https://github.com/missioncontrol-ai/missioncontrol/releases/latest/download",
+).rstrip("/")
+RUNTIME_RELEASE_FILES = {
+    "linux": {
+        "x86_64": "mc-linux-x86_64",
+        "aarch64": "mc-linux-aarch64",
+    },
+    "darwin": {
+        "x86_64": "mc-darwin-x86_64",
+        "aarch64": "mc-darwin-aarch64",
+    },
+    "windows": {
+        "x86_64": "mc-windows-x86_64.exe",
+    },
+}
 
 _execution_ws_clients: dict[str, set[WebSocket]] = {}
 
@@ -39,6 +69,46 @@ class NodeHeartbeat(BaseModel):
     capacity: Optional[dict[str, object]] = None
     capabilities: Optional[list[str]] = None
     runtime_version: Optional[str] = None
+
+
+class JoinTokenCreate(BaseModel):
+    expires_in_seconds: int = Field(default=3600, ge=60)
+    upgrade_channel: str = "stable"
+    desired_version: str = ""
+    config: dict[str, object] = Field(default_factory=dict)
+
+
+class JoinTokenRotate(BaseModel):
+    expires_in_seconds: Optional[int] = Field(default=None, ge=60)
+
+
+class JoinTokenPayload(BaseModel):
+    id: str
+    node_id: Optional[str] = None
+    upgrade_channel: str
+    desired_version: str
+    status: str
+    expires_at: Optional[datetime] = None
+    used_at: Optional[datetime] = None
+    rotation_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class NodeReconcile(BaseModel):
+    drain_state: Optional[str] = None
+    desired_version: Optional[str] = None
+    health_summary: Optional[str] = None
+
+
+class NodeInstallBundle(BaseModel):
+    node_id: str
+    node_name: str
+    install_script: str
+    config: dict[str, object]
+    env: dict[str, str]
+    service: dict[str, object]
+    join_token: str = ""
 
 
 class JobCreate(BaseModel):
@@ -99,6 +169,252 @@ class ExecutionAttachCreate(BaseModel):
 
 def _json_dump(value: object) -> str:
     return json.dumps(value, separators=(",", ":"))
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _runtime_release_file(os_name: str, arch: str) -> str:
+    return RUNTIME_RELEASE_FILES.get((os_name or "").strip().lower(), {}).get((arch or "").strip().lower(), "")
+
+
+def _config_hash(config: dict[str, object]) -> str:
+    normalized = json.dumps(config, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+def _node_spec_payload(spec: RuntimeNodeSpec) -> dict:
+    return {
+        "node_id": spec.node_id,
+        "config": json.loads(spec.config_json or "{}"),
+        "desired_version": spec.desired_version,
+        "upgrade_channel": spec.upgrade_channel,
+        "drain_state": spec.drain_state,
+        "health_summary": spec.health_summary,
+        "config_hash": spec.config_hash,
+        "last_reconcile_at": spec.last_reconcile_at,
+        "created_at": spec.created_at,
+        "updated_at": spec.updated_at,
+    }
+
+
+def _join_token_payload(token: RuntimeJoinToken) -> dict:
+    return {
+        "id": token.id,
+        "node_id": token.node_id,
+        "upgrade_channel": token.upgrade_channel,
+        "desired_version": token.desired_version,
+        "status": token.status,
+        "expires_at": token.expires_at,
+        "used_at": token.used_at,
+        "rotation_count": token.rotation_count,
+        "config": json.loads(token.config_json or "{}"),
+        "created_at": token.created_at,
+        "updated_at": token.updated_at,
+    }
+
+
+def _find_join_token(db, token_id: str, subject: str) -> RuntimeJoinToken:
+    token = db.get(RuntimeJoinToken, token_id)
+    if not token or token.owner_subject != subject:
+        raise HTTPException(status_code=404, detail="Join token not found")
+    return token
+
+
+def _validate_join_token(db, bootstrap_token: str, subject: str) -> RuntimeJoinToken:
+    if not bootstrap_token:
+        raise HTTPException(status_code=400, detail="bootstrap_token is required")
+    token_hash = _hash_token(bootstrap_token)
+    now = datetime.utcnow()
+    token = db.exec(
+        select(RuntimeJoinToken)
+        .where(RuntimeJoinToken.token_hash == token_hash)
+        .where(RuntimeJoinToken.status == "active")
+        .where(RuntimeJoinToken.owner_subject == subject)
+    ).first()
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid bootstrap token")
+    if token.expires_at and token.expires_at < now:
+        raise HTTPException(status_code=401, detail="Bootstrap token expired")
+    if token.used_at is not None:
+        raise HTTPException(status_code=401, detail="Bootstrap token already used")
+    token.used_at = now
+    token.status = "used"
+    db.add(token)
+    return token
+
+
+def _render_node_config(node: RuntimeNode, spec: RuntimeNodeSpec, token: RuntimeJoinToken | None = None) -> dict[str, object]:
+    config = json.loads(spec.config_json or "{}")
+    config.setdefault("node_name", node.node_name)
+    config.setdefault("hostname", node.hostname)
+    config.setdefault("trust_tier", node.trust_tier)
+    config.setdefault("labels", json.loads(node.labels_json or "{}"))
+    config.setdefault("capabilities", json.loads(node.capabilities_json or "[]"))
+    config.setdefault("upgrade_channel", spec.upgrade_channel)
+    config.setdefault("desired_version", spec.desired_version)
+    if token:
+        config.setdefault("join_token_id", token.id)
+        config.setdefault("join_token_channel", token.upgrade_channel)
+    return config
+
+
+def _ensure_node_spec(
+    db,
+    subject: str,
+    node: RuntimeNode,
+    token: RuntimeJoinToken | None = None,
+    config_override: dict[str, object] | None = None,
+) -> RuntimeNodeSpec:
+    spec = db.exec(
+        select(RuntimeNodeSpec).where(RuntimeNodeSpec.node_id == node.id).where(RuntimeNodeSpec.owner_subject == subject)
+    ).first()
+    if spec is None:
+        config = {
+            "node_name": node.node_name,
+            "trust_tier": node.trust_tier,
+            "labels": json.loads(node.labels_json or "{}"),
+        }
+        if config_override:
+            config.update(config_override)
+        desired_version = (token.desired_version if token else node.runtime_version) or "mc-runtime-node"
+        upgrade_channel = token.upgrade_channel if token else "stable"
+        spec = RuntimeNodeSpec(
+            owner_subject=subject,
+            node_id=node.id,
+            config_json=_json_dump(config),
+            desired_version=desired_version,
+            upgrade_channel=upgrade_channel,
+            config_hash=_config_hash(config),
+        )
+        db.add(spec)
+    return spec
+
+
+def _node_config_payload(node: RuntimeNode, spec: RuntimeNodeSpec) -> dict:
+    return {
+        "node_id": node.id,
+        "config": _render_node_config(node, spec),
+        "spec": _node_spec_payload(spec),
+    }
+
+
+def _node_install_bundle(
+    node: RuntimeNode,
+    spec: RuntimeNodeSpec,
+    base_url: str,
+    token: RuntimeJoinToken | None = None,
+) -> dict:
+    config = _render_node_config(node, spec, token)
+    binary_url = f"{base_url}/runtime/releases/latest/download"
+    env = {
+        "MC_BASE_URL": base_url,
+        "MC_NODE_NAME": node.node_name,
+        "MC_NODE_HOSTNAME": node.hostname,
+        "MC_NODE_TRUST_TIER": node.trust_tier,
+        "MC_NODE_UPGRADE_CHANNEL": spec.upgrade_channel,
+        "MC_NODE_DESIRED_VERSION": spec.desired_version,
+        "MC_NODE_POLL_SECONDS": str(config.get("poll_seconds", 30)),
+        "MC_NODE_HEARTBEAT_SECONDS": str(config.get("heartbeat_seconds", 15)),
+        "MC_NODE_UPGRADE_MANIFEST_URL": config.get("upgrade_manifest_url", ""),
+        "MC_NODE_BINARY_URL": str(config.get("binary_url") or binary_url),
+    }
+    if token and token.id:
+        env["MC_NODE_TOKEN_ID"] = token.id
+    if token and token.node_id:
+        env["MC_NODE_BOUND_NODE_ID"] = token.node_id
+    service = {
+        "name": "mc-node.service",
+        "unit_path": "/etc/systemd/system/mc-node.service",
+        "command": "mc node run",
+        "restart": "always",
+        "after": ["network-online.target"],
+    }
+    return {
+        "node_id": node.id,
+        "node_name": node.node_name,
+        "install_script": _node_install_script(base_url, node.id, env),
+        "config": config,
+        "env": env,
+        "service": service,
+        "join_token": token.id if token else "",
+    }
+
+
+def _node_install_script(base_url: str, node_id: str, env: dict[str, str]) -> str:
+    binary_url = f"{base_url}/runtime/releases/latest/download"
+    env_lines = [
+        "# MissionControl node settings",
+        *[f"{key}={value}" for key, value in env.items() if value is not None and str(value) != ""],
+    ]
+    env_body = "\n".join(env_lines) + "\n"
+    service_body = (
+        "[Unit]\n"
+        "Description=MissionControl Node Agent\n"
+        "Wants=network-online.target\n"
+        "After=network-online.target\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
+        "\n"
+        "[Service]\n"
+        "Type=simple\n"
+        "User=root\n"
+        "Group=root\n"
+        "EnvironmentFile=-/etc/missioncontrol/mc-node.service.env\n"
+        "ExecStart=/usr/local/bin/mc node run\n"
+        "Restart=always\n"
+        "RestartSec=5s\n"
+        "KillMode=control-group\n"
+        "TimeoutStartSec=0\n"
+        "LimitNOFILE=1048576\n"
+    )
+    return (
+        "#!/bin/sh\n"
+        "set -eu\n"
+        f"mc_bin='{binary_url}'\n"
+        "if [ -n \"$mc_bin\" ]; then\n"
+        "  install -d /usr/local/bin\n"
+        "  curl -fsSL \"$mc_bin\" -o /usr/local/bin/mc\n"
+        "  chmod 0755 /usr/local/bin/mc\n"
+        "elif ! command -v mc >/dev/null 2>&1; then\n"
+        "  echo '[ERROR] mc binary not found and release artifact could not be resolved' >&2\n"
+        "  exit 1\n"
+        "fi\n"
+        "install -d /etc/missioncontrol /etc/systemd/system\n"
+        "cat > /etc/missioncontrol/mc-node.service.env <<'EOF'\n"
+        f"{env_body}"
+        "EOF\n"
+        "chmod 0600 /etc/missioncontrol/mc-node.service.env\n"
+        "cat > /etc/systemd/system/mc-node.service <<'EOF'\n"
+        f"{service_body}"
+        "EOF\n"
+        "systemctl daemon-reload\n"
+        "systemctl enable --now mc-node.service\n"
+    )
+
+
+def _mutate_node_spec_state(node_id: str, request: Request, drain_state: str):
+    subject = actor_subject_from_request(request)
+    now = datetime.utcnow()
+    with get_session() as db:
+        node = db.get(RuntimeNode, node_id)
+        if not node or node.owner_subject != subject:
+            raise HTTPException(status_code=404, detail="Node not found")
+        spec = db.exec(
+            select(RuntimeNodeSpec).where(RuntimeNodeSpec.node_id == node_id).where(RuntimeNodeSpec.owner_subject == subject)
+        ).first()
+        if spec is None:
+            spec = _ensure_node_spec(db, subject, node)
+        spec.drain_state = drain_state
+        spec.last_reconcile_at = now
+        spec.updated_at = now
+        db.add(spec)
+        db.add(NodeEvent(node_id=node_id, event_type=f"node.{drain_state}", payload_json=_json_dump({"node_id": node_id})))
+        db.commit()
+        db.refresh(spec)
+        return {"spec": _node_spec_payload(spec)}
 
 
 def _node_payload(node: RuntimeNode) -> dict:
@@ -194,6 +510,209 @@ def _execution_session_payload(session: ExecutionSession) -> dict:
     }
 
 
+@router.post("/tokens", status_code=201)
+@router.post("/join-tokens", status_code=201, include_in_schema=False)
+def create_join_token(body: JoinTokenCreate, request: Request):
+    subject = actor_subject_from_request(request)
+    token_id = str(uuid.uuid4())
+    now = datetime.utcnow()
+    join_token = secrets.token_urlsafe(32)
+    expires_at = now + timedelta(seconds=body.expires_in_seconds)
+    token = RuntimeJoinToken(
+        id=token_id,
+        owner_subject=subject,
+        token_hash=_hash_token(join_token),
+        config_json=_json_dump(body.config),
+        upgrade_channel=body.upgrade_channel.strip() or "stable",
+        desired_version=body.desired_version.strip(),
+        expires_at=expires_at,
+        status="active",
+        rotation_count=0,
+        created_at=now,
+        updated_at=now,
+    )
+    with get_session() as db:
+        db.add(token)
+        db.commit()
+        db.refresh(token)
+        payload = _join_token_payload(token)
+        payload["join_token"] = join_token
+        payload["expires_in_seconds"] = body.expires_in_seconds
+        return payload
+
+
+@router.post("/tokens/{token_id}/rotate")
+@router.post("/join-tokens/{token_id}/rotate", include_in_schema=False)
+def rotate_join_token(token_id: str, body: JoinTokenRotate, request: Request):
+    subject = actor_subject_from_request(request)
+    now = datetime.utcnow()
+    with get_session() as db:
+        token = _find_join_token(db, token_id, subject)
+        join_token = secrets.token_urlsafe(32)
+        token.token_hash = _hash_token(join_token)
+        if body.expires_in_seconds:
+            token.expires_at = now + timedelta(seconds=body.expires_in_seconds)
+        token.rotation_count += 1
+        token.status = "active"
+        token.updated_at = now
+        db.add(token)
+        db.commit()
+        db.refresh(token)
+        payload = _join_token_payload(token)
+        payload["join_token"] = join_token
+        return payload
+
+
+@router.get("/tokens/{token_id}")
+@router.get("/join-tokens/{token_id}", include_in_schema=False)
+def get_join_token(token_id: str, request: Request):
+    subject = actor_subject_from_request(request)
+    with get_session() as db:
+        token = _find_join_token(db, token_id, subject)
+        payload = _join_token_payload(token)
+        return payload
+
+
+@router.get("/nodes/{node_id}/config")
+def get_node_config(node_id: str, request: Request):
+    subject = actor_subject_from_request(request)
+    with get_session() as db:
+        node = db.get(RuntimeNode, node_id)
+        if not node or node.owner_subject != subject:
+            raise HTTPException(status_code=404, detail="Node not found")
+        spec = db.exec(
+            select(RuntimeNodeSpec).where(RuntimeNodeSpec.node_id == node_id).where(RuntimeNodeSpec.owner_subject == subject)
+        ).first()
+        created = spec is None
+        if spec is None:
+            spec = _ensure_node_spec(db, subject, node)
+        if created:
+            db.commit()
+        return _node_config_payload(node, spec)
+
+
+@router.get("/nodes/{node_id}/install-bundle")
+def get_node_install_bundle(node_id: str, request: Request):
+    subject = actor_subject_from_request(request)
+    base_url = str(request.base_url).rstrip("/")
+    with get_session() as db:
+        node = db.get(RuntimeNode, node_id)
+        if not node or node.owner_subject != subject:
+            raise HTTPException(status_code=404, detail="Node not found")
+        spec = db.exec(
+            select(RuntimeNodeSpec).where(RuntimeNodeSpec.node_id == node_id).where(RuntimeNodeSpec.owner_subject == subject)
+        ).first()
+        if spec is None:
+            spec = _ensure_node_spec(db, subject, node)
+            db.commit()
+        token = db.exec(
+            select(RuntimeJoinToken)
+            .where(RuntimeJoinToken.node_id == node_id)
+            .where(RuntimeJoinToken.owner_subject == subject)
+            .order_by(RuntimeJoinToken.updated_at.desc())
+        ).first()
+        return _node_install_bundle(node, spec, base_url, token)
+
+
+@router.get("/nodes/{node_id}/install-script", response_class=PlainTextResponse)
+def get_node_install_script(node_id: str, request: Request):
+    subject = actor_subject_from_request(request)
+    base_url = str(request.base_url).rstrip("/")
+    with get_session() as db:
+        node = db.get(RuntimeNode, node_id)
+        if not node or node.owner_subject != subject:
+            raise HTTPException(status_code=404, detail="Node not found")
+        return _node_install_script(base_url, node_id)
+
+
+@router.get("/releases/latest.json")
+def get_runtime_release_manifest():
+    os_name = "linux"
+    arch = "x86_64"
+    file_name = _runtime_release_file(os_name, arch)
+    return {
+        "version": RUNTIME_RELEASE_VERSION,
+        "files": [
+            {
+                "os": os_name,
+                "arch": arch,
+                "url": f"{RUNTIME_RELEASE_BASE_URL}/{file_name}" if file_name else "",
+                "sha256": None,
+            }
+        ],
+    }
+
+
+@router.get("/releases/latest/download")
+def download_runtime_release():
+    file_name = _runtime_release_file("linux", "x86_64")
+    if not file_name:
+        raise HTTPException(status_code=404, detail="Release artifact not configured")
+    return RedirectResponse(url=f"{RUNTIME_RELEASE_BASE_URL}/{file_name}", status_code=307)
+
+
+@router.post("/nodes/{node_id}/reconcile")
+def reconcile_node(node_id: str, body: NodeReconcile, request: Request):
+    subject = actor_subject_from_request(request)
+    now = datetime.utcnow()
+    with get_session() as db:
+        node = db.get(RuntimeNode, node_id)
+        if not node or node.owner_subject != subject:
+            raise HTTPException(status_code=404, detail="Node not found")
+        spec = db.exec(
+            select(RuntimeNodeSpec).where(RuntimeNodeSpec.node_id == node_id).where(RuntimeNodeSpec.owner_subject == subject)
+        ).first()
+        if spec is None:
+            spec = _ensure_node_spec(db, subject, node)
+        if body.desired_version:
+            spec.desired_version = body.desired_version.strip()
+        if body.drain_state:
+            spec.drain_state = body.drain_state
+        if body.health_summary:
+            spec.health_summary = body.health_summary
+        spec.last_reconcile_at = now
+        spec.updated_at = now
+        db.add(spec)
+        db.add(
+            NodeEvent(
+                node_id=node_id,
+                event_type="node.spec.reconcile",
+                payload_json=_json_dump(
+                    {"node_id": node_id, "desired_version": spec.desired_version, "drain_state": spec.drain_state}
+                ),
+            )
+        )
+        db.commit()
+        db.refresh(spec)
+        return {"spec": _node_spec_payload(spec)}
+
+
+@router.post("/nodes/{node_id}/cordon")
+def cordon_node(node_id: str, request: Request):
+    return _mutate_node_spec_state(node_id, request, "cordoned")
+
+
+@router.post("/nodes/{node_id}/drain")
+def drain_node(node_id: str, request: Request):
+    return _mutate_node_spec_state(node_id, request, "draining")
+
+
+@router.post("/nodes/{node_id}/upgrade")
+def upgrade_node(node_id: str, request: Request):
+    return _mutate_node_spec_state(node_id, request, "upgrading")
+
+
+@router.get("/channels")
+def list_channels():
+    return {
+        "channels": [
+            {"name": "stable"},
+            {"name": "latest"},
+            {"name": "testing"},
+        ]
+    }
+
+
 @router.post("/nodes/register", status_code=201)
 def register_node(body: NodeRegister, request: Request):
     subject = actor_subject_from_request(request)
@@ -203,6 +722,7 @@ def register_node(body: NodeRegister, request: Request):
         existing = db.exec(select(RuntimeNode).where(RuntimeNode.node_name == body.node_name)).first()
         if existing:
             raise HTTPException(status_code=409, detail=f"Node '{body.node_name}' already exists")
+        token = _validate_join_token(db, body.bootstrap_token, subject)
         node = RuntimeNode(
             id=node_id,
             owner_subject=subject,
@@ -212,7 +732,7 @@ def register_node(body: NodeRegister, request: Request):
             labels_json=_json_dump(body.labels),
             capacity_json=_json_dump(body.capacity),
             capabilities_json=_json_dump(body.capabilities),
-            runtime_version=body.runtime_version.strip(),
+            runtime_version=body.runtime_version.strip() or token.desired_version,
             bootstrap_token_prefix=body.bootstrap_token[:8],
             status="online",
             last_heartbeat_at=now,
@@ -220,6 +740,16 @@ def register_node(body: NodeRegister, request: Request):
             updated_at=now,
         )
         db.add(node)
+        _ensure_node_spec(
+            db,
+            subject,
+            node,
+            token,
+            json.loads(token.config_json or "{}"),
+        )
+        token.node_id = node_id
+        token.updated_at = now
+        db.add(token)
         db.add(
             NodeEvent(
                 node_id=node_id,
@@ -258,6 +788,7 @@ def heartbeat_node(node_id: str, body: NodeHeartbeat, request: Request):
             node.capabilities_json = _json_dump(body.capabilities)
         if body.runtime_version is not None:
             node.runtime_version = body.runtime_version
+        _ensure_node_spec(db, subject, node)
         db.add(node)
         db.add(NodeEvent(node_id=node_id, event_type="node.heartbeat", payload_json=_json_dump(body.model_dump())))
         db.commit()

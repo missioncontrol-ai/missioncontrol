@@ -700,6 +700,37 @@ class ExecutionSession(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class RuntimeNodeSpec(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    node_id: str = Field(index=True)
+    config_json: str = Field(default="{}", sa_column=Column(Text))
+    desired_version: str = Field(default="")
+    upgrade_channel: str = Field(default="stable")
+    drain_state: str = Field(default="active")
+    health_summary: str = Field(default="")
+    config_hash: str = Field(default="")
+    last_reconcile_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RuntimeJoinToken(SQLModel, table=True):
+    id: Optional[str] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    token_hash: str
+    config_json: str = Field(default="{}", sa_column=Column(Text))
+    upgrade_channel: str = Field(default="stable")
+    desired_version: str = Field(default="")
+    expires_at: Optional[datetime] = None
+    used_at: Optional[datetime] = None
+    status: str = Field(default="active")
+    rotation_count: int = 0
+    node_id: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class NodeEvent(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     node_id: Optional[str] = Field(default=None, index=True)

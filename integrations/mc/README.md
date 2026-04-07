@@ -123,6 +123,37 @@ mc [--base-url URL] [--token TOKEN] [--agent-id ID] [--allow-insecure] \
 - `mc claude doctor [PROFILE] [--fix] [--headless] [--json]` — inspect Claude profile runtime readiness and apply deterministic repairs with `--fix`.
 - `mc claude exec [PROFILE] [-- ARGS...]` — thin native Claude execution in the prepared profile runtime.
 
+### Node service
+- `curl -fsSL "$BASE_URL/runtime/nodes/$NODE_ID/install-script" | sh` bootstraps a Linux node from MissionControl with a rendered config, join token, release artifact download, and `mc-node.service` enablement.
+- `integrations/mc/install.sh` installs `mc` and the `mc-node.service` unit for Linux hosts from a local checkout.
+- `mc node run [--node-name <name>] [--hostname <host>] [--trust-tier <tier>]` runs the resident node loop.
+- `mc node doctor [--node-name <name>]` inspects local node state/config before enabling the service.
+
+The node service uses `~/.missioncontrol/runtime/node-config.json` by default and accepts `MC_NODE_*` overrides from the unit environment file. MissionControl renders the install bundle and release manifest server-side, so the node can resolve the release artifact without hardcoding an asset URL.
+
+Required runtime settings:
+
+- `MC_BASE_URL`
+- `MC_NODE_BOOTSTRAP_TOKEN`
+
+Common optional settings:
+
+- `MC_NODE_NAME`
+- `MC_NODE_HOSTNAME`
+- `MC_NODE_TRUST_TIER`
+- `MC_NODE_POLL_SECONDS`
+- `MC_NODE_HEARTBEAT_SECONDS`
+- `MC_NODE_UPGRADE_CHANNEL`
+- `MC_NODE_DESIRED_VERSION`
+- `MC_NODE_UPGRADE_MANIFEST_URL`
+
+The backend also exposes:
+
+- `GET /runtime/releases/latest.json` — runtime release manifest for the bootstrap flow
+- `GET /runtime/releases/latest/download` — redirect to the current node release artifact
+- `GET /runtime/nodes/{id}/install-bundle` — rendered config/env/service bundle
+- `GET /runtime/nodes/{id}/install-script` — one-shot bootstrap script
+
 ## Real-time matrix and swarm integration
 
 The daemon mode connects to `/events/stream` and prints the chunked telemetry that powers the inbox,
