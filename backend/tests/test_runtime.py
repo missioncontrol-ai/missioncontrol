@@ -10,8 +10,11 @@ from app.routers.runtime import (
     LeaseComplete,
     LeaseCreate,
     LeaseStatus,
+    LeaseLogChunk,
     NodeHeartbeat,
     NodeRegister,
+    append_lease_logs,
+    claim_lease,
     complete_lease,
     create_job,
     create_lease,
@@ -198,6 +201,26 @@ class RuntimeFabricTests(unittest.TestCase):
                 request=_req(),
             )
         self.assertEqual(completed["status"], "completed")
+
+    def test_claim_lease_and_append_logs(self):
+        node = _node()
+        job = _job()
+        with patch("app.routers.runtime.get_session", _session([job, node])):
+            claimed = claim_lease(node_id=node.id, request=_req())
+        self.assertTrue(claimed["claimed"])
+        self.assertEqual(claimed["job"]["status"], "leased")
+
+        lease = _lease()
+        lease.id = claimed["lease"]["id"]
+        lease.job_id = job.id
+        lease.node_id = node.id
+        with patch("app.routers.runtime.get_session", _session([lease, job])):
+            result = append_lease_logs(
+                lease_id=lease.id,
+                body=LeaseLogChunk(stream="stdout", content="hello"),
+                request=_req(),
+            )
+        self.assertEqual(result["ok"], True)
 
 
 if __name__ == "__main__":

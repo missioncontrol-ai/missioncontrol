@@ -8,7 +8,7 @@ use tokio::{
     process::Command,
     time::sleep,
 };
-use tracing::{info, warn};
+use tracing::info;
 
 #[derive(Subcommand, Debug)]
 pub enum RuntimeCommand {
@@ -395,44 +395,24 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
             last_heartbeat = tokio::time::Instant::now();
         }
 
-        let jobs = client
-            .get_json("/runtime/jobs?status=queued")
+        let claim = client
+            .post_json(
+                &format!("/runtime/nodes/{}/leases/claim", state.node_id),
+                &json!({}),
+            )
             .await
-            .unwrap_or_else(|_| json!({"jobs":[]}))
-            .get("jobs")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or_else(|_| json!({"claimed":false}));
 
-        for job in jobs {
-            let job_id = job.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-            if job_id.is_empty() {
-                continue;
-            }
-            let lease = client
-                .post_json(
-                    &format!("/runtime/jobs/{}/leases", job_id),
-                    &json!({"node_id": state.node_id}),
-                )
-                .await;
-            let lease = match lease {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
+        if claim.get("claimed").and_then(Value::as_bool).unwrap_or(false) {
+            let lease = claim.get("lease").cloned().unwrap_or_else(|| json!({}));
+            let job = claim.get("job").cloned().unwrap_or_else(|| json!({}));
             let lease_id = lease.get("id").and_then(Value::as_str).unwrap_or("").to_string();
             if lease_id.is_empty() {
+                sleep(poll_interval).await;
                 continue;
             }
-            let runtime_class = job
-                .get("runtime_class")
-                .and_then(Value::as_str)
-                .unwrap_or("container")
-                .to_string();
-            let command = job
-                .get("command")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+            let runtime_class = job.get("runtime_class").and_then(Value::as_str).unwrap_or("container");
+            let command = job.get("command").and_then(Value::as_str).unwrap_or("");
             let args_vec = job
                 .get("args")
                 .and_then(Value::as_array)
@@ -450,7 +430,16 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
                     &json!({"status":"running"}),
                 )
                 .await;
-            let result = execute_job(&runtime_class, &command, &args_vec, env_map, cwd).await;
+            let result = execute_job(
+                client,
+                &lease_id,
+                runtime_class,
+                command,
+                &args_vec,
+                env_map,
+                cwd,
+            )
+            .await;
             match result {
                 Ok(exit_code) => {
                     let _ = client
@@ -476,6 +465,8 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
 }
 
 async fn execute_job(
+    client: &MissionControlClient,
+    lease_id: &str,
     runtime_class: &str,
     command: &str,
     args: &[String],
@@ -502,18 +493,32 @@ async fn execute_job(
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().context("failed to spawn runtime job")?;
     if let Some(stdout) = child.stdout.take() {
+        let client = client.clone();
+        let lease_id = lease_id.to_string();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let _ = line;
+                let _ = client
+                    .post_json(
+                        &format!("/runtime/leases/{}/logs", lease_id),
+                        &json!({"stream":"stdout","content":line}),
+                    )
+                    .await;
             }
         });
     }
     if let Some(stderr) = child.stderr.take() {
+        let client = client.clone();
+        let lease_id = lease_id.to_string();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let _ = line;
+                let _ = client
+                    .post_json(
+                        &format!("/runtime/leases/{}/logs", lease_id),
+                        &json!({"stream":"stderr","content":line}),
+                    )
+                    .await;
             }
         });
     }

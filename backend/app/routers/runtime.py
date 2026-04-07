@@ -60,6 +60,12 @@ class LeaseCreate(BaseModel):
     node_id: str
 
 
+class LeaseClaimResult(BaseModel):
+    claimed: bool
+    lease: Optional[dict] = None
+    job: Optional[dict] = None
+
+
 class LeaseStatus(BaseModel):
     status: str
     heartbeat_at: Optional[datetime] = None
@@ -75,6 +81,11 @@ class ExecutionSessionCreate(BaseModel):
     lease_id: str
     runtime_class: str = "container"
     pty_requested: bool = False
+
+
+class LeaseLogChunk(BaseModel):
+    stream: str = "stdout"
+    content: str
 
 
 def _json_dump(value: object) -> str:
@@ -289,6 +300,41 @@ def create_lease(job_id: str, body: LeaseCreate, request: Request):
         return _lease_payload(lease)
 
 
+@router.post("/nodes/{node_id}/leases/claim")
+def claim_lease(node_id: str, request: Request):
+    subject = actor_subject_from_request(request)
+    now = datetime.utcnow()
+    with get_session() as db:
+        node = db.get(RuntimeNode, node_id)
+        if not node or node.owner_subject != subject:
+            raise HTTPException(status_code=404, detail="Node not found")
+        job = db.exec(
+            select(RuntimeJob)
+            .where(RuntimeJob.owner_subject == subject)
+            .where(RuntimeJob.status == "queued")
+            .order_by(RuntimeJob.created_at.asc())
+        ).first()
+        if job is None:
+            return {"claimed": False, "lease": None, "job": None}
+        lease = JobLease(
+            id=str(uuid.uuid4()),
+            job_id=job.id,
+            node_id=node_id,
+            status="leased",
+            claimed_at=now,
+            heartbeat_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        job.status = "leased"
+        db.add(lease)
+        db.add(job)
+        db.add(NodeEvent(node_id=node_id, lease_id=lease.id, event_type="lease.claimed", payload_json=_json_dump({"job_id": job.id})))
+        db.commit()
+        db.refresh(lease)
+        return {"claimed": True, "lease": _lease_payload(lease), "job": _job_payload(job)}
+
+
 @router.post("/leases/{lease_id}/status")
 def update_lease_status(lease_id: str, body: LeaseStatus, request: Request):
     subject = actor_subject_from_request(request)
@@ -336,6 +382,28 @@ def complete_lease(lease_id: str, body: LeaseComplete, request: Request):
         return _lease_payload(lease)
 
 
+@router.post("/leases/{lease_id}/logs")
+def append_lease_logs(lease_id: str, body: LeaseLogChunk, request: Request):
+    subject = actor_subject_from_request(request)
+    with get_session() as db:
+        lease = db.get(JobLease, lease_id)
+        if not lease:
+            raise HTTPException(status_code=404, detail="Lease not found")
+        job = db.get(RuntimeJob, lease.job_id)
+        if not job or job.owner_subject != subject:
+            raise HTTPException(status_code=404, detail="Job not found")
+        db.add(
+            NodeEvent(
+                node_id=lease.node_id,
+                lease_id=lease.id,
+                event_type=f"lease.log.{body.stream}",
+                payload_json=_json_dump(body.model_dump()),
+            )
+        )
+        db.commit()
+        return {"ok": True}
+
+
 @router.post("/execution-sessions", status_code=201)
 def create_execution_session(body: ExecutionSessionCreate, request: Request):
     subject = actor_subject_from_request(request)
@@ -369,6 +437,27 @@ def create_execution_session(body: ExecutionSessionCreate, request: Request):
             "status": session.status,
             "created_at": session.created_at,
             "updated_at": session.updated_at,
+        }
+
+
+@router.get("/execution-sessions/{session_id}/attach-token")
+def get_execution_session_attach_token(session_id: str, request: Request):
+    subject = actor_subject_from_request(request)
+    with get_session() as db:
+        session = db.get(ExecutionSession, session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Execution session not found")
+        lease = db.get(JobLease, session.lease_id)
+        if not lease:
+            raise HTTPException(status_code=404, detail="Lease not found")
+        job = db.get(RuntimeJob, lease.job_id)
+        if not job or job.owner_subject != subject:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return {
+            "id": session.id,
+            "lease_id": session.lease_id,
+            "attach_token_prefix": session.attach_token_prefix,
+            "status": session.status,
         }
 
 
