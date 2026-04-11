@@ -922,6 +922,7 @@ class AgentRun(SQLModel, table=True):
     )
     # Arbitrary JSON: tool call counts, model, custom agent metadata …
     metadata_json: Optional[str] = Field(default=None, sa_column=Column(Text))
+    idempotency_key: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

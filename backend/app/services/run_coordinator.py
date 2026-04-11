@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List, Literal
 
+import sqlalchemy.exc
 from sqlmodel import Session, select
 
 from app.db import engine
@@ -39,13 +40,12 @@ def start_run(
             existing = session.exec(
                 select(AgentRun).where(
                     AgentRun.owner_subject == owner_subject,
-                    AgentRun.metadata_json.contains(idempotency_key),
+                    AgentRun.idempotency_key == idempotency_key,
                 )
             ).first()
             if existing:
                 return existing
 
-        metadata = json.dumps({"idempotency_key": idempotency_key}) if idempotency_key else None
         run = AgentRun(
             id=str(uuid.uuid4()),
             owner_subject=owner_subject,
@@ -53,11 +53,11 @@ def start_run(
             mesh_agent_id=agent_id,
             mesh_task_id=task_id,
             runtime_session_id=runtime_session_id,
+            idempotency_key=idempotency_key,
             status="starting",
             resume_token=str(uuid.uuid4()),
             started_at=datetime.utcnow(),
             total_cost_cents=0,
-            metadata_json=metadata,
         )
         session.add(run)
         session.commit()
@@ -71,27 +71,38 @@ def checkpoint(
     payload: dict,
     owner_subject: str,
 ) -> RunCheckpoint:
-    """Append a checkpoint to the run. Increments seq monotonically."""
-    with Session(engine) as session:
-        existing = session.exec(
-            select(RunCheckpoint)
-            .where(RunCheckpoint.run_id == run_id)
-            .order_by(RunCheckpoint.seq.desc())
-        ).first()
-        next_seq = (existing.seq + 1) if existing else 0
+    """Append a checkpoint to the run. Increments seq monotonically.
 
-        cp = RunCheckpoint(
-            id=str(uuid.uuid4()),
-            run_id=run_id,
-            seq=next_seq,
-            kind=kind,
-            payload_json=json.dumps(payload),
-            created_at=datetime.utcnow(),
-        )
-        session.add(cp)
-        session.commit()
-        session.refresh(cp)
-        return cp
+    Retries up to 3 times on UniqueConstraint violations (concurrent writers).
+    """
+    max_retries = 3
+    for attempt in range(max_retries):
+        with Session(engine) as session:
+            existing = session.exec(
+                select(RunCheckpoint)
+                .where(RunCheckpoint.run_id == run_id)
+                .order_by(RunCheckpoint.seq.desc())
+            ).first()
+            next_seq = (existing.seq + 1) if existing else 0
+
+            cp = RunCheckpoint(
+                id=str(uuid.uuid4()),
+                run_id=run_id,
+                seq=next_seq,
+                kind=kind,
+                payload_json=json.dumps(payload),
+                created_at=datetime.utcnow(),
+            )
+            session.add(cp)
+            try:
+                session.commit()
+                session.refresh(cp)
+                return cp
+            except sqlalchemy.exc.IntegrityError:
+                session.rollback()
+                if attempt == max_retries - 1:
+                    raise
+                continue
 
 
 def resume(run_id: str, resume_token: str, owner_subject: str) -> Optional[dict]:

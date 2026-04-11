@@ -51,6 +51,10 @@ class CheckpointRequest(BaseModel):
     payload: dict = {}
 
 
+class ResumeBody(BaseModel):
+    resume_token: str
+
+
 @router.get("")
 def list_runs(
     request: Request,
@@ -111,6 +115,17 @@ def cancel_run(run_id: str, request: Request):
     except ValueError:
         raise HTTPException(status_code=404, detail="Run not found")
     return _run_payload(run)
+
+
+@router.post("/{run_id}/resume")
+def resume_run(run_id: str, body: ResumeBody, request: Request):
+    owner = actor_subject_from_request(request)
+    result = run_coordinator.resume(run_id, body.resume_token, owner)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if "error" in result:
+        raise HTTPException(status_code=403, detail=result["error"])
+    return result
 
 
 @router.get("/{run_id}/checkpoints")
