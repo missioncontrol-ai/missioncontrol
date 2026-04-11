@@ -18,9 +18,10 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field as PField
+from sqlalchemy import update as sa_update
 from sqlmodel import select
 
-from app.db import get_session
+from app.db import engine, get_session
 from app.models import (
     Artifact,
     MeshAgent,
@@ -162,6 +163,20 @@ class MeshMessageCreate(BaseModel):
 class TaskClaimResult(BaseModel):
     task_id: str
     lease_expires_at: datetime
+
+
+class HeartbeatBody(BaseModel):
+    claim_lease_id: Optional[str] = None
+
+
+class CompleteBody(BaseModel):
+    result_artifact_id: Optional[str] = None
+    claim_lease_id: Optional[str] = None
+
+
+class FailBody(BaseModel):
+    error: str = ""
+    claim_lease_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -356,8 +371,14 @@ def claim_task(task_id: str, request: Request):
     Broadcast tasks (claim_policy=broadcast) allow concurrent claims from
     multiple agents — the task transitions to running and stays claimable.
     First-claim and assigned tasks use exclusive ownership.
+
+    For exclusive claims, uses SELECT ... FOR UPDATE SKIP LOCKED on Postgres
+    and a CAS update (version_counter check) on both backends to prevent
+    concurrent double-claims.
     """
     subject = actor_subject_from_request(request)
+    is_postgres = engine.dialect.name == "postgresql"
+
     with get_session() as session:
         task = session.get(MeshTask, task_id)
         if task is None:
@@ -371,33 +392,70 @@ def claim_task(task_id: str, request: Request):
                 raise HTTPException(
                     status_code=409, detail=f"broadcast task is {task.status}"
                 )
-        else:
-            # Expire stale leases before checking status so we don't block on
-            # a crashed agent's leftover lease.
-            _expire_stale_leases(session, task.kluster_id)
-            task = session.get(MeshTask, task_id)  # re-fetch after potential mutation
-            if task.status != "ready":
-                raise HTTPException(status_code=409, detail=f"task is {task.status}, not ready")
-
-        expires_at = datetime.utcnow() + timedelta(seconds=LEASE_TTL_SECONDS)
-        # For broadcast, keep status=running and don't overwrite claimed_by.
-        # For exclusive claim, set status=claimed and record agent.
-        if is_broadcast:
+            expires_at = datetime.utcnow() + timedelta(seconds=LEASE_TTL_SECONDS)
             task.status = "running"
-            # claimed_by_agent_id holds the most-recent claimer; progress events
-            # carry individual agent_ids for per-agent attribution.
+            task.lease_expires_at = expires_at
+            task.updated_at = datetime.utcnow()
+            session.add(task)
+            session.commit()
+            return {"task_id": task_id, "lease_expires_at": expires_at}
+
+        # --- Exclusive claim path ---
+        # 1. Lock the row (Postgres: SKIP LOCKED; SQLite: plain select)
+        if is_postgres:
+            result = session.exec(
+                select(MeshTask)
+                .where(MeshTask.id == task_id)
+                .where(MeshTask.status == "ready")
+                .with_for_update(skip_locked=True)
+            )
+            task = result.first()
         else:
-            task.status = "claimed"
-            task.claimed_by_agent_id = subject
-        task.lease_expires_at = expires_at
-        task.updated_at = datetime.utcnow()
-        session.add(task)
+            task = session.get(MeshTask, task_id)
+            if task is not None and task.status != "ready":
+                task = None
+
+        if task is None:
+            raise HTTPException(status_code=423, detail="Task not available for claiming")
+
+        # 2. Issue new lease id and bump version
+        new_lease_id = str(uuid.uuid4())
+        new_version = task.version_counter + 1
+        expires_at = datetime.utcnow() + timedelta(seconds=LEASE_TTL_SECONDS)
+        now = datetime.utcnow()
+
+        # 3. CAS update — only succeeds if version_counter hasn't changed
+        stmt = (
+            sa_update(MeshTask)
+            .where(MeshTask.id == task_id)
+            .where(MeshTask.version_counter == task.version_counter)
+            .values(
+                status="claimed",
+                claimed_by_agent_id=subject,
+                claim_lease_id=new_lease_id,
+                version_counter=new_version,
+                lease_expires_at=expires_at,
+                updated_at=now,
+            )
+        )
+        result = session.execute(stmt)
+        if result.rowcount == 0:
+            raise HTTPException(status_code=409, detail="Claim lost to concurrent claimer")
+
         session.commit()
-        return {"task_id": task_id, "lease_expires_at": expires_at}
+
+        # Re-fetch updated task (SQLite doesn't support RETURNING on UPDATE)
+        session.expire_all()
+        updated = session.get(MeshTask, task_id)
+        task_dict = _task_to_read(updated)
+        task_dict["claim_lease_id"] = new_lease_id
+        # Backward-compat alias used by agents and tests
+        task_dict["task_id"] = task_id
+        return task_dict
 
 
 @router.post("/tasks/{task_id}/heartbeat")
-def heartbeat_task(task_id: str, request: Request):
+def heartbeat_task(task_id: str, request: Request, body: HeartbeatBody = HeartbeatBody()):
     """Renew the task lease. Called by the agent while task is running."""
     with get_session() as session:
         task = session.get(MeshTask, task_id)
@@ -405,6 +463,9 @@ def heartbeat_task(task_id: str, request: Request):
             raise HTTPException(status_code=404, detail="task not found")
         if task.status not in ("claimed", "running"):
             raise HTTPException(status_code=409, detail=f"task is {task.status}")
+        # Lease mismatch check: only enforce if task has a lease id AND caller provides one
+        if task.claim_lease_id and body.claim_lease_id and task.claim_lease_id != body.claim_lease_id:
+            raise HTTPException(status_code=409, detail="Lease mismatch: task has been reclaimed")
         expires_at = datetime.utcnow() + timedelta(seconds=LEASE_TTL_SECONDS)
         task.lease_expires_at = expires_at
         task.updated_at = datetime.utcnow()
@@ -457,13 +518,16 @@ def append_progress(task_id: str, body: MeshProgressEventCreate, request: Reques
 
 
 @router.post("/tasks/{task_id}/complete")
-def complete_task(task_id: str, result_artifact_id: Optional[str] = None):
+def complete_task(task_id: str, body: CompleteBody = CompleteBody()):
     with get_session() as session:
         task = session.get(MeshTask, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
+        # Lease mismatch check
+        if task.claim_lease_id and body.claim_lease_id and task.claim_lease_id != body.claim_lease_id:
+            raise HTTPException(status_code=409, detail="Lease mismatch: task has been reclaimed")
         task.status = "finished"
-        task.result_artifact_id = result_artifact_id
+        task.result_artifact_id = body.result_artifact_id
         task.lease_expires_at = None
         task.updated_at = datetime.utcnow()
         session.add(task)
@@ -476,11 +540,14 @@ def complete_task(task_id: str, result_artifact_id: Optional[str] = None):
 
 
 @router.post("/tasks/{task_id}/fail")
-def fail_task(task_id: str, error: str = ""):
+def fail_task(task_id: str, body: FailBody = FailBody()):
     with get_session() as session:
         task = session.get(MeshTask, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
+        # Lease mismatch check
+        if task.claim_lease_id and body.claim_lease_id and task.claim_lease_id != body.claim_lease_id:
+            raise HTTPException(status_code=409, detail="Lease mismatch: task has been reclaimed")
         task.status = "failed"
         task.lease_expires_at = None
         task.updated_at = datetime.utcnow()

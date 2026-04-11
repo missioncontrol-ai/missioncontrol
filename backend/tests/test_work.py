@@ -243,7 +243,8 @@ class TestTaskLifecycle(WorkTestCase):
         work.claim_task(tid, _req())
         with self.assertRaises(HTTPException) as ctx:
             work.claim_task(tid, _req())
-        self.assertEqual(ctx.exception.status_code, 409)
+        # 423 = task not available (already claimed); 409 = concurrent CAS race
+        self.assertIn(ctx.exception.status_code, (409, 423))
 
     def test_broadcast_claim_allows_multiple(self):
         kid = self._make_kluster()
@@ -400,14 +401,21 @@ class TestLeaseExpiry(WorkTestCase):
         statuses = {t["id"]: t["status"] for t in result}
         self.assertEqual(statuses[tid], "ready")
 
-    def test_expired_lease_cleared_on_claim_attempt(self):
+    def test_expired_lease_not_auto_reaped_on_claim(self):
+        """Expired leases are no longer reaped inline during claim (watchdog handles that).
+
+        A task with an expired lease that hasn't been reaped yet will return 423,
+        not silently succeed. The work_watchdog service (Task 3) reaps leases.
+        """
+        from fastapi import HTTPException
         kid = self._make_kluster()
         tid = self._make_task(kid)
         self._expire_task(tid)
 
-        # claim_task should succeed because the expired lease is reaped first
-        result = work.claim_task(tid, _req())
-        self.assertEqual(result["task_id"], tid)
+        # claim_task returns 423 — task still shows as "claimed" until watchdog reaps it
+        with self.assertRaises(HTTPException) as ctx:
+            work.claim_task(tid, _req())
+        self.assertEqual(ctx.exception.status_code, 423)
 
     def test_broadcast_task_not_expired(self):
         """Broadcast tasks should never be expired by _expire_stale_leases."""
