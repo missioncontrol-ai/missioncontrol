@@ -38,7 +38,7 @@
     {
       "title": "Platform Modernization Runbook",
       "doc_type": "runbook",
-      "body": "# Platform Modernization Runbook\n\n## Overview\nThis runbook covers operational procedures for the infrastructure modernization sprint.\n\n## Prerequisites\n- kubectl access to `epyc` and `kai` clusters\n- Infisical project membership: `platform-ops`\n- ArgoCD write access\n\n## Service Mesh Migration\n1. Validate current mesh: `istioctl analyze -n production`\n2. Apply hardened config: `kubectl apply -f mesh/hardened-baseline.yaml`\n3. Verify mTLS: `istioctl x describe pod <pod> -n <ns>`\n\n## Rollback\nIf mesh config causes connectivity issues:\n```bash\nkubectl rollout undo deployment/istiod -n istio-system\n```\n\n## Contacts\n- Platform Lead: merlin\n- Security Liaison: TBD via #security-review"
+      "body": "# Platform Modernization Runbook\n\n## Overview\nThis runbook covers operational procedures for the infrastructure modernization sprint.\n\n## Prerequisites\n- kubectl access to `control-plane` and `worker-01` clusters\n- Infisical project membership: `platform-ops`\n- ArgoCD write access\n\n## Service Mesh Migration\n1. Validate current mesh: `istioctl analyze -n production`\n2. Apply hardened config: `kubectl apply -f mesh/hardened-baseline.yaml`\n3. Verify mTLS: `istioctl x describe pod <pod> -n <ns>`\n\n## Rollback\nIf mesh config causes connectivity issues:\n```bash\nkubectl rollout undo deployment/istiod -n istio-system\n```\n\n## Contacts\n- Platform Lead: platform-lead\n- Security Liaison: TBD via #security-review"
     },
     {
       "title": "Architecture Decision: Secrets Management",

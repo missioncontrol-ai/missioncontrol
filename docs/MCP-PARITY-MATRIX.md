@@ -1,7 +1,7 @@
 # MCP Parity Matrix
 
 Updated: `2026-03-20`
-Owner: `merlin`
+Owner: `missioncontrol-team`
 
 This matrix tracks parity between core REST operations and MCP tools. The MCP path is the primary integration boundary for agents.
 

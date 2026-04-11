@@ -101,7 +101,7 @@ mc system doctor
 
 Optional (auto-load env on new shells):
 ```bash
-MC_INSTALL_SHELL_HOOK=1 MC_ENV_FILE=/home/merlin/nas/code/missioncontrol/.env bash scripts/install-mc.sh
+MC_INSTALL_SHELL_HOOK=1 MC_ENV_FILE=/path/to/your/.env bash scripts/install-mc.sh
 ```
 
 Remote nodes use the same `mc` binary but a separate bootstrap path:

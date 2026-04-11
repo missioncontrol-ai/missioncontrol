@@ -191,3 +191,6 @@ integrations/mc-mesh/target/
 # Local broker credentials (generated for docker compose)
 docker/mosquitto/passwords/
 artifacts/
+
+# Kluster update artifacts (personal session files)
+integrations/mc/kluster-*.md
