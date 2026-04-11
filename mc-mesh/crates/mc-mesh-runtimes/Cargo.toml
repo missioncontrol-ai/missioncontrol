@@ -1,0 +1,22 @@
+[package]
+name = "mc-mesh-runtimes"
+version = "0.1.0"
+edition = "2024"
+description = "First-party AgentRuntime implementations: claude-code, codex, gemini"
+license = "Apache-2.0"
+
+[dependencies]
+mc-mesh-core = { path = "../mc-mesh-core" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+portable-pty = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+async-stream = "0.3"
+dirs = { workspace = true }

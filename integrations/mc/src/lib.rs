@@ -17,6 +17,7 @@ pub mod maintenance;
 pub mod mcp_server;
 pub mod mcp_stdio;
 pub mod mcp_tools;
+pub mod mesh;
 pub mod ops;
 pub mod output;
 pub mod remote;

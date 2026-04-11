@@ -1,0 +1,21 @@
+[package]
+name = "mc-mesh-core"
+version = "0.1.0"
+edition = "2024"
+description = "Shared types, client, progress events, and AgentRuntime trait for mc-mesh"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+portable-pty = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }

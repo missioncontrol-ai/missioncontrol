@@ -7,7 +7,7 @@ use crate::{
     codex, compat,
     config::McConfig,
     daemon::{self, DaemonArgs},
-    drift, evolve, governance, launch, maintenance, mcp_server, mcp_tools, ops,
+    drift, evolve, governance, launch, maintenance, mcp_server, mcp_tools, mesh, ops,
     output::{self, OutputMode},
     remote, runtime,
     schema_pack::SchemaPack,
@@ -103,6 +103,9 @@ pub enum McCommand {
     /// Secrets provider + reference helpers.
     #[command(subcommand)]
     Secrets(SecretsCommand),
+    /// mc-mesh daemon control and work-model commands.
+    #[command(subcommand)]
+    Mesh(mesh::MeshCommand),
 }
 
 #[derive(Subcommand, Debug)]
@@ -703,6 +706,7 @@ pub async fn run(
         McCommand::Codex(cmd) => codex::run(cmd, &config).await,
         McCommand::Profile(cmd) => handle_profile(cmd, client, output_mode).await,
         McCommand::Secrets(cmd) => handle_secrets(cmd, client, output_mode).await,
+        McCommand::Mesh(cmd) => mesh::handle(cmd, &client, &config).await,
     }
 }
 

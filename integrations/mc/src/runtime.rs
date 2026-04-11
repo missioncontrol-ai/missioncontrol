@@ -464,6 +464,21 @@ async fn run_node_doctor(args: NodeAgentDoctorArgs) -> Result<()> {
 }
 
 async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> Result<()> {
+    // ── DEPRECATION NOTICE ────────────────────────────────────────────────────
+    // `mc node run` is the legacy node-agent path.  It will be removed once
+    // `mc mesh` reaches full feature parity.  The recommended path is:
+    //
+    //   mc mesh up                          # start the mc-mesh daemon
+    //   mc mesh agent enroll --mission <id> --runtime claude-code
+    //   mc mesh task run <kluster-id> --title "my task"
+    //
+    // See: https://github.com/merlinlabs/missioncontrol/tree/main/mc-mesh
+    // ─────────────────────────────────────────────────────────────────────────
+    eprintln!(
+        "⚠  mc node run is deprecated. Use `mc mesh up` instead.\n\
+         See `mc mesh --help` for the new work-model commands.\n"
+    );
+
     let mut config = load_node_config()?.unwrap_or_else(|| default_node_config(&args));
     if config.bootstrap_token.is_empty() {
         config.bootstrap_token = std::env::var("MC_NODE_BOOTSTRAP_TOKEN").unwrap_or_default();

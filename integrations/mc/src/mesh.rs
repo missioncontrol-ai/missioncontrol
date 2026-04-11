@@ -1,0 +1,1295 @@
+/// `mc mesh` — mc-mesh daemon control and work-model commands.
+use crate::client::MissionControlClient;
+use crate::config::McConfig;
+use anyhow::{Context, Result};
+use clap::{Args, Subcommand};
+use serde_json::{json, Value};
+use std::time::Duration;
+
+// ---------------------------------------------------------------------------
+// Top-level group
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand, Debug)]
+pub enum MeshCommand {
+    /// Bring mc-mesh up: install if missing, then start the daemon.
+    Up(MeshUpArgs),
+    /// Stop the running mc-mesh daemon (install stays).
+    Down,
+    /// Remove the mc-mesh binary and systemd unit.
+    Uninstall,
+    /// Show daemon health: backend reachable, runtimes, watchdog state.
+    Status,
+    /// Deep health check with individual component results.
+    Health,
+    /// Upgrade the mc-mesh binary in place.
+    Upgrade(MeshUpgradeArgs),
+    /// Print mc-mesh daemon version.
+    Version,
+    /// Manage locally installed agent runtimes.
+    #[command(subcommand)]
+    Runtime(MeshRuntimeCommand),
+    /// Manage agents in a mission's durable pool.
+    #[command(subcommand)]
+    Agent(MeshAgentCommand),
+    /// Inspect klusters and their task DAGs.
+    #[command(subcommand)]
+    Kluster(MeshKlusterCommand),
+    /// Manage and observe tasks.
+    #[command(subcommand)]
+    Task(MeshTaskCommand),
+    /// Send and tail inter-agent messages.
+    #[command(subcommand)]
+    Msg(MeshMsgCommand),
+    /// Attach to a running agent, task, or exec (auto-detected).
+    Attach(MeshAttachArgs),
+    /// Unified live feed of progress events and messages.
+    Watch(MeshWatchArgs),
+}
+
+// ---------------------------------------------------------------------------
+// Args
+// ---------------------------------------------------------------------------
+
+#[derive(Args, Debug)]
+pub struct MeshUpArgs {
+    #[arg(long, env = "MC_BACKEND_URL")]
+    pub backend_url: Option<String>,
+    #[arg(long)]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct MeshUpgradeArgs {
+    #[arg(long)]
+    pub version: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MeshRuntimeCommand {
+    Ls,
+    Install(RuntimeInstallArgs),
+    Test(RuntimeTestArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct RuntimeInstallArgs {
+    pub kind: String,
+}
+
+#[derive(Args, Debug)]
+pub struct RuntimeTestArgs {
+    pub kind: String,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MeshAgentCommand {
+    Ls(AgentLsArgs),
+    Enroll(AgentEnrollArgs),
+    Attach(AgentAttachArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct AgentLsArgs {
+    #[arg(long)]
+    pub mission: Option<String>,
+    #[arg(long)]
+    pub status: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct AgentEnrollArgs {
+    #[arg(long)]
+    pub mission: String,
+    #[arg(long)]
+    pub runtime: String,
+    #[arg(long)]
+    pub node: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct AgentAttachArgs {
+    pub agent_id: String,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MeshKlusterCommand {
+    Ls(KlusterLsArgs),
+    Show(KlusterShowArgs),
+    Watch(KlusterWatchArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct KlusterLsArgs {
+    #[arg(long)]
+    pub mission: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct KlusterShowArgs {
+    pub kluster_id: String,
+}
+
+#[derive(Args, Debug)]
+pub struct KlusterWatchArgs {
+    pub kluster_id: String,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MeshTaskCommand {
+    Run(TaskRunArgs),
+    Ls(TaskLsArgs),
+    Show(TaskShowArgs),
+    Watch(TaskWatchArgs),
+    Attach(TaskAttachArgs),
+    Cancel(TaskCancelArgs),
+    Retry(TaskRetryArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct TaskRunArgs {
+    pub kluster_id: String,
+    #[arg(long)]
+    pub title: String,
+    #[arg(long, default_value = "")]
+    pub description: String,
+    #[arg(long, default_value = "first_claim")]
+    pub claim_policy: String,
+    #[arg(long)]
+    pub runtime: Option<String>,
+    #[arg(long)]
+    pub depends_on: Option<String>,
+    #[arg(long, default_value = "0")]
+    pub priority: i32,
+    #[arg(long)]
+    pub input_file: Option<std::path::PathBuf>,
+}
+
+#[derive(Args, Debug)]
+pub struct TaskLsArgs {
+    #[arg(long)]
+    pub kluster: Option<String>,
+    #[arg(long)]
+    pub mission: Option<String>,
+    #[arg(long)]
+    pub status: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct TaskShowArgs {
+    pub task_id: String,
+}
+
+#[derive(Args, Debug)]
+pub struct TaskWatchArgs {
+    pub task_id: String,
+    #[arg(long, default_value = "2")]
+    pub interval_secs: u64,
+}
+
+#[derive(Args, Debug)]
+pub struct TaskAttachArgs {
+    pub task_id: String,
+}
+
+#[derive(Args, Debug)]
+pub struct TaskCancelArgs {
+    pub task_id: String,
+}
+
+#[derive(Args, Debug)]
+pub struct TaskRetryArgs {
+    pub task_id: String,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MeshMsgCommand {
+    Send(MsgSendArgs),
+    Tail(MsgTailArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct MsgSendArgs {
+    #[arg(long)]
+    pub kluster: Option<String>,
+    #[arg(long)]
+    pub mission: Option<String>,
+    #[arg(long)]
+    pub to: Option<String>,
+    #[arg(long, default_value = "coordination")]
+    pub channel: String,
+    pub body: String,
+}
+
+#[derive(Args, Debug)]
+pub struct MsgTailArgs {
+    #[arg(long)]
+    pub kluster: Option<String>,
+    #[arg(long)]
+    pub mission: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct MeshAttachArgs {
+    pub target: String,
+}
+
+#[derive(Args, Debug)]
+pub struct MeshWatchArgs {
+    #[arg(long)]
+    pub mission: Option<String>,
+    #[arg(long)]
+    pub kluster: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Main dispatcher
+// ---------------------------------------------------------------------------
+
+pub async fn handle(cmd: MeshCommand, client: &MissionControlClient, config: &McConfig) -> Result<()> {
+    match cmd {
+        MeshCommand::Up(a) => handle_up(a, config).await,
+        MeshCommand::Down => handle_down(),
+        MeshCommand::Uninstall => handle_uninstall(),
+        MeshCommand::Status => handle_status(client).await,
+        MeshCommand::Health => handle_health(client).await,
+        MeshCommand::Upgrade(a) => handle_upgrade(a).await,
+        MeshCommand::Version => handle_version(),
+        MeshCommand::Runtime(cmd) => handle_runtime(cmd),
+        MeshCommand::Agent(cmd) => handle_agent(cmd, client).await,
+        MeshCommand::Kluster(cmd) => handle_kluster(cmd, client).await,
+        MeshCommand::Task(cmd) => handle_task(cmd, client).await,
+        MeshCommand::Msg(cmd) => handle_msg(cmd, client).await,
+        MeshCommand::Attach(a) => handle_attach(a, client).await,
+        MeshCommand::Watch(a) => handle_watch(a, client).await,
+    }
+}
+
+fn not_yet(cmd: &str) -> Result<()> {
+    println!("{cmd}: not yet implemented");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Daemon lifecycle
+// ---------------------------------------------------------------------------
+
+async fn handle_up(args: MeshUpArgs, config: &McConfig) -> Result<()> {
+    // 1. Check if mc-mesh binary exists.
+    let binary = which_mc_mesh();
+
+    if binary.is_none() {
+        println!("mc-mesh binary not found in PATH.");
+        let install = if args.yes {
+            true
+        } else {
+            prompt_yes_no("Install mc-mesh now? (build from source) [y/N]")
+        };
+        if install {
+            build_and_install_mc_mesh()?;
+        } else {
+            println!("Skipped. Run `cargo install` from mc-mesh/ to install manually.");
+            return Ok(());
+        }
+    }
+
+    // 2. Check if already running.
+    if is_daemon_running() {
+        println!("mc-mesh daemon is already running.");
+        return Ok(());
+    }
+
+    // 3. Start the daemon.
+    let backend_url = args
+        .backend_url
+        .unwrap_or_else(|| config.base_url.to_string());
+    let token = config.token.clone().unwrap_or_default();
+
+    println!("Starting mc-mesh daemon…");
+    start_daemon_background(&backend_url, &token)?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    if is_daemon_running() {
+        println!("mc-mesh daemon started.");
+    } else {
+        println!("mc-mesh daemon may not have started. Check logs at: journalctl --user -u mc-mesh");
+    }
+
+    // Offer to install / enable the systemd user unit for persistence.
+    if which_binary("systemctl") {
+        let unit_path = dirs::home_dir()
+            .unwrap_or_default()
+            .join(".config")
+            .join("systemd")
+            .join("user")
+            .join("mc-mesh.service");
+        if !unit_path.exists() {
+            let install = if args.yes {
+                true
+            } else {
+                prompt_yes_no("Install systemd user unit so mc-mesh starts on login? [y/N]")
+            };
+            if install {
+                install_systemd_unit(&unit_path)?;
+            }
+        }
+    }
+
+    println!("Run `mc mesh status` to check.");
+    Ok(())
+}
+
+fn install_systemd_unit(unit_path: &std::path::Path) -> Result<()> {
+    if let Some(parent) = unit_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Write a minimal user unit (binary path resolved at install time).
+    let binary = which_mc_mesh()
+        .context("mc-mesh binary not found")?;
+    let unit = format!(
+        "[Unit]\n\
+         Description=mc-mesh agent coordination daemon\n\
+         After=network.target\n\n\
+         [Service]\n\
+         ExecStart={bin} run\n\
+         Restart=on-failure\n\
+         RestartSec=5s\n\
+         StandardOutput=journal\n\
+         StandardError=journal\n\
+         SyslogIdentifier=mc-mesh\n\n\
+         [Install]\n\
+         WantedBy=default.target\n",
+        bin = binary.display()
+    );
+    std::fs::write(unit_path, unit)?;
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .status();
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "enable", "mc-mesh.service"])
+        .status();
+    println!("Systemd user unit installed and enabled at {}", unit_path.display());
+    println!("mc-mesh will start automatically on next login.");
+    Ok(())
+}
+
+fn handle_down() -> Result<()> {
+    let pid_path = pid_file_path();
+    if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGTERM);
+            }
+            let _ = std::fs::remove_file(&pid_path);
+            println!("Sent SIGTERM to mc-mesh daemon (pid {pid}).");
+            return Ok(());
+        }
+    }
+    println!("mc-mesh daemon does not appear to be running.");
+    Ok(())
+}
+
+fn handle_uninstall() -> Result<()> {
+    // 1. Stop the daemon if running.
+    handle_down()?;
+
+    // 2. Remove the binary from PATH locations.
+    let removed_binary = if let Some(bin) = which_mc_mesh() {
+        std::fs::remove_file(&bin)
+            .with_context(|| format!("remove {}", bin.display()))?;
+        println!("Removed {}", bin.display());
+        true
+    } else {
+        false
+    };
+
+    // 3. Disable and remove the systemd user unit if present.
+    let unit_path = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".config")
+        .join("systemd")
+        .join("user")
+        .join("mc-mesh.service");
+    if unit_path.exists() {
+        // Best-effort: disable then remove.
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "disable", "--now", "mc-mesh.service"])
+            .status();
+        let _ = std::fs::remove_file(&unit_path);
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
+        println!("Removed systemd user unit.");
+    }
+
+    // 4. Remove the local control socket if present.
+    let sock = attach_socket_path();
+    if sock.exists() {
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    if removed_binary {
+        println!("mc-mesh uninstalled. Config and work dirs are preserved at ~/.missioncontrol/mc-mesh*");
+    } else {
+        println!("mc-mesh binary not found; nothing to remove.");
+    }
+    Ok(())
+}
+
+fn handle_version() -> Result<()> {
+    match which_mc_mesh() {
+        Some(bin) => {
+            let out = std::process::Command::new(&bin)
+                .arg("version")
+                .output()
+                .ok();
+            if let Some(o) = out {
+                print!("{}", String::from_utf8_lossy(&o.stdout));
+            } else {
+                println!("mc-mesh (version unknown)");
+            }
+        }
+        None => println!("mc-mesh not installed"),
+    }
+    Ok(())
+}
+
+async fn handle_status(client: &MissionControlClient) -> Result<()> {
+    let daemon_ok = is_daemon_running();
+    let backend_ok = client.get_json("/health").await.is_ok();
+
+    println!("mc-mesh daemon:  {}", if daemon_ok { "running" } else { "stopped" });
+    println!("backend:         {}", if backend_ok { "reachable" } else { "unreachable" });
+
+    if daemon_ok {
+        // Print PID if available.
+        if let Ok(pid) = std::fs::read_to_string(pid_file_path()) {
+            println!("pid:             {}", pid.trim());
+        }
+    }
+    Ok(())
+}
+
+async fn handle_health(client: &MissionControlClient) -> Result<()> {
+    handle_status(client).await?;
+
+    // Check runtime binaries.
+    for rt in &["claude", "codex", "gemini"] {
+        let found = which_binary(rt);
+        println!("{rt:15} {}", if found { "found" } else { "not found" });
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Runtime management
+// ---------------------------------------------------------------------------
+
+fn handle_runtime(cmd: MeshRuntimeCommand) -> Result<()> {
+    match cmd {
+        MeshRuntimeCommand::Ls => {
+            for rt in &["claude (claude-code)", "codex", "gemini"] {
+                let binary = rt.split_whitespace().next().unwrap_or(rt);
+                let found = which_binary(binary);
+                println!("{rt:30} {}", if found { "installed" } else { "not installed" });
+            }
+            Ok(())
+        }
+        MeshRuntimeCommand::Install(a) => {
+            let binary = match a.kind.as_str() {
+                "claude-code" | "claude_code" => "claude",
+                other => other,
+            };
+            println!("Install instructions for {binary}:");
+            match binary {
+                "claude" => println!("  npm install -g @anthropic-ai/claude-code"),
+                "codex" => println!("  npm install -g @openai/codex"),
+                "gemini" => println!("  npm install -g @google/gemini-cli"),
+                _ => println!("  Unknown runtime. Check the project's README."),
+            }
+            Ok(())
+        }
+        MeshRuntimeCommand::Test(a) => {
+            let binary = match a.kind.as_str() {
+                "claude-code" | "claude_code" => "claude",
+                other => other,
+            };
+            if which_binary(binary) {
+                let out = std::process::Command::new(binary)
+                    .arg("--version")
+                    .output()
+                    .context("failed to run --version")?;
+                println!("{}: {}", a.kind, String::from_utf8_lossy(&out.stdout).trim());
+            } else {
+                println!("{}: not found", a.kind);
+            }
+            Ok(())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Agent pool
+// ---------------------------------------------------------------------------
+
+async fn handle_agent(cmd: MeshAgentCommand, client: &MissionControlClient) -> Result<()> {
+    match cmd {
+        MeshAgentCommand::Ls(a) => {
+            let mission_id = a.mission.as_deref().unwrap_or_default();
+            if mission_id.is_empty() {
+                anyhow::bail!("--mission is required");
+            }
+            let path = format!("/work/missions/{mission_id}/agents");
+            let agents = client.get_json(&path).await?;
+            print_agents(&agents);
+            Ok(())
+        }
+        MeshAgentCommand::Enroll(a) => {
+            let body = json!({
+                "runtime_kind": a.runtime.replace('-', "_"),
+                "capabilities": [],
+                "labels": {},
+                "node_id": a.node,
+            });
+            let path = format!("/work/missions/{}/agents/enroll", a.mission);
+            let result = client.post_json(&path, &body).await?;
+            let agent_id = result.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            println!("Enrolled agent {agent_id} ({} in mission {})", a.runtime, a.mission);
+
+            // Offer to save to the local daemon config.
+            let cfg_path = mc_mesh_config_path();
+            println!(
+                "\nAdd to {} to have the daemon manage this agent:",
+                cfg_path.display()
+            );
+            println!(
+                "  missions:\n    - mission_id: {}\n      agents:\n        - agent_id: {agent_id}\n          runtime_kind: {}",
+                a.mission,
+                a.runtime.replace('-', "_")
+            );
+            Ok(())
+        }
+        MeshAgentCommand::Attach(a) => {
+            handle_attach(MeshAttachArgs { target: a.agent_id }, client).await
+        }
+    }
+}
+
+fn print_agents(agents: &Value) {
+    if let Some(arr) = agents.as_array() {
+        if arr.is_empty() {
+            println!("No agents enrolled.");
+            return;
+        }
+        println!("{:<38} {:<12} {:<10} {}", "ID", "RUNTIME", "STATUS", "TASK");
+        println!("{}", "-".repeat(75));
+        for a in arr {
+            let id = a["id"].as_str().unwrap_or("?");
+            let rt = a["runtime_kind"].as_str().unwrap_or("?");
+            let st = a["status"].as_str().unwrap_or("?");
+            let task = a["current_task_id"].as_str().unwrap_or("-");
+            println!("{id:<38} {rt:<12} {st:<10} {task}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Kluster commands
+// ---------------------------------------------------------------------------
+
+async fn handle_kluster(cmd: MeshKlusterCommand, client: &MissionControlClient) -> Result<()> {
+    match cmd {
+        MeshKlusterCommand::Ls(a) => {
+            let mission_id = a.mission.as_deref().unwrap_or_default();
+            if mission_id.is_empty() {
+                anyhow::bail!("--mission is required");
+            }
+            let klusters = client.get_json(&format!("/missions/{mission_id}/k")).await?;
+            if let Some(arr) = klusters.as_array() {
+                println!("{:<38} {}", "ID", "NAME");
+                println!("{}", "-".repeat(60));
+                for k in arr {
+                    println!("{:<38} {}", k["id"].as_str().unwrap_or("?"), k["name"].as_str().unwrap_or("?"));
+                }
+            }
+            Ok(())
+        }
+        MeshKlusterCommand::Show(a) => {
+            let graph = client
+                .get_json(&format!("/work/klusters/{}/graph", a.kluster_id))
+                .await?;
+            println!("Kluster {}", a.kluster_id);
+            if let Some(nodes) = graph["nodes"].as_array() {
+                println!("\nTasks ({}):", nodes.len());
+                println!("{:<38} {:<12} {}", "ID", "STATUS", "TITLE");
+                println!("{}", "-".repeat(70));
+                for n in nodes {
+                    println!(
+                        "{:<38} {:<12} {}",
+                        n["id"].as_str().unwrap_or("?"),
+                        n["status"].as_str().unwrap_or("?"),
+                        n["title"].as_str().unwrap_or("?")
+                    );
+                }
+            }
+            if let Some(edges) = graph["edges"].as_array() {
+                if !edges.is_empty() {
+                    println!("\nDependencies:");
+                    for e in edges {
+                        println!("  {} → {}", e["from"].as_str().unwrap_or("?"), e["to"].as_str().unwrap_or("?"));
+                    }
+                }
+            }
+            Ok(())
+        }
+        MeshKlusterCommand::Watch(a) => watch_kluster(&a.kluster_id, client).await,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Task commands
+// ---------------------------------------------------------------------------
+
+async fn handle_task(cmd: MeshTaskCommand, client: &MissionControlClient) -> Result<()> {
+    match cmd {
+        MeshTaskCommand::Run(a) => {
+            let depends_on: Vec<String> = a
+                .depends_on
+                .as_deref()
+                .unwrap_or("")
+                .split(',')
+                .filter(|s| !s.trim().is_empty())
+                .map(String::from)
+                .collect();
+
+            let required = a
+                .runtime
+                .as_deref()
+                .map(|r| vec![r.replace('-', "_")])
+                .unwrap_or_default();
+
+            let input_json = if let Some(path) = &a.input_file {
+                std::fs::read_to_string(path)
+                    .with_context(|| format!("reading {}", path.display()))?
+            } else {
+                "{}".into()
+            };
+
+            let body = json!({
+                "title": a.title,
+                "description": a.description,
+                "claim_policy": a.claim_policy,
+                "depends_on": depends_on,
+                "required_capabilities": required,
+                "priority": a.priority,
+                "input_json": input_json,
+            });
+
+            let result = client
+                .post_json(&format!("/work/klusters/{}/tasks", a.kluster_id), &body)
+                .await?;
+
+            let task_id = result["id"].as_str().unwrap_or("?");
+            let status = result["status"].as_str().unwrap_or("?");
+            println!("Task created: {task_id}");
+            println!("Status:       {status}");
+            println!("\nWatch progress: mc mesh task watch {task_id}");
+            Ok(())
+        }
+        MeshTaskCommand::Ls(a) => {
+            if let Some(kluster_id) = &a.kluster {
+                let path = match &a.status {
+                    Some(s) => format!("/work/klusters/{kluster_id}/tasks?status={s}"),
+                    None => format!("/work/klusters/{kluster_id}/tasks"),
+                };
+                let tasks = client.get_json(&path).await?;
+                print_tasks(&tasks);
+            } else {
+                anyhow::bail!("--kluster is required");
+            }
+            Ok(())
+        }
+        MeshTaskCommand::Show(a) => {
+            let task = client.get_json(&format!("/work/tasks/{}", a.task_id)).await?;
+            println!("{}", serde_json::to_string_pretty(&task)?);
+
+            // Also print progress history.
+            let progress = client
+                .get_json(&format!("/work/tasks/{}/progress", a.task_id))
+                .await?;
+            if let Some(arr) = progress.as_array() {
+                if !arr.is_empty() {
+                    println!("\n-- Progress events ({}) --", arr.len());
+                    print_progress_events(arr);
+                }
+            }
+            Ok(())
+        }
+        MeshTaskCommand::Watch(a) => watch_task(&a.task_id, a.interval_secs, client).await,
+        MeshTaskCommand::Attach(a) => {
+            // Resolve the task → its claiming agent, then attach to that agent.
+            let task = client.get_json(&format!("/work/tasks/{}", a.task_id)).await?;
+            let agent_id = task["claimed_by_agent_id"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("task {} is not currently claimed by any agent", a.task_id))?
+                .to_string();
+            println!("Task {} is running on agent {agent_id}", a.task_id);
+            handle_attach(MeshAttachArgs { target: agent_id }, client).await
+        }
+        MeshTaskCommand::Cancel(a) => {
+            client
+                .post_json(&format!("/work/tasks/{}/cancel", a.task_id), &json!({}))
+                .await?;
+            println!("Task {} cancelled.", a.task_id);
+            Ok(())
+        }
+        MeshTaskCommand::Retry(a) => {
+            let result = client
+                .post_json(&format!("/work/tasks/{}/retry", a.task_id), &json!({}))
+                .await?;
+            println!("Task {} status: {}", a.task_id, result["status"].as_str().unwrap_or("?"));
+            Ok(())
+        }
+    }
+}
+
+fn print_tasks(tasks: &Value) {
+    if let Some(arr) = tasks.as_array() {
+        if arr.is_empty() {
+            println!("No tasks.");
+            return;
+        }
+        println!("{:<38} {:<12} {}", "ID", "STATUS", "TITLE");
+        println!("{}", "-".repeat(70));
+        for t in arr {
+            println!(
+                "{:<38} {:<12} {}",
+                t["id"].as_str().unwrap_or("?"),
+                t["status"].as_str().unwrap_or("?"),
+                t["title"].as_str().unwrap_or("?")
+            );
+        }
+    }
+}
+
+fn print_progress_events(events: &[Value]) {
+    for e in events {
+        let seq = e["seq"].as_i64().unwrap_or(0);
+        let ev_type = e["event_type"].as_str().unwrap_or("info");
+        let phase = e["phase"].as_str().unwrap_or("");
+        let summary = e["summary"].as_str().unwrap_or("");
+        let phase_str = if !phase.is_empty() {
+            format!("[{phase}] ")
+        } else {
+            String::new()
+        };
+        println!("  #{seq:>4}  {ev_type:<20} {phase_str}{summary}");
+    }
+}
+
+/// Poll /work/tasks/{id}/progress until task is finished/failed/cancelled.
+async fn watch_task(task_id: &str, interval_secs: u64, client: &MissionControlClient) -> Result<()> {
+    println!("Watching task {task_id} (Ctrl-C to stop)…\n");
+    let mut last_seq: i64 = -1;
+    let interval = Duration::from_secs(interval_secs);
+
+    loop {
+        // Fetch task status.
+        let task = client.get_json(&format!("/work/tasks/{task_id}")).await?;
+        let status = task["status"].as_str().unwrap_or("?");
+
+        // Fetch new progress events.
+        let progress = client
+            .get_json(&format!("/work/tasks/{task_id}/progress?since_seq={last_seq}"))
+            .await?;
+
+        if let Some(arr) = progress.as_array() {
+            for e in arr {
+                let seq = e["seq"].as_i64().unwrap_or(0);
+                let ev_type = e["event_type"].as_str().unwrap_or("info");
+                let phase = e["phase"].as_str().unwrap_or("");
+                let summary = e["summary"].as_str().unwrap_or("");
+                let phase_str = if !phase.is_empty() {
+                    format!("[{phase}] ")
+                } else {
+                    String::new()
+                };
+                println!("  #{seq:>4}  {ev_type:<20} {phase_str}{summary}");
+                last_seq = last_seq.max(seq);
+            }
+        }
+
+        if matches!(status, "finished" | "failed" | "cancelled") {
+            println!("\nTask {task_id}: {status}");
+            break;
+        }
+
+        tokio::time::sleep(interval).await;
+    }
+    Ok(())
+}
+
+/// Poll /work/klusters/{id}/stream equivalent via REST for now.
+async fn watch_kluster(kluster_id: &str, client: &MissionControlClient) -> Result<()> {
+    println!("Watching kluster {kluster_id} (Ctrl-C to stop)…\n");
+    let mut _last_progress_id: i64 = 0;
+    let mut last_msg_id: i64 = 0;
+
+    loop {
+        // Get all tasks to see their status.
+        let tasks = client
+            .get_json(&format!("/work/klusters/{kluster_id}/tasks"))
+            .await?;
+
+        // Get new messages.
+        let msgs = client
+            .get_json(&format!("/work/klusters/{kluster_id}/messages?since_id={last_msg_id}"))
+            .await?;
+
+        if let Some(arr) = msgs.as_array() {
+            for m in arr {
+                let id = m["id"].as_i64().unwrap_or(0);
+                let from = m["from_agent_id"].as_str().unwrap_or("?");
+                let channel = m["channel"].as_str().unwrap_or("?");
+                let body = &m["body_json"];
+                println!("[msg/{channel}] {from}: {body}");
+                last_msg_id = last_msg_id.max(id);
+            }
+        }
+
+        // Print a status line for any in-progress tasks.
+        if let Some(arr) = tasks.as_array() {
+            let in_progress: Vec<_> = arr
+                .iter()
+                .filter(|t| {
+                    matches!(t["status"].as_str().unwrap_or(""), "running" | "claimed")
+                })
+                .collect();
+            if !in_progress.is_empty() {
+                for t in &in_progress {
+                    println!(
+                        "[task/{}] {} — {}",
+                        t["status"].as_str().unwrap_or("?"),
+                        t["id"].as_str().unwrap_or("?"),
+                        t["title"].as_str().unwrap_or("?")
+                    );
+                }
+            }
+
+            let all_done = arr.iter().all(|t| {
+                matches!(
+                    t["status"].as_str().unwrap_or(""),
+                    "finished" | "failed" | "cancelled"
+                )
+            });
+            if !arr.is_empty() && all_done {
+                println!("\nAll tasks in kluster {kluster_id} are done.");
+                break;
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+async fn handle_msg(cmd: MeshMsgCommand, client: &MissionControlClient) -> Result<()> {
+    match cmd {
+        MeshMsgCommand::Send(a) => {
+            let body = json!({
+                "to_agent_id": a.to,
+                "channel": a.channel,
+                "body_json": json!({ "text": a.body }).to_string(),
+            });
+            if let Some(kluster_id) = &a.kluster {
+                client
+                    .post_json(&format!("/work/klusters/{kluster_id}/messages"), &body)
+                    .await?;
+                println!("Message sent to kluster {kluster_id}.");
+            } else if let Some(mission_id) = &a.mission {
+                client
+                    .post_json(&format!("/work/missions/{mission_id}/messages"), &body)
+                    .await?;
+                println!("Message sent to mission {mission_id}.");
+            } else {
+                anyhow::bail!("--kluster or --mission is required");
+            }
+            Ok(())
+        }
+        MeshMsgCommand::Tail(a) => {
+            let is_kluster = a.kluster.is_some();
+            let scope_id = a
+                .kluster
+                .or(a.mission)
+                .context("--kluster or --mission is required")?;
+
+            println!("Tailing messages for {scope_id} (Ctrl-C to stop)…\n");
+            let mut last_id: i64 = 0;
+
+            loop {
+                let path = if is_kluster {
+                    format!("/work/klusters/{scope_id}/messages?since_id={last_id}")
+                } else {
+                    format!("/work/missions/{scope_id}/messages?since_id={last_id}")
+                };
+                let msgs = client.get_json(&path).await?;
+                if let Some(arr) = msgs.as_array() {
+                    for m in arr {
+                        let id = m["id"].as_i64().unwrap_or(0);
+                        let from = m["from_agent_id"].as_str().unwrap_or("?");
+                        let channel = m["channel"].as_str().unwrap_or("?");
+                        let body = &m["body_json"];
+                        println!("[{channel}] {from}: {body}");
+                        last_id = last_id.max(id);
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Watch (unified feed)
+// ---------------------------------------------------------------------------
+
+async fn handle_watch(args: MeshWatchArgs, client: &MissionControlClient) -> Result<()> {
+    if let Some(kluster_id) = &args.kluster {
+        watch_kluster(kluster_id, client).await
+    } else if let Some(mission_id) = &args.mission {
+        // For mission-level watch, list all klusters and poll each.
+        println!("Watching mission {mission_id} (Ctrl-C to stop)…\n");
+        let klusters = client
+            .get_json(&format!("/missions/{mission_id}/k"))
+            .await?;
+        let ids: Vec<String> = klusters
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|k| k["id"].as_str().map(String::from))
+            .collect();
+
+        if ids.is_empty() {
+            println!("No klusters in mission {mission_id}.");
+            return Ok(());
+        }
+
+        let mut last_msg_ids: std::collections::HashMap<String, i64> =
+            ids.iter().map(|id| (id.clone(), 0i64)).collect();
+
+        loop {
+            for kluster_id in &ids {
+                let last_id = *last_msg_ids.get(kluster_id).unwrap_or(&0);
+                let msgs = client
+                    .get_json(&format!(
+                        "/work/klusters/{kluster_id}/messages?since_id={last_id}"
+                    ))
+                    .await
+                    .unwrap_or(json!([]));
+
+                if let Some(arr) = msgs.as_array() {
+                    for m in arr {
+                        let id = m["id"].as_i64().unwrap_or(0);
+                        let from = m["from_agent_id"].as_str().unwrap_or("?");
+                        let channel = m["channel"].as_str().unwrap_or("?");
+                        let body = &m["body_json"];
+                        println!("[kluster/{kluster_id}][{channel}] {from}: {body}");
+                        last_msg_ids.insert(kluster_id.clone(), last_id.max(id));
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    } else {
+        anyhow::bail!("--mission or --kluster is required for `mc mesh watch`")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Attach (PTY proxy via local daemon unix socket)
+// ---------------------------------------------------------------------------
+
+async fn handle_attach(args: MeshAttachArgs, client: &MissionControlClient) -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixStream;
+
+    let socket_path = attach_socket_path();
+    if !socket_path.exists() {
+        anyhow::bail!(
+            "mc-mesh daemon socket not found at {}.\nIs the daemon running? Try `mc mesh up`.",
+            socket_path.display()
+        );
+    }
+
+    let target = &args.target;
+
+    // Auto-detect: if the target looks like a task ID (not an agent), resolve it.
+    // Agent IDs and task IDs are both UUIDs; we try the task endpoint first.
+    let agent_id = resolve_attach_target(target, client).await?;
+
+    println!("Attaching to agent {agent_id}… (Ctrl-C or Ctrl-D to detach)\n");
+
+    let stream = UnixStream::connect(&socket_path)
+        .await
+        .with_context(|| format!("connect to {}", socket_path.display()))?;
+
+    let (mut sock_read, mut sock_write) = stream.into_split();
+
+    // Send agent ID.
+    sock_write
+        .write_all(format!("{agent_id}\n").as_bytes())
+        .await?;
+
+    // Read response line.
+    let mut resp = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        sock_read.read_exact(&mut byte).await?;
+        if byte[0] == b'\n' {
+            break;
+        }
+        resp.push(byte[0]);
+    }
+    let resp = String::from_utf8_lossy(&resp).into_owned();
+    if !resp.starts_with("OK") {
+        anyhow::bail!("daemon refused attach: {resp}");
+    }
+
+    // Enter raw terminal mode so every keystroke goes straight to the PTY.
+    let _raw_guard = RawTerminal::enter()?;
+
+    // Spawn task: socket output → stdout
+    tokio::spawn(async move {
+        let mut stdout = tokio::io::stdout();
+        let mut buf = vec![0u8; 4096];
+        loop {
+            match sock_read.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if stdout.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                    let _ = stdout.flush().await;
+                }
+            }
+        }
+        println!("\r\n[detached]");
+    });
+
+    // This task: stdin → socket
+    let mut stdin = tokio::io::stdin();
+    let mut buf = vec![0u8; 256];
+    loop {
+        match stdin.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                if sock_write.write_all(&buf[..n]).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Auto-detect whether `target` is a task ID or an agent ID.
+///
+/// Tries `/work/tasks/{target}` first.  If it 404s, assumes it's an agent ID.
+async fn resolve_attach_target(target: &str, client: &MissionControlClient) -> Result<String> {
+    if let Ok(task) = client.get_json(&format!("/work/tasks/{target}")).await {
+        if let Some(agent_id) = task["claimed_by_agent_id"].as_str() {
+            return Ok(agent_id.to_string());
+        }
+        // Task exists but isn't running — fall through to treat target as agent ID.
+    }
+    Ok(target.to_string())
+}
+
+/// RAII guard that sets the terminal to raw mode on entry and restores on drop.
+struct RawTerminal {
+    #[cfg(unix)]
+    saved: libc::termios,
+}
+
+impl RawTerminal {
+    fn enter() -> Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = std::io::stdin().as_raw_fd();
+            let mut saved = unsafe { std::mem::zeroed::<libc::termios>() };
+            if unsafe { libc::tcgetattr(fd, &mut saved) } != 0 {
+                anyhow::bail!("tcgetattr failed");
+            }
+            let mut raw = saved;
+            unsafe { libc::cfmakeraw(&mut raw) };
+            if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
+                anyhow::bail!("tcsetattr failed");
+            }
+            Ok(RawTerminal { saved })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(RawTerminal {})
+        }
+    }
+}
+
+impl Drop for RawTerminal {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = std::io::stdin().as_raw_fd();
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &self.saved) };
+        }
+    }
+}
+
+fn attach_socket_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join(".missioncontrol")
+        .join("mc-mesh.sock")
+}
+
+// ---------------------------------------------------------------------------
+// Upgrade
+// ---------------------------------------------------------------------------
+
+async fn handle_upgrade(args: MeshUpgradeArgs) -> Result<()> {
+    println!("Upgrading mc-mesh…");
+
+    // Stop the running daemon first.
+    handle_down()?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // If a version was requested, we'd normally fetch it from a release URL.
+    // For now, rebuild from source (same as the initial install path).
+    if let Some(ref v) = args.version {
+        println!("Requested version: {v}");
+        println!("Pinned-version installs from release URLs are not yet supported.");
+        println!("Building from source instead…");
+    }
+
+    build_and_install_mc_mesh()?;
+
+    println!("Upgrade complete. Run `mc mesh up` to restart the daemon.");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn which_mc_mesh() -> Option<std::path::PathBuf> {
+    which::which("mc-mesh").ok()
+}
+
+fn which_binary(name: &str) -> bool {
+    which::which(name).is_ok()
+}
+
+fn pid_file_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("mc-mesh.pid")
+}
+
+fn mc_mesh_config_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".missioncontrol")
+        .join("mc-mesh.yaml")
+}
+
+fn is_daemon_running() -> bool {
+    let pid_path = pid_file_path();
+    if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            #[cfg(unix)]
+            {
+                // Check if process is alive.
+                unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+            }
+            #[cfg(not(unix))]
+            {
+                true
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+fn start_daemon_background(backend_url: &str, token: &str) -> Result<()> {
+    let binary = which_mc_mesh()
+        .context("mc-mesh binary not found after install attempt")?;
+
+    let pid_path = pid_file_path();
+    let child = std::process::Command::new(&binary)
+        .arg("run")
+        .arg("--backend-url")
+        .arg(backend_url)
+        .arg("--token")
+        .arg(token)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("failed to spawn mc-mesh run")?;
+
+    std::fs::write(&pid_path, child.id().to_string())?;
+    Ok(())
+}
+
+fn build_and_install_mc_mesh() -> Result<()> {
+    // Find the mc-mesh workspace relative to the mc crate's location.
+    // In development, both live in the missioncontrol repo.
+    let mc_mesh_dir = locate_mc_mesh_workspace();
+
+    if let Some(dir) = mc_mesh_dir {
+        println!("Building mc-mesh from {}…", dir.display());
+        let status = std::process::Command::new("cargo")
+            .args(["install", "--path", "crates/mc-mesh", "--force"])
+            .current_dir(&dir)
+            .status()
+            .context("cargo install failed")?;
+        if !status.success() {
+            anyhow::bail!("cargo install exited with {status}");
+        }
+        println!("mc-mesh installed.");
+    } else {
+        println!("Could not locate mc-mesh workspace. Install manually:");
+        println!("  cd mc-mesh && cargo install --path crates/mc-mesh");
+    }
+    Ok(())
+}
+
+fn locate_mc_mesh_workspace() -> Option<std::path::PathBuf> {
+    // Walk up from current exe to find mc-mesh/Cargo.toml.
+    let mut dir = std::env::current_exe().ok()?;
+    for _ in 0..8 {
+        dir = dir.parent()?.to_path_buf();
+        let candidate = dir.join("mc-mesh").join("Cargo.toml");
+        if candidate.exists() {
+            return Some(dir.join("mc-mesh"));
+        }
+    }
+    None
+}
+
+fn prompt_yes_no(prompt: &str) -> bool {
+    use std::io::Write;
+    print!("{prompt} ");
+    let _ = std::io::stdout().flush();
+    let mut input = String::new();
+    let _ = std::io::stdin().read_line(&mut input);
+    matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+}

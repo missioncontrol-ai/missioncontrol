@@ -1,0 +1,463 @@
+/// AgentRuntime implementation for the Claude Code CLI (`claude -p`).
+///
+/// Uses `--output-format stream-json` for structured real-time output.
+/// Each JSONL line is parsed into a typed `ProgressEvent`.
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use futures::stream::BoxStream;
+use mc_mesh_core::agent_runtime::AgentRuntime;
+use mc_mesh_core::progress::{ProgressEvent, ProgressEventType};
+use mc_mesh_core::types::{
+    AgentHandle, AgentSignal, Capability, LaunchContext, PtySession, RuntimeKind, TaskResult,
+    TaskSpec,
+};
+use std::io::{Read, Write};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
+
+pub struct ClaudeCodeRuntime {
+    capabilities: Vec<Capability>,
+    version: String,
+}
+
+impl ClaudeCodeRuntime {
+    pub fn new() -> Self {
+        ClaudeCodeRuntime {
+            capabilities: vec![
+                Capability::new("claude_code"),
+                Capability::new("code.read"),
+                Capability::new("code.edit"),
+                Capability::new("code.plan"),
+                Capability::new("test.run"),
+            ],
+            version: detect_version(),
+        }
+    }
+}
+
+impl Default for ClaudeCodeRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn detect_version() -> String {
+    std::process::Command::new("claude")
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+/// Build the prompt to send to claude from a TaskSpec.
+fn build_prompt(task: &TaskSpec) -> String {
+    if task.description.is_empty() {
+        task.title.clone()
+    } else {
+        format!("{}\n\n{}", task.title, task.description)
+    }
+}
+
+/// Parse a single stream-json line into zero or more ProgressEvents.
+///
+/// claude `--output-format stream-json` emits JSONL with these main types:
+///   {"type":"system","subtype":"init",...}  — session init
+///   {"type":"assistant","message":{...},...} — assistant turn
+///   {"type":"result","subtype":"success"|"error","result":"..."}
+fn parse_stream_line(line: &str) -> Vec<ProgressEvent> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+        // Not JSON (e.g. debug output); emit as info.
+        if !line.trim().is_empty() {
+            return vec![ProgressEvent::info(line.trim().to_string())];
+        }
+        return vec![];
+    };
+
+    let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+    match kind {
+        "system" => {
+            // Session init — emit phase_started
+            vec![ProgressEvent::phase_started("running", "claude session started")]
+        }
+        "assistant" => {
+            // Extract text content from the message.
+            let mut events = vec![];
+            if let Some(content) = v
+                .pointer("/message/content")
+                .and_then(|c| c.as_array())
+            {
+                for item in content {
+                    let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    match item_type {
+                        "text" => {
+                            if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                if !text.trim().is_empty() {
+                                    events.push(ProgressEvent {
+                                        event_type: ProgressEventType::StepStarted,
+                                        phase: Some("running".into()),
+                                        step: Some("thinking".into()),
+                                        summary: truncate(text, 200),
+                                        payload: serde_json::json!({ "text": text }),
+                                    });
+                                }
+                            }
+                        }
+                        "tool_use" => {
+                            let tool_name = item
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("unknown");
+                            events.push(ProgressEvent {
+                                event_type: ProgressEventType::StepStarted,
+                                phase: Some("running".into()),
+                                step: Some(format!("tool:{tool_name}")),
+                                summary: format!("calling tool: {tool_name}"),
+                                payload: item.clone(),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            events
+        }
+        "result" => {
+            let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
+            let result_text = v
+                .get("result")
+                .and_then(|r| r.as_str())
+                .unwrap_or("")
+                .to_string();
+            if subtype == "error" {
+                vec![ProgressEvent::error(
+                    truncate(&result_text, 200),
+                    serde_json::json!({ "detail": result_text }),
+                )]
+            } else {
+                vec![
+                    ProgressEvent {
+                        event_type: ProgressEventType::PhaseFinished,
+                        phase: Some("running".into()),
+                        step: None,
+                        summary: truncate(&result_text, 200),
+                        payload: serde_json::json!({ "result": result_text }),
+                    },
+                ]
+            }
+        }
+        _ => vec![],
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
+    }
+}
+
+#[async_trait]
+impl AgentRuntime for ClaudeCodeRuntime {
+    fn kind(&self) -> RuntimeKind {
+        RuntimeKind::ClaudeCode
+    }
+
+    fn version(&self) -> &str {
+        &self.version
+    }
+
+    fn capabilities(&self) -> &[Capability] {
+        &self.capabilities
+    }
+
+    async fn launch(&self, ctx: LaunchContext) -> Result<AgentHandle> {
+        // claude-code is stateless — each inject_task spawns a fresh `claude -p` process.
+        // Launch just validates the binary exists and creates the work dir.
+        std::fs::create_dir_all(&ctx.work_dir)?;
+
+        // Quick check that `claude` is on PATH.
+        let output = std::process::Command::new("claude")
+            .arg("--version")
+            .output();
+        if output.is_err() {
+            return Err(anyhow!(
+                "claude CLI not found in PATH. Run `mc mesh runtime install claude-code`."
+            ));
+        }
+
+        tracing::info!(
+            "claude-code agent {} ready in {}",
+            ctx.agent_id,
+            ctx.work_dir.display()
+        );
+
+        Ok(AgentHandle {
+            agent_id: ctx.agent_id,
+            runtime_kind: RuntimeKind::ClaudeCode,
+            pid: 0,
+        })
+    }
+
+    async fn inject_task(
+        &self,
+        handle: &AgentHandle,
+        task: &TaskSpec,
+    ) -> Result<BoxStream<'static, ProgressEvent>> {
+        let prompt = build_prompt(task);
+        let task_id = task.id.clone();
+        let agent_id = handle.agent_id.clone();
+
+        // Spawn `claude -p "{prompt}" --output-format stream-json --no-session-persistence`
+        // in the agent's work dir.
+        let work_dir = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".missioncontrol")
+            .join("mc-mesh")
+            .join("work")
+            .join(&agent_id);
+
+        tracing::info!("claude-code injecting task {task_id}: {}", &prompt[..prompt.len().min(80)]);
+
+        let mut child = Command::new("claude")
+            .arg("-p")
+            .arg(&prompt)
+            .arg("--output-format")
+            .arg("stream-json")
+            .arg("--no-session-persistence")
+            .current_dir(&work_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+
+        let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
+        let stderr = child.stderr.take().ok_or_else(|| anyhow!("no stderr"))?;
+
+        // Stream stdout lines → ProgressEvents.
+        let stream = async_stream::stream! {
+            let mut stdout_lines = BufReader::new(stdout).lines();
+            let mut stderr_lines = BufReader::new(stderr).lines();
+
+            loop {
+                tokio::select! {
+                    line = stdout_lines.next_line() => {
+                        match line {
+                            Ok(Some(l)) => {
+                                for ev in parse_stream_line(&l) {
+                                    yield ev;
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(e) => {
+                                yield ProgressEvent::error("stdout read error", serde_json::json!({ "error": e.to_string() }));
+                                break;
+                            }
+                        }
+                    }
+                    line = stderr_lines.next_line() => {
+                        if let Ok(Some(l)) = line {
+                            if !l.trim().is_empty() {
+                                yield ProgressEvent {
+                                    event_type: ProgressEventType::Warning,
+                                    phase: Some("running".into()),
+                                    step: None,
+                                    summary: truncate(&l, 200),
+                                    payload: serde_json::json!({ "stderr": l }),
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Wait for the process and emit a final event on non-zero exit.
+            match child.wait().await {
+                Ok(status) if !status.success() => {
+                    yield ProgressEvent::error(
+                        format!("claude exited with {status}"),
+                        serde_json::json!({ "exit_code": status.code() }),
+                    );
+                }
+                _ => {}
+            }
+        };
+
+        Ok(Box::pin(stream))
+    }
+
+    async fn signal(&self, handle: &AgentHandle, signal: AgentSignal) -> Result<()> {
+        // claude -p is single-shot; signals are delivered via the next inject_task call.
+        tracing::info!("Signal to claude-code agent {}: {:?}", handle.agent_id, signal);
+        Ok(())
+    }
+
+    async fn collect_result(&self, handle: &AgentHandle) -> Result<TaskResult> {
+        Ok(TaskResult {
+            task_id: handle.agent_id.clone(),
+            success: true,
+            exit_code: 0,
+            artifact_path: None,
+            summary: "claude-code task finished".into(),
+        })
+    }
+
+    async fn attach_pty(&self, handle: &AgentHandle) -> Result<PtySession> {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+        let work_dir = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".missioncontrol")
+            .join("mc-mesh")
+            .join("work")
+            .join(&handle.agent_id);
+        std::fs::create_dir_all(&work_dir)?;
+
+        let pty_system = native_pty_system();
+        let pair = pty_system.openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+
+        let mut cmd = CommandBuilder::new("claude");
+        cmd.cwd(&work_dir);
+        // Launch interactive claude (no -p flag = interactive TUI mode).
+        let _child = pair.slave.spawn_command(cmd)?;
+        drop(pair.slave);
+
+        let mut master_reader = pair.master.try_clone_reader()?;
+        let mut master_writer = pair.master.take_writer()?;
+
+        let (out_tx, out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+        let (in_tx, mut in_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+
+        // PTY output → channel (blocking I/O on a dedicated thread).
+        tokio::task::spawn_blocking(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match master_reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if out_tx.blocking_send(buf[..n].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        // Channel → PTY input (blocking I/O on a dedicated thread).
+        tokio::task::spawn_blocking(move || {
+            loop {
+                match in_rx.blocking_recv() {
+                    None => break,
+                    Some(bytes) => {
+                        if master_writer.write_all(&bytes).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        tracing::info!("PTY session opened for claude-code agent {}", handle.agent_id);
+        Ok(PtySession { output: out_rx, input: in_tx, rows: 24, cols: 80 })
+    }
+
+    async fn shutdown(&self, handle: AgentHandle) -> Result<()> {
+        tracing::info!("Shutting down claude-code agent {}", handle.agent_id);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mc_mesh_core::progress::ProgressEventType;
+
+    #[test]
+    fn system_line_emits_phase_started() {
+        let events = parse_stream_line(r#"{"type":"system","subtype":"init"}"#);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, ProgressEventType::PhaseStarted);
+    }
+
+    #[test]
+    fn assistant_text_emits_step_started() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Thinking…"}]}}"#;
+        let events = parse_stream_line(line);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, ProgressEventType::StepStarted);
+        assert!(events[0].summary.contains("Thinking"));
+    }
+
+    #[test]
+    fn assistant_tool_use_emits_step_with_tool_name() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"read_file","id":"t1","input":{}}]}}"#;
+        let events = parse_stream_line(line);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, ProgressEventType::StepStarted);
+        assert!(events[0].step.as_deref().unwrap_or("").contains("read_file"));
+    }
+
+    #[test]
+    fn assistant_multiple_content_items() {
+        let line = r#"{"type":"assistant","message":{"content":[
+            {"type":"text","text":"hello"},
+            {"type":"tool_use","name":"write_file","id":"t2","input":{}}
+        ]}}"#;
+        let events = parse_stream_line(line);
+        assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn result_success_emits_phase_finished() {
+        let line = r#"{"type":"result","subtype":"success","result":"done"}"#;
+        let events = parse_stream_line(line);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, ProgressEventType::PhaseFinished);
+    }
+
+    #[test]
+    fn result_error_emits_error() {
+        let line = r#"{"type":"result","subtype":"error","result":"something went wrong"}"#;
+        let events = parse_stream_line(line);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, ProgressEventType::Error);
+    }
+
+    #[test]
+    fn unknown_type_emits_nothing() {
+        let events = parse_stream_line(r#"{"type":"unknown_future_type"}"#);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn non_json_line_emits_info() {
+        let events = parse_stream_line("plain text output");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, ProgressEventType::Info);
+    }
+
+    #[test]
+    fn blank_line_emits_nothing() {
+        assert!(parse_stream_line("").is_empty());
+        assert!(parse_stream_line("   ").is_empty());
+    }
+
+    #[test]
+    fn truncate_short_string_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_long_string_adds_ellipsis() {
+        let result = truncate("abcdefghij", 5);
+        assert!(result.starts_with("abcde"));
+        assert!(result.contains('…'));
+    }
+}

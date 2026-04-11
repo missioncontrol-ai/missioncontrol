@@ -38,6 +38,8 @@ base64 = "0.22"
 tar = "0.4"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 portable-pty = "0.8"
+which = "6"
+libc = "0.2"
 [dev-dependencies]
 httpmock = "0.6"
 wasmtime = "16"

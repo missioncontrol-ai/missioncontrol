@@ -1,0 +1,175 @@
+/// mc-mesh daemon — wires config, supervisor, runtimes, and task loops together.
+use anyhow::Result;
+use mc_mesh_core::client::BackendClient;
+use mc_mesh_runtimes::{
+    claude_code::ClaudeCodeRuntime,
+    codex::CodexRuntime,
+    gemini::GeminiRuntime,
+};
+use mc_mesh_work::watchdog::{OfflinePolicy, Watchdog};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+use crate::attach_gateway;
+use crate::config::DaemonConfig;
+use crate::supervisor::Supervisor;
+use crate::task_loop;
+
+/// Config passed from the CLI, overrides any file-based config.
+pub struct CliOverrides {
+    pub backend_url: String,
+    pub token: String,
+    pub work_dir: PathBuf,
+    pub offline_grace_secs: u64,
+}
+
+pub async fn run(cli: CliOverrides) -> Result<()> {
+    let mut cfg = DaemonConfig::load_or_default();
+
+    // CLI args win over file.
+    if !cli.backend_url.is_empty() {
+        cfg.backend_url = cli.backend_url;
+    }
+    if !cli.token.is_empty() {
+        cfg.token = cli.token;
+    }
+    cfg.work_dir = cli.work_dir;
+    cfg.offline_grace_secs = cli.offline_grace_secs;
+
+    tracing::info!("mc-mesh daemon starting");
+    tracing::info!("backend: {}", cfg.backend_url);
+    tracing::info!("work_dir: {}", cfg.work_dir.display());
+    tracing::info!(
+        "missions: {:?}",
+        cfg.missions.iter().map(|m| &m.mission_id).collect::<Vec<_>>()
+    );
+
+    std::fs::create_dir_all(&cfg.work_dir)?;
+
+    let client = Arc::new(BackendClient::new(&cfg.backend_url, &cfg.token));
+
+    let policy = match cfg.offline_policy.as_str() {
+        "safe_readonly" => OfflinePolicy::SafeReadonly,
+        "autonomous" => OfflinePolicy::Autonomous { max_ttl_secs: 300 },
+        _ => OfflinePolicy::Strict,
+    };
+    let watchdog = Arc::new(Watchdog::new(policy, cfg.offline_grace_secs));
+
+    let supervisor = Arc::new(Supervisor::new(
+        cfg.work_dir.clone(),
+        cfg.backend_url.clone(),
+        cfg.token.clone(),
+    ));
+
+    // Runtime map for the attach gateway: agent_id → runtime
+    let runtime_map: attach_gateway::RuntimeMap =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    let mut task_handles = vec![];
+
+    // For each mission → each enrolled agent, spawn the runtime and start a task loop.
+    for mission in &cfg.missions {
+        for agent_entry in &mission.agents {
+            let rt: Arc<mc_mesh_core::agent_runtime::DynAgentRuntime> =
+                match agent_entry.runtime_kind.as_str() {
+                    "claude_code" => Arc::new(Box::new(ClaudeCodeRuntime::new())),
+                    "codex" => Arc::new(Box::new(CodexRuntime::new())),
+                    "gemini" => Arc::new(Box::new(GeminiRuntime::new())),
+                    other => {
+                        tracing::warn!("Unknown runtime kind '{other}', skipping agent {}", agent_entry.agent_id);
+                        continue;
+                    }
+                };
+
+            // Register in runtime map for attach gateway.
+            {
+                let mut map = runtime_map.lock().await;
+                map.insert(agent_entry.agent_id.clone(), rt.clone());
+            }
+
+            supervisor
+                .spawn(
+                    agent_entry.agent_id.clone(),
+                    mission.mission_id.clone(),
+                    rt.clone(),
+                    vec![],
+                )
+                .await?;
+
+            // Fetch the handle from supervisor to share with the task loop.
+            // We use a lightweight Arc<Mutex<AgentHandle>> so the task loop can
+            // lock it before calling inject_task.
+            let handle = supervisor
+                .with_agent(&agent_entry.agent_id, |a| {
+                    // We can't move the handle out; create a placeholder.
+                    // The real handle lives inside supervisor; we pass the agent_id.
+                    a.agent_id.clone()
+                })
+                .await;
+
+            if handle.is_none() {
+                continue;
+            }
+
+            // Build a synthetic AgentHandle for the task loop.
+            // Each task loop owns its handle; the supervisor tracks them by agent_id.
+            let agent_handle = Arc::new(Mutex::new(mc_mesh_core::types::AgentHandle {
+                agent_id: agent_entry.agent_id.clone(),
+                runtime_kind: rt.kind(),
+                pid: 0,
+            }));
+
+            let jh = tokio::spawn(task_loop::run_for_agent(
+                agent_handle,
+                rt,
+                client.clone(),
+                mission.mission_id.clone(),
+                agent_entry.agent_id.clone(),
+                watchdog.clone(),
+            ));
+            task_handles.push(jh);
+
+            tracing::info!(
+                "Started task loop for {} agent {} in mission {}",
+                agent_entry.runtime_kind,
+                agent_entry.agent_id,
+                mission.mission_id
+            );
+        }
+    }
+
+    if task_handles.is_empty() {
+        tracing::warn!(
+            "No agents configured. Add missions/agents to {} and restart.",
+            DaemonConfig::user_config_path().display()
+        );
+    }
+
+    // Start the attach gateway in the background.
+    let gw_map = Arc::clone(&runtime_map);
+    tokio::spawn(async move {
+        if let Err(e) = attach_gateway::run(gw_map).await {
+            tracing::warn!("attach gateway exited: {e}");
+        }
+    });
+
+    // Wait for ctrl-c or all loops to exit.
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Received Ctrl-C, shutting down");
+        }
+        _ = async {
+            for h in task_handles {
+                let _ = h.await;
+            }
+        } => {
+            tracing::info!("All task loops exited");
+        }
+    }
+
+    // Clean up socket on exit.
+    let _ = std::fs::remove_file(attach_gateway::socket_path());
+    Ok(())
+}

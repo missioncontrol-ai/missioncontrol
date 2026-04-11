@@ -58,6 +58,7 @@ from app.routers import (
     persistence,
     remotectl,
     hooks,
+    work,
 )
 
 app = FastAPI(
@@ -693,6 +694,7 @@ app.include_router(oidc_web.router)
 app.include_router(remotectl.router)
 app.include_router(hooks.router)
 app.include_router(hooks.codex_router)
+app.include_router(work.router)
 
 
 def _web_dir() -> Path | None:

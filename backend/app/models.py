@@ -738,3 +738,123 @@ class NodeEvent(SQLModel, table=True):
     event_type: str = Field(index=True)
     payload_json: str = Field(default="{}", sa_column=Column(Text))
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+# ---------------------------------------------------------------------------
+# mc-mesh work model
+# ---------------------------------------------------------------------------
+
+
+class MeshTask(SQLModel, table=True):
+    """Agent-executable work unit inside a kluster's DAG.
+
+    Distinct from the human-authored ``Task`` (task board).  ``MeshTask``
+    records are dispatched to and claimed by agent runtimes supervised by
+    mc-mesh.
+    """
+
+    id: Optional[str] = Field(default=None, primary_key=True)
+    kluster_id: str = Field(index=True)
+    mission_id: str = Field(index=True)  # denormalised for fast scoping
+    parent_task_id: Optional[str] = Field(default=None, index=True)
+    title: str
+    description: str = Field(default="", sa_column=Column(Text))
+    input_json: str = Field(default="{}", sa_column=Column(Text))
+    # assigned | first_claim | broadcast
+    claim_policy: str = Field(default="first_claim")
+    # JSON array of MeshTask ids within the same kluster
+    depends_on: str = Field(default="[]", sa_column=Column(Text))
+    # JSON {"<artifact_name>": "<description>"}
+    produces: str = Field(default="{}", sa_column=Column(Text))
+    # JSON {"<artifact_name>": "<description>"}
+    consumes: str = Field(default="{}", sa_column=Column(Text))
+    # JSON ["claude_code"] or ["code.edit", "test.run"]
+    required_capabilities: str = Field(default="[]", sa_column=Column(Text))
+    # pending | ready | claimed | running | blocked | waiting_input |
+    # finished | failed | cancelled
+    status: str = Field(default="pending", index=True)
+    claimed_by_agent_id: Optional[str] = Field(default=None, index=True)
+    result_artifact_id: Optional[str] = Field(default=None)
+    priority: int = Field(default=0, index=True)
+    lease_expires_at: Optional[datetime] = None
+    created_by_subject: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class MeshAgent(SQLModel, table=True):
+    """Agent runtime enrolled in a mission's durable pool.
+
+    Agents enroll at the mission level and persist across klusters / tasks.
+    """
+
+    id: Optional[str] = Field(default=None, primary_key=True)
+    mission_id: str = Field(index=True)
+    # Optional: pin agent to a specific RuntimeNode (integrations/mc runtime)
+    node_id: Optional[str] = Field(default=None, index=True)
+    # claude_code | codex | gemini | custom
+    runtime_kind: str = Field(index=True)
+    runtime_version: str = ""
+    # JSON list of capability strings
+    capabilities: str = Field(default="[]", sa_column=Column(Text))
+    labels: str = Field(default="{}", sa_column=Column(Text))
+    # online | busy | idle | offline | errored
+    status: str = Field(default="offline", index=True)
+    current_task_id: Optional[str] = Field(default=None, index=True)
+    enrolled_by_subject: str = ""
+    enrolled_at: datetime = Field(default_factory=datetime.utcnow)
+    last_heartbeat_at: Optional[datetime] = None
+
+
+class MeshProgressEvent(SQLModel, table=True):
+    """Typed progress event emitted by an agent while executing a MeshTask.
+
+    This is the primary new surface — structured, replayable, streamable.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    task_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    # Monotonically increasing per task (not globally unique)
+    seq: int = Field(default=0)
+    # phase_started | phase_finished | step_started | step_finished |
+    # artifact_produced | artifact_consumed | waiting_on | unblocked |
+    # needs_input | input_received | message_sent | message_received |
+    # error | warning | info
+    event_type: str = Field(index=True)
+    phase: Optional[str] = None   # e.g. "planning", "editing", "testing"
+    step: Optional[str] = None    # short human label
+    summary: str = Field(default="", sa_column=Column(Text))
+    # event-specific typed body (artifact ref, blocker id, input prompt…)
+    payload_json: str = Field(default="{}", sa_column=Column(Text))
+    occurred_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class MeshMessage(SQLModel, table=True):
+    """Mission- or kluster-scoped typed message between agents."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    mission_id: str = Field(index=True)
+    kluster_id: Optional[str] = Field(default=None, index=True)
+    from_agent_id: str = Field(index=True)
+    # null = broadcast to scope
+    to_agent_id: Optional[str] = Field(default=None, index=True)
+    # null = not scoped to a specific task
+    task_id: Optional[str] = Field(default=None, index=True)
+    # coordination | handoff | question | answer | artifact_share | custom
+    channel: str = Field(default="coordination")
+    body_json: str = Field(default="{}", sa_column=Column(Text))
+    in_reply_to: Optional[int] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    read_at: Optional[datetime] = None
+
+
+class MeshTaskArtifact(SQLModel, table=True):
+    """Link between a MeshTask and an entry in the Artifact ledger."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    task_id: str = Field(index=True)
+    artifact_id: int = Field(index=True)
+    artifact_name: str = ""  # logical name declared in task produces/consumes
+    role: str = "output"      # output | input
+    created_at: datetime = Field(default_factory=datetime.utcnow)
