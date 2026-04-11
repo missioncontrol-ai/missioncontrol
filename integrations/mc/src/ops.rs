@@ -3,7 +3,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Subcommand, Debug)]
 pub enum OpsCommand {

@@ -3,7 +3,7 @@ use crate::{
     config::McConfig,
     launch::{self, LaunchArgs},
 };
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 #[derive(Subcommand, Debug)]
@@ -25,13 +25,21 @@ pub struct GeminiRunArgs {
     headless: bool,
 }
 
-pub async fn run(command: GeminiCommand, client: &MissionControlClient, config: &McConfig) -> Result<()> {
+pub async fn run(
+    command: GeminiCommand,
+    client: &MissionControlClient,
+    config: &McConfig,
+) -> Result<()> {
     match command {
         GeminiCommand::Run(args) => run_gemini(args, client, config).await,
     }
 }
 
-async fn run_gemini(args: GeminiRunArgs, client: &MissionControlClient, config: &McConfig) -> Result<()> {
+async fn run_gemini(
+    args: GeminiRunArgs,
+    client: &MissionControlClient,
+    config: &McConfig,
+) -> Result<()> {
     let profile = resolve_profile(args.profile_positional, args.profile_name)?;
     let launch_args = LaunchArgs {
         agent: Some("gemini".to_string()),
@@ -52,5 +60,9 @@ fn resolve_profile(positional: Option<String>, flag: Option<String>) -> Result<S
     if positional.is_some() && flag.is_some() {
         bail!("profile provided both positionally and via --profile; choose one");
     }
-    Ok(positional.or(flag).unwrap_or_else(|| "default".to_string()).trim().to_string())
+    Ok(positional
+        .or(flag)
+        .unwrap_or_else(|| "default".to_string())
+        .trim()
+        .to_string())
 }

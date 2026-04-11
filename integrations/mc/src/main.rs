@@ -4,7 +4,7 @@ use mc::{
     commands::McCommand, config::McConfig, output::OutputMode, secrets,
 };
 use tracing::Level;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 const DEFAULT_BASE_URL: &str = "http://localhost:8008";
 
@@ -114,7 +114,11 @@ async fn main() -> anyhow::Result<()> {
     let client = MissionControlClient::new(&config)?;
     let booster = AgentBooster::load(&config)?;
 
-    let output_mode = if opts.json { OutputMode::Json } else { OutputMode::Human };
+    let output_mode = if opts.json {
+        OutputMode::Json
+    } else {
+        OutputMode::Human
+    };
 
     let ctx = config.agent_context.clone();
     mc::commands::run(opts.command, client, ctx, booster, config, output_mode).await

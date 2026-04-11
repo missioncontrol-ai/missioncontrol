@@ -1,7 +1,7 @@
 use crate::client::MissionControlClient;
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Subcommand, Debug)]
 pub enum RemoteCommand {

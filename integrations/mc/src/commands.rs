@@ -7,9 +7,9 @@ use crate::{
     codex, compat,
     config::McConfig,
     daemon::{self, DaemonArgs},
-    drift, evolve, governance, launch, maintenance, mcp_server, mcp_tools, mesh, ops,
+    drift, evolve, gemini, governance, launch, maintenance, mcp_server, mcp_tools, mesh, ops,
     output::{self, OutputMode},
-    remote, runtime, gemini,
+    remote, runtime,
     schema_pack::SchemaPack,
     secrets, update,
 };

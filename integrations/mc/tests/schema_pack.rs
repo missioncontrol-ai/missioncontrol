@@ -22,9 +22,10 @@ fn default_pack_rejects_missing_fields() {
         "description": "missing name"
     });
     let err = pack.validate_payload(&payload).unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("missing required fields [\"name\"] for entity 'kluster'"));
+    assert!(
+        err.to_string()
+            .contains("missing required fields [\"name\"] for entity 'kluster'")
+    );
 }
 
 #[test]

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
 

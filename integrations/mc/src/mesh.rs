@@ -3,7 +3,7 @@ use crate::client::MissionControlClient;
 use crate::config::McConfig;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -267,7 +267,11 @@ pub struct MeshWatchArgs {
 // Main dispatcher
 // ---------------------------------------------------------------------------
 
-pub async fn handle(cmd: MeshCommand, client: &MissionControlClient, config: &McConfig) -> Result<()> {
+pub async fn handle(
+    cmd: MeshCommand,
+    client: &MissionControlClient,
+    config: &McConfig,
+) -> Result<()> {
     match cmd {
         MeshCommand::Up(a) => handle_up(a, config).await,
         MeshCommand::Down => handle_down(),
@@ -309,7 +313,9 @@ async fn handle_up(args: MeshUpArgs, config: &McConfig) -> Result<()> {
         if install {
             build_and_install_mc_mesh()?;
         } else {
-            println!("Skipped. Run `cargo install` from integrations/mc-mesh/ to install manually.");
+            println!(
+                "Skipped. Run `cargo install` from integrations/mc-mesh/ to install manually."
+            );
             return Ok(());
         }
     }
@@ -333,7 +339,9 @@ async fn handle_up(args: MeshUpArgs, config: &McConfig) -> Result<()> {
     if is_daemon_running() {
         println!("mc-mesh daemon started.");
     } else {
-        println!("mc-mesh daemon may not have started. Check logs at: journalctl --user -u mc-mesh");
+        println!(
+            "mc-mesh daemon may not have started. Check logs at: journalctl --user -u mc-mesh"
+        );
     }
 
     // Offer to install / enable the systemd user unit for persistence.
@@ -365,8 +373,7 @@ fn install_systemd_unit(unit_path: &std::path::Path) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     // Write a minimal user unit (binary path resolved at install time).
-    let binary = which_mc_mesh()
-        .context("mc-mesh binary not found")?;
+    let binary = which_mc_mesh().context("mc-mesh binary not found")?;
     let unit = format!(
         "[Unit]\n\
          Description=mc-mesh agent coordination daemon\n\
@@ -389,7 +396,10 @@ fn install_systemd_unit(unit_path: &std::path::Path) -> Result<()> {
     let _ = std::process::Command::new("systemctl")
         .args(["--user", "enable", "mc-mesh.service"])
         .status();
-    println!("Systemd user unit installed and enabled at {}", unit_path.display());
+    println!(
+        "Systemd user unit installed and enabled at {}",
+        unit_path.display()
+    );
     println!("mc-mesh will start automatically on next login.");
     Ok(())
 }
@@ -417,8 +427,7 @@ fn handle_uninstall() -> Result<()> {
 
     // 2. Remove the binary from PATH locations.
     let removed_binary = if let Some(bin) = which_mc_mesh() {
-        std::fs::remove_file(&bin)
-            .with_context(|| format!("remove {}", bin.display()))?;
+        std::fs::remove_file(&bin).with_context(|| format!("remove {}", bin.display()))?;
         println!("Removed {}", bin.display());
         true
     } else {
@@ -451,7 +460,9 @@ fn handle_uninstall() -> Result<()> {
     }
 
     if removed_binary {
-        println!("mc-mesh uninstalled. Config and work dirs are preserved at ~/.missioncontrol/mc-mesh*");
+        println!(
+            "mc-mesh uninstalled. Config and work dirs are preserved at ~/.missioncontrol/mc-mesh*"
+        );
     } else {
         println!("mc-mesh binary not found; nothing to remove.");
     }
@@ -480,8 +491,18 @@ async fn handle_status(client: &MissionControlClient) -> Result<()> {
     let daemon_ok = is_daemon_running();
     let backend_ok = client.get_json("/health").await.is_ok();
 
-    println!("mc-mesh daemon:  {}", if daemon_ok { "running" } else { "stopped" });
-    println!("backend:         {}", if backend_ok { "reachable" } else { "unreachable" });
+    println!(
+        "mc-mesh daemon:  {}",
+        if daemon_ok { "running" } else { "stopped" }
+    );
+    println!(
+        "backend:         {}",
+        if backend_ok {
+            "reachable"
+        } else {
+            "unreachable"
+        }
+    );
 
     if daemon_ok {
         // Print PID if available.
@@ -513,7 +534,10 @@ fn handle_runtime(cmd: MeshRuntimeCommand) -> Result<()> {
             for rt in &["claude (claude-code)", "codex", "gemini"] {
                 let binary = rt.split_whitespace().next().unwrap_or(rt);
                 let found = which_binary(binary);
-                println!("{rt:30} {}", if found { "installed" } else { "not installed" });
+                println!(
+                    "{rt:30} {}",
+                    if found { "installed" } else { "not installed" }
+                );
             }
             Ok(())
         }
@@ -541,7 +565,11 @@ fn handle_runtime(cmd: MeshRuntimeCommand) -> Result<()> {
                     .arg("--version")
                     .output()
                     .context("failed to run --version")?;
-                println!("{}: {}", a.kind, String::from_utf8_lossy(&out.stdout).trim());
+                println!(
+                    "{}: {}",
+                    a.kind,
+                    String::from_utf8_lossy(&out.stdout).trim()
+                );
             } else {
                 println!("{}: not found", a.kind);
             }
@@ -578,8 +606,7 @@ async fn handle_agent(cmd: MeshAgentCommand, client: &MissionControlClient) -> R
                     let v: Value = if path.extension().and_then(|e| e.to_str()) == Some("json") {
                         serde_json::from_str(&raw)?
                     } else {
-                        serde_yaml::from_str(&raw)
-                            .context("parsing profile as YAML")?
+                        serde_yaml::from_str(&raw).context("parsing profile as YAML")?
                     };
                     Some(v)
                 }
@@ -600,7 +627,10 @@ async fn handle_agent(cmd: MeshAgentCommand, client: &MissionControlClient) -> R
             let path = format!("/work/missions/{}/agents/enroll", a.mission);
             let result = client.post_json(&path, &body).await?;
             let agent_id = result.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Enrolled agent {agent_id} ({} in mission {})", a.runtime, a.mission);
+            println!(
+                "Enrolled agent {agent_id} ({} in mission {})",
+                a.runtime, a.mission
+            );
 
             // Offer to save to the local daemon config.
             let cfg_path = mc_mesh_config_path();
@@ -613,15 +643,15 @@ async fn handle_agent(cmd: MeshAgentCommand, client: &MissionControlClient) -> R
                 a.mission,
                 a.runtime.replace('-', "_")
             );
-            println!("\nSet a profile: mc mesh agent profile {agent_id} --role \"...\" --name \"...\"");
+            println!(
+                "\nSet a profile: mc mesh agent profile {agent_id} --role \"...\" --name \"...\""
+            );
             Ok(())
         }
         MeshAgentCommand::Attach(a) => {
             handle_attach(MeshAttachArgs { target: a.agent_id }, client).await
         }
-        MeshAgentCommand::Profile(a) => {
-            handle_agent_profile(a, client).await
-        }
+        MeshAgentCommand::Profile(a) => handle_agent_profile(a, client).await,
     }
 }
 
@@ -705,23 +735,29 @@ fn detect_machine_info() -> Value {
     // Detect key tools.
     let tools: Vec<Value> = [
         ("claude", &["--version"][..]),
-        ("codex",  &["--version"]),
+        ("codex", &["--version"]),
         ("gemini", &["version"]),
-        ("git",    &["--version"]),
-        ("cargo",  &["--version"]),
+        ("git", &["--version"]),
+        ("cargo", &["--version"]),
         ("docker", &["--version"]),
     ]
     .iter()
     .filter_map(|(name, args)| {
         let out = std::process::Command::new(name).args(*args).output().ok()?;
-        let raw = if out.stdout.is_empty() { out.stderr } else { out.stdout };
+        let raw = if out.stdout.is_empty() {
+            out.stderr
+        } else {
+            out.stdout
+        };
         let version = String::from_utf8_lossy(&raw)
             .lines()
             .next()
             .unwrap_or("")
             .trim()
             .to_string();
-        if version.is_empty() { return None; }
+        if version.is_empty() {
+            return None;
+        }
         Some(json!({ "name": name, "version": version }))
     })
     .collect();
@@ -738,17 +774,20 @@ fn detect_machine_info() -> Value {
 /// Default capabilities for a runtime kind.
 fn default_capabilities_for(runtime: &str) -> Vec<&'static str> {
     match runtime.replace('-', "_").as_str() {
-        "claude_code" => vec!["claude_code", "code.read", "code.edit", "code.plan", "test.run"],
-        "codex"       => vec!["codex", "code.read", "code.edit", "test.run"],
-        "gemini"      => vec!["gemini", "code.read", "code.plan"],
-        _             => vec![],
+        "claude_code" => vec![
+            "claude_code",
+            "code.read",
+            "code.edit",
+            "code.plan",
+            "test.run",
+        ],
+        "codex" => vec!["codex", "code.read", "code.edit", "test.run"],
+        "gemini" => vec!["gemini", "code.read", "code.plan"],
+        _ => vec![],
     }
 }
 
-async fn handle_agent_profile(
-    a: AgentProfileArgs,
-    client: &MissionControlClient,
-) -> Result<()> {
+async fn handle_agent_profile(a: AgentProfileArgs, client: &MissionControlClient) -> Result<()> {
     // Start from file if provided, else empty object.
     let mut profile: serde_json::Map<String, Value> = match &a.file {
         Some(path) => {
@@ -765,9 +804,15 @@ async fn handle_agent_profile(
     };
 
     // CLI overrides take precedence.
-    if let Some(name) = a.name { profile.insert("name".into(), Value::String(name)); }
-    if let Some(role) = a.role { profile.insert("role".into(), Value::String(role)); }
-    if let Some(inst) = a.instructions { profile.insert("instructions".into(), Value::String(inst)); }
+    if let Some(name) = a.name {
+        profile.insert("name".into(), Value::String(name));
+    }
+    if let Some(role) = a.role {
+        profile.insert("role".into(), Value::String(role));
+    }
+    if let Some(inst) = a.instructions {
+        profile.insert("instructions".into(), Value::String(inst));
+    }
 
     if profile.is_empty() {
         anyhow::bail!("Provide --file or at least one of --name, --role, --instructions");
@@ -777,7 +822,10 @@ async fn handle_agent_profile(
     let result = client.patch_json(&path, &Value::Object(profile)).await?;
     let name = result["profile"]["name"].as_str().unwrap_or("-");
     let role = result["profile"]["role"].as_str().unwrap_or("-");
-    println!("Updated profile for {} — name: {name}, role: {role}", a.agent_id);
+    println!(
+        "Updated profile for {} — name: {name}, role: {role}",
+        a.agent_id
+    );
     Ok(())
 }
 
@@ -792,12 +840,18 @@ async fn handle_kluster(cmd: MeshKlusterCommand, client: &MissionControlClient) 
             if mission_id.is_empty() {
                 anyhow::bail!("--mission is required");
             }
-            let klusters = client.get_json(&format!("/missions/{mission_id}/k")).await?;
+            let klusters = client
+                .get_json(&format!("/missions/{mission_id}/k"))
+                .await?;
             if let Some(arr) = klusters.as_array() {
                 println!("{:<38} {}", "ID", "NAME");
                 println!("{}", "-".repeat(60));
                 for k in arr {
-                    println!("{:<38} {}", k["id"].as_str().unwrap_or("?"), k["name"].as_str().unwrap_or("?"));
+                    println!(
+                        "{:<38} {}",
+                        k["id"].as_str().unwrap_or("?"),
+                        k["name"].as_str().unwrap_or("?")
+                    );
                 }
             }
             Ok(())
@@ -824,7 +878,11 @@ async fn handle_kluster(cmd: MeshKlusterCommand, client: &MissionControlClient) 
                 if !edges.is_empty() {
                     println!("\nDependencies:");
                     for e in edges {
-                        println!("  {} → {}", e["from"].as_str().unwrap_or("?"), e["to"].as_str().unwrap_or("?"));
+                        println!(
+                            "  {} → {}",
+                            e["from"].as_str().unwrap_or("?"),
+                            e["to"].as_str().unwrap_or("?")
+                        );
                     }
                 }
             }
@@ -898,7 +956,9 @@ async fn handle_task(cmd: MeshTaskCommand, client: &MissionControlClient) -> Res
             Ok(())
         }
         MeshTaskCommand::Show(a) => {
-            let task = client.get_json(&format!("/work/tasks/{}", a.task_id)).await?;
+            let task = client
+                .get_json(&format!("/work/tasks/{}", a.task_id))
+                .await?;
             println!("{}", serde_json::to_string_pretty(&task)?);
 
             // Also print progress history.
@@ -916,10 +976,14 @@ async fn handle_task(cmd: MeshTaskCommand, client: &MissionControlClient) -> Res
         MeshTaskCommand::Watch(a) => watch_task(&a.task_id, a.interval_secs, client).await,
         MeshTaskCommand::Attach(a) => {
             // Resolve the task → its claiming agent, then attach to that agent.
-            let task = client.get_json(&format!("/work/tasks/{}", a.task_id)).await?;
+            let task = client
+                .get_json(&format!("/work/tasks/{}", a.task_id))
+                .await?;
             let agent_id = task["claimed_by_agent_id"]
                 .as_str()
-                .ok_or_else(|| anyhow::anyhow!("task {} is not currently claimed by any agent", a.task_id))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("task {} is not currently claimed by any agent", a.task_id)
+                })?
                 .to_string();
             println!("Task {} is running on agent {agent_id}", a.task_id);
             handle_attach(MeshAttachArgs { target: agent_id }, client).await
@@ -935,7 +999,11 @@ async fn handle_task(cmd: MeshTaskCommand, client: &MissionControlClient) -> Res
             let result = client
                 .post_json(&format!("/work/tasks/{}/retry", a.task_id), &json!({}))
                 .await?;
-            println!("Task {} status: {}", a.task_id, result["status"].as_str().unwrap_or("?"));
+            println!(
+                "Task {} status: {}",
+                a.task_id,
+                result["status"].as_str().unwrap_or("?")
+            );
             Ok(())
         }
     }
@@ -976,7 +1044,11 @@ fn print_progress_events(events: &[Value]) {
 }
 
 /// Poll /work/tasks/{id}/progress until task is finished/failed/cancelled.
-async fn watch_task(task_id: &str, interval_secs: u64, client: &MissionControlClient) -> Result<()> {
+async fn watch_task(
+    task_id: &str,
+    interval_secs: u64,
+    client: &MissionControlClient,
+) -> Result<()> {
     println!("Watching task {task_id} (Ctrl-C to stop)…\n");
     let mut last_seq: i64 = -1;
     let interval = Duration::from_secs(interval_secs);
@@ -988,7 +1060,9 @@ async fn watch_task(task_id: &str, interval_secs: u64, client: &MissionControlCl
 
         // Fetch new progress events.
         let progress = client
-            .get_json(&format!("/work/tasks/{task_id}/progress?since_seq={last_seq}"))
+            .get_json(&format!(
+                "/work/tasks/{task_id}/progress?since_seq={last_seq}"
+            ))
             .await?;
 
         if let Some(arr) = progress.as_array() {
@@ -1031,7 +1105,9 @@ async fn watch_kluster(kluster_id: &str, client: &MissionControlClient) -> Resul
 
         // Get new messages.
         let msgs = client
-            .get_json(&format!("/work/klusters/{kluster_id}/messages?since_id={last_msg_id}"))
+            .get_json(&format!(
+                "/work/klusters/{kluster_id}/messages?since_id={last_msg_id}"
+            ))
             .await?;
 
         if let Some(arr) = msgs.as_array() {
@@ -1049,9 +1125,7 @@ async fn watch_kluster(kluster_id: &str, client: &MissionControlClient) -> Resul
         if let Some(arr) = tasks.as_array() {
             let in_progress: Vec<_> = arr
                 .iter()
-                .filter(|t| {
-                    matches!(t["status"].as_str().unwrap_or(""), "running" | "claimed")
-                })
+                .filter(|t| matches!(t["status"].as_str().unwrap_or(""), "running" | "claimed"))
                 .collect();
             if !in_progress.is_empty() {
                 for t in &in_progress {
@@ -1422,8 +1496,7 @@ fn is_daemon_running() -> bool {
 }
 
 fn start_daemon_background(backend_url: &str, token: &str) -> Result<()> {
-    let binary = which_mc_mesh()
-        .context("mc-mesh binary not found after install attempt")?;
+    let binary = which_mc_mesh().context("mc-mesh binary not found after install attempt")?;
 
     let pid_path = pid_file_path();
     let child = std::process::Command::new(&binary)

@@ -2,7 +2,7 @@ use httpmock::Method::{GET, POST};
 use httpmock::MockServer;
 use mc::client::MissionControlClient;
 use mc::config::McConfig;
-use mc::evolve::{run, EvolveArgs, EvolveCommand, RunArgs, SeedArgs, StatusArgs};
+use mc::evolve::{EvolveArgs, EvolveCommand, RunArgs, SeedArgs, StatusArgs, run};
 use serde_json::json;
 use std::io::Write;
 use tempfile::NamedTempFile;

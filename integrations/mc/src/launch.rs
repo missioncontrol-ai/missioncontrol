@@ -573,10 +573,16 @@ impl AgentDriver for GeminiDriver {
             .or_insert_with(|| serde_json::Value::Object(Default::default()))
             .as_object_mut()
             .ok_or_else(|| anyhow!("~/.gemini/settings.json mcpServers is not an object"))?
-            .insert("missioncontrol".to_string(), mc_entry);
+            .insert("missioncontrol".to_string(), mc_entry.clone());
 
         std::fs::write(&config_path, serde_json::to_string_pretty(&root)?)?;
         mc_ok!("gemini MCP config written → {}", config_path.display());
+        if let Err(e) = seed_gemini_auth_state(target_home) {
+            mc_warn!("could not seed Gemini auth state: {}", e);
+        }
+        if let Err(e) = write_gemini_project_config(&mc_entry) {
+            mc_warn!("could not write project Gemini MCP config: {}", e);
+        }
         Ok(())
     }
 
@@ -585,6 +591,41 @@ impl AgentDriver for GeminiDriver {
         cmd.args(extra_args);
         cmd
     }
+}
+
+fn write_gemini_project_config(mc_entry: &serde_json::Value) -> Result<()> {
+    let current_dir = std::env::current_dir().context("unable to locate current directory")?;
+    let config_path = current_dir.join(".gemini").join("settings.json");
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut root: serde_json::Value = if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path)?;
+        serde_json::from_str(&content)
+            .unwrap_or_else(|_| serde_json::Value::Object(Default::default()))
+    } else {
+        serde_json::Value::Object(Default::default())
+    };
+    let project_entry = {
+        let mut entry = mc_entry.clone();
+        if let Some(obj) = entry.as_object_mut() {
+            obj.remove("env");
+        }
+        entry
+    };
+    root.as_object_mut()
+        .ok_or_else(|| anyhow!("{} is not a JSON object", config_path.display()))?
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::Value::Object(Default::default()))
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("{} mcpServers is not an object", config_path.display()))?
+        .insert("missioncontrol".to_string(), project_entry);
+    std::fs::write(&config_path, serde_json::to_string_pretty(&root)?)?;
+    mc_ok!(
+        "gemini project MCP config written → {}",
+        config_path.display()
+    );
+    Ok(())
 }
 
 // ── Shared JSON render helper ─────────────────────────────────────────────────
@@ -736,13 +777,10 @@ pub async fn run(args: LaunchArgs, client: &MissionControlClient, config: &McCon
     let base_mc_home = mc_home_dir();
     fs::create_dir_all(&base_mc_home)?;
 
-    let profile_name = resolve_profile_name(
-        &args.profile,
-        Some(selected_agent.config_key()),
-        client,
-    )
-    .await
-    .unwrap_or_else(|_| "default".to_string());
+    let profile_name =
+        resolve_profile_name(&args.profile, Some(selected_agent.config_key()), client)
+            .await
+            .unwrap_or_else(|_| "default".to_string());
 
     let runtime_session_id = format!("rs_{}", Uuid::new_v4().simple());
     let instance_home = base_mc_home.join("instances").join(&runtime_session_id);
@@ -1139,9 +1177,45 @@ fn initialize_profile_overlay(
 fn should_force_profile_refresh(rel: &str) -> bool {
     matches!(
         rel,
-        ".claude.json" | ".claude/.credentials.json"
-            | ".claude/settings.json"
+        ".claude.json" | ".claude/.credentials.json" | ".claude/settings.json"
     )
+}
+
+fn seed_gemini_auth_state(target_home: &Path) -> Result<()> {
+    let Some(global_home) = dirs::home_dir() else {
+        return Ok(());
+    };
+    let global_gemini = global_home.join(".gemini");
+    if !global_gemini.exists() {
+        return Ok(());
+    }
+
+    let target_gemini = target_home.join(".gemini");
+    std::fs::create_dir_all(&target_gemini)?;
+
+    for name in [
+        "oauth_creds.json",
+        "google_accounts.json",
+        "state.json",
+        "trustedFolders.json",
+        "projects.json",
+        "installation_id",
+    ] {
+        let src = global_gemini.join(name);
+        if !src.exists() {
+            continue;
+        }
+        let dst = target_gemini.join(name);
+        std::fs::copy(&src, &dst).with_context(|| {
+            format!(
+                "failed to seed Gemini auth file from {} to {}",
+                src.display(),
+                dst.display()
+            )
+        })?;
+    }
+
+    Ok(())
 }
 
 fn seed_profile_path(global_path: &Path, profile_path: &Path) -> Result<()> {
@@ -1686,5 +1760,4 @@ mod tests {
             r#"{"theme":"dark"}"#
         );
     }
-
 }

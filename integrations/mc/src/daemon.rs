@@ -2,11 +2,11 @@ use crate::agent_context::AgentContext;
 use crate::client::MissionControlClient;
 use anyhow::Context;
 use axum::{
+    Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use chrono::{DateTime, Utc};
 use clap::Args;
@@ -18,7 +18,7 @@ use serde_json::Value;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 use tracing::{info, warn};
 use url::Url;
 

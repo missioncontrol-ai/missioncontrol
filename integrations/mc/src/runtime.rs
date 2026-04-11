@@ -2,9 +2,15 @@ use crate::{client::MissionControlClient, output, output::OutputMode};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use futures_util::{SinkExt, StreamExt};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-use serde_json::{json, Value};
-use std::{fs, io::{Read, Write}, path::PathBuf, process::Stdio, time::Duration};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use serde_json::{Value, json};
+use std::{
+    fs,
+    io::{Read, Write},
+    path::PathBuf,
+    process::Stdio,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     process::Command,
@@ -170,7 +176,11 @@ pub struct RuntimeListArgs {
     pub status: Option<String>,
 }
 
-pub async fn run(command: RuntimeCommand, client: &MissionControlClient, output_mode: OutputMode) -> Result<()> {
+pub async fn run(
+    command: RuntimeCommand,
+    client: &MissionControlClient,
+    output_mode: OutputMode,
+) -> Result<()> {
     match command {
         RuntimeCommand::Nodes(cmd) => run_nodes(cmd, client, output_mode).await,
         RuntimeCommand::Jobs(cmd) => run_jobs(cmd, client, output_mode).await,
@@ -179,7 +189,10 @@ pub async fn run(command: RuntimeCommand, client: &MissionControlClient, output_
     }
 }
 
-pub async fn run_node_agent(command: NodeAgentCommand, client: &MissionControlClient) -> Result<()> {
+pub async fn run_node_agent(
+    command: NodeAgentCommand,
+    client: &MissionControlClient,
+) -> Result<()> {
     match command {
         NodeAgentCommand::Register(args) => run_node_register(args, client).await,
         NodeAgentCommand::Run(args) => run_node_run(args, client).await,
@@ -187,7 +200,11 @@ pub async fn run_node_agent(command: NodeAgentCommand, client: &MissionControlCl
     }
 }
 
-async fn run_nodes(command: RuntimeNodesCommand, client: &MissionControlClient, output_mode: OutputMode) -> Result<()> {
+async fn run_nodes(
+    command: RuntimeNodesCommand,
+    client: &MissionControlClient,
+    output_mode: OutputMode,
+) -> Result<()> {
     match command {
         RuntimeNodesCommand::Register(args) => {
             let response = client
@@ -215,7 +232,11 @@ async fn run_nodes(command: RuntimeNodesCommand, client: &MissionControlClient, 
     Ok(())
 }
 
-async fn run_jobs(command: RuntimeJobsCommand, client: &MissionControlClient, output_mode: OutputMode) -> Result<()> {
+async fn run_jobs(
+    command: RuntimeJobsCommand,
+    client: &MissionControlClient,
+    output_mode: OutputMode,
+) -> Result<()> {
     match command {
         RuntimeJobsCommand::Submit(args) => {
             let response = client
@@ -228,7 +249,9 @@ async fn run_jobs(command: RuntimeJobsCommand, client: &MissionControlClient, ou
         }
         RuntimeJobsCommand::List(args) => {
             let path = match args.status {
-                Some(status) if !status.trim().is_empty() => format!("/runtime/jobs?status={status}"),
+                Some(status) if !status.trim().is_empty() => {
+                    format!("/runtime/jobs?status={status}")
+                }
                 _ => "/runtime/jobs".to_string(),
             };
             let response = client.get_json(&path).await?;
@@ -238,7 +261,11 @@ async fn run_jobs(command: RuntimeJobsCommand, client: &MissionControlClient, ou
     Ok(())
 }
 
-async fn run_leases(command: RuntimeLeasesCommand, client: &MissionControlClient, output_mode: OutputMode) -> Result<()> {
+async fn run_leases(
+    command: RuntimeLeasesCommand,
+    client: &MissionControlClient,
+    output_mode: OutputMode,
+) -> Result<()> {
     match command {
         RuntimeLeasesCommand::Create(args) => {
             let response = client
@@ -271,7 +298,11 @@ async fn run_leases(command: RuntimeLeasesCommand, client: &MissionControlClient
     Ok(())
 }
 
-async fn run_sessions(command: RuntimeSessionsCommand, client: &MissionControlClient, output_mode: OutputMode) -> Result<()> {
+async fn run_sessions(
+    command: RuntimeSessionsCommand,
+    client: &MissionControlClient,
+    output_mode: OutputMode,
+) -> Result<()> {
     let _ = output_mode;
     match command {
         RuntimeSessionsCommand::Attach(args) => attach_session(args, client).await,
@@ -319,11 +350,15 @@ impl Default for NodeRuntimeConfig {
 }
 
 fn node_state_path() -> PathBuf {
-    crate::config::mc_home_dir().join("runtime").join("node.json")
+    crate::config::mc_home_dir()
+        .join("runtime")
+        .join("node.json")
 }
 
 fn node_config_path() -> PathBuf {
-    crate::config::mc_home_dir().join("runtime").join("node-config.json")
+    crate::config::mc_home_dir()
+        .join("runtime")
+        .join("node-config.json")
 }
 
 fn load_node_state() -> Result<Option<NodeState>> {
@@ -370,7 +405,8 @@ fn load_node_config() -> Result<Option<NodeRuntimeConfig>> {
         Ok(value) => value,
         Err(_) => return Ok(None),
     };
-    let config: NodeRuntimeConfig = serde_json::from_str(&raw).context("invalid node config json")?;
+    let config: NodeRuntimeConfig =
+        serde_json::from_str(&raw).context("invalid node config json")?;
     Ok(Some(config))
 }
 
@@ -389,7 +425,8 @@ fn default_node_config(args: &NodeAgentRunArgs) -> NodeRuntimeConfig {
         hostname: std::env::var("MC_NODE_HOSTNAME").unwrap_or_else(|_| args.hostname.clone()),
         trust_tier: std::env::var("MC_NODE_TRUST_TIER").unwrap_or_else(|_| args.trust_tier.clone()),
         bootstrap_token: std::env::var("MC_NODE_BOOTSTRAP_TOKEN").unwrap_or_default(),
-        upgrade_channel: std::env::var("MC_NODE_UPGRADE_CHANNEL").unwrap_or_else(|_| "stable".to_string()),
+        upgrade_channel: std::env::var("MC_NODE_UPGRADE_CHANNEL")
+            .unwrap_or_else(|_| "stable".to_string()),
         desired_version: std::env::var("MC_NODE_DESIRED_VERSION").unwrap_or_default(),
         poll_seconds: std::env::var("MC_NODE_POLL_SECONDS")
             .ok()
@@ -405,12 +442,18 @@ fn default_node_config(args: &NodeAgentRunArgs) -> NodeRuntimeConfig {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .collect(),
-        labels: parse_kv_pairs(&args.labels).as_object().cloned().unwrap_or_default(),
+        labels: parse_kv_pairs(&args.labels)
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
         upgrade_manifest_url: std::env::var("MC_NODE_UPGRADE_MANIFEST_URL").unwrap_or_default(),
     }
 }
 
-async fn run_node_register(args: NodeAgentRegisterArgs, client: &MissionControlClient) -> Result<()> {
+async fn run_node_register(
+    args: NodeAgentRegisterArgs,
+    client: &MissionControlClient,
+) -> Result<()> {
     let config = load_node_config()?.unwrap_or_else(|| NodeRuntimeConfig {
         node_name: args.node_name.clone(),
         hostname: args.hostname.clone(),
@@ -484,7 +527,9 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
         config.bootstrap_token = std::env::var("MC_NODE_BOOTSTRAP_TOKEN").unwrap_or_default();
     }
     if config.bootstrap_token.is_empty() {
-        return Err(anyhow::anyhow!("node bootstrap token missing; seed ~/.missioncontrol/runtime/node-config.json or MC_NODE_BOOTSTRAP_TOKEN"));
+        return Err(anyhow::anyhow!(
+            "node bootstrap token missing; seed ~/.missioncontrol/runtime/node-config.json or MC_NODE_BOOTSTRAP_TOKEN"
+        ));
     }
     persist_node_config(&config)?;
 
@@ -537,9 +582,16 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
             last_heartbeat = tokio::time::Instant::now();
         }
 
-        if let Ok(remote) = client.get_json(&format!("/runtime/nodes/{}/config", state.node_id)).await {
+        if let Ok(remote) = client
+            .get_json(&format!("/runtime/nodes/{}/config", state.node_id))
+            .await
+        {
             if let Some(spec) = remote.get("spec") {
-                let desired = spec.get("desired_version").and_then(Value::as_str).unwrap_or("").to_string();
+                let desired = spec
+                    .get("desired_version")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
                 if !desired.is_empty() && desired != config.desired_version {
                     config.desired_version = desired;
                     persist_node_config(&config)?;
@@ -549,7 +601,8 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
                         sleep(poll_interval).await;
                         continue;
                     }
-                    if drain_state == "upgrading" && !config.upgrade_manifest_url.trim().is_empty() {
+                    if drain_state == "upgrading" && !config.upgrade_manifest_url.trim().is_empty()
+                    {
                         let _ = client
                             .post_json(
                                 &format!("/runtime/nodes/{}/reconcile", state.node_id),
@@ -568,7 +621,10 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
                             "--manifest-url",
                             &config.upgrade_manifest_url,
                         ]);
-                        let status = child.status().await.context("failed to launch self-update")?;
+                        let status = child
+                            .status()
+                            .await
+                            .context("failed to launch self-update")?;
                         if status.success() {
                             break Ok(());
                         }
@@ -585,15 +641,26 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
             .await
             .unwrap_or_else(|_| json!({"claimed":false}));
 
-        if claim.get("claimed").and_then(Value::as_bool).unwrap_or(false) {
+        if claim
+            .get("claimed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
             let lease = claim.get("lease").cloned().unwrap_or_else(|| json!({}));
             let job = claim.get("job").cloned().unwrap_or_else(|| json!({}));
-            let lease_id = lease.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+            let lease_id = lease
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             if lease_id.is_empty() {
                 sleep(poll_interval).await;
                 continue;
             }
-            let runtime_class = job.get("runtime_class").and_then(Value::as_str).unwrap_or("container");
+            let runtime_class = job
+                .get("runtime_class")
+                .and_then(Value::as_str)
+                .unwrap_or("container");
             let command = job.get("command").and_then(Value::as_str).unwrap_or("");
             let args_vec = job
                 .get("args")
@@ -603,7 +670,11 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
                 .into_iter()
                 .filter_map(|value| value.as_str().map(|s| s.to_string()))
                 .collect::<Vec<_>>();
-            let env_map = job.get("env").and_then(Value::as_object).cloned().unwrap_or_default();
+            let env_map = job
+                .get("env")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
             let cwd = job.get("cwd").and_then(Value::as_str).unwrap_or("");
 
             let _ = client
@@ -733,9 +804,15 @@ async fn execute_job(
     }
     let status = child.wait().await.context("runtime job wait failed")?;
     if runtime_class == "host_process" {
-        info!(exit_code = status.code().unwrap_or(1), "host_process job complete");
+        info!(
+            exit_code = status.code().unwrap_or(1),
+            "host_process job complete"
+        );
     } else {
-        info!(exit_code = status.code().unwrap_or(1), "container job complete");
+        info!(
+            exit_code = status.code().unwrap_or(1),
+            "container job complete"
+        );
     }
     Ok(status.code().unwrap_or(1))
 }
@@ -820,8 +897,14 @@ async fn execute_pty_job(
     Ok(status.exit_code() as i32)
 }
 
-async fn attach_session(args: RuntimeSessionAttachArgs, client: &MissionControlClient) -> Result<()> {
-    let mut url = client.ws_url(&format!("/runtime/execution-sessions/{}/pty", args.session_id))?;
+async fn attach_session(
+    args: RuntimeSessionAttachArgs,
+    client: &MissionControlClient,
+) -> Result<()> {
+    let mut url = client.ws_url(&format!(
+        "/runtime/execution-sessions/{}/pty",
+        args.session_id
+    ))?;
     if let Some(token) = client.token() {
         url.query_pairs_mut().append_pair("token", token);
     }
@@ -838,9 +921,11 @@ async fn attach_session(args: RuntimeSessionAttachArgs, client: &MissionControlC
                 break;
             }
             let text = String::from_utf8_lossy(&buf[..n]).to_string();
-            sink.send(Message::Text(json!({"type":"input","content":text}).to_string()))
-                .await
-                .map_err(|err| anyhow::anyhow!(err))?;
+            sink.send(Message::Text(
+                json!({"type":"input","content":text}).to_string(),
+            ))
+            .await
+            .map_err(|err| anyhow::anyhow!(err))?;
         }
         Ok::<(), anyhow::Error>(())
     });
@@ -927,16 +1012,20 @@ fn build_container_command(
 }
 
 fn container_runtime_binary() -> Option<String> {
-    ["docker", "podman"]
-        .iter()
-        .find_map(|candidate| {
-            std::process::Command::new("sh")
-                .arg("-lc")
-                .arg(format!("command -v {candidate} >/dev/null 2>&1"))
-                .status()
-                .ok()
-                .and_then(|status| if status.success() { Some((*candidate).to_string()) } else { None })
-        })
+    ["docker", "podman"].iter().find_map(|candidate| {
+        std::process::Command::new("sh")
+            .arg("-lc")
+            .arg(format!("command -v {candidate} >/dev/null 2>&1"))
+            .status()
+            .ok()
+            .and_then(|status| {
+                if status.success() {
+                    Some((*candidate).to_string())
+                } else {
+                    None
+                }
+            })
+    })
 }
 
 fn default_container_image() -> String {
@@ -951,7 +1040,10 @@ fn parse_kv_pairs(input: &str) -> Value {
             continue;
         }
         if let Some((key, value)) = trimmed.split_once('=') {
-            map.insert(key.trim().to_string(), Value::String(value.trim().to_string()));
+            map.insert(
+                key.trim().to_string(),
+                Value::String(value.trim().to_string()),
+            );
         }
     }
     Value::Object(map)
