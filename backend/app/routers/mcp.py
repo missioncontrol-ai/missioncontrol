@@ -3708,6 +3708,9 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             from app.routers.work import _agent_to_read
             mission_id = str(args.get("mission_id") or "")
             with get_session() as _s:
+                # Intentionally no owner_subject filter: agents are shared within a mission
+                # and visible to any authenticated participant. This matches the REST endpoint
+                # GET /work/missions/{mission_id}/agents in work.py which also omits subject scoping.
                 agents = _s.exec(select(MeshAgent).where(MeshAgent.mission_id == mission_id)).all()
                 return _mcp_ok(request_id=request_id, result={"agents": [_agent_to_read(a) for a in agents]})
 
