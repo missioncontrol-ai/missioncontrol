@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field as PField
@@ -113,8 +113,15 @@ class MeshMessageCreate(BaseModel):
     to_agent_id: Optional[str] = None
     task_id: Optional[str] = None
     channel: str = "coordination"
-    body_json: str = "{}"
+    body: Optional[Any] = None  # accepts dict or any JSON-serializable value
+    body_json: str = "{}"  # legacy: pre-serialized string; ignored if body is set
     in_reply_to: Optional[int] = None
+
+    @property
+    def body_json_serialized(self) -> str:
+        if self.body is not None:
+            return json.dumps(self.body)
+        return self.body_json
 
 
 class TaskClaimResult(BaseModel):
@@ -623,7 +630,7 @@ def send_mission_message(mission_id: str, body: MeshMessageCreate, request: Requ
             to_agent_id=body.to_agent_id,
             task_id=body.task_id,
             channel=body.channel,
-            body_json=body.body_json,
+            body_json=body.body_json_serialized,
             in_reply_to=body.in_reply_to,
             created_at=datetime.utcnow(),
         )
@@ -650,7 +657,7 @@ def send_kluster_message(kluster_id: str, body: MeshMessageCreate, request: Requ
             to_agent_id=body.to_agent_id,
             task_id=body.task_id,
             channel=body.channel,
-            body_json=body.body_json,
+            body_json=body.body_json_serialized,
             in_reply_to=body.in_reply_to,
             created_at=datetime.utcnow(),
         )
