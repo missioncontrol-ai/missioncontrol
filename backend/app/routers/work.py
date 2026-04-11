@@ -530,6 +530,7 @@ def complete_task(task_id: str, body: CompleteBody = CompleteBody()):
             select(ReviewGate).where(
                 ReviewGate.mesh_task_id == task_id,
                 ReviewGate.status == "pending",
+                ReviewGate.owner_subject == task.created_by_subject,
             )
         ).all()
 
@@ -1160,8 +1161,8 @@ def create_gate(task_id: str, body: GateCreate, request: Request):
     subject = actor_subject_from_request(request)
     with get_session() as session:
         task = session.get(MeshTask, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail="task not found")
+        if not task or task.created_by_subject != subject:
+            raise HTTPException(status_code=404, detail="Task not found")
         gate = ReviewGate(
             id=str(uuid.uuid4()),
             owner_subject=subject,
@@ -1200,11 +1201,15 @@ def resolve_gate(task_id: str, gate_id: str, body: GateResolve, request: Request
         raise HTTPException(status_code=422, detail="decision must be 'approved' or 'rejected'")
     with get_session() as session:
         gate = session.get(ReviewGate, gate_id)
-        if gate is None or gate.mesh_task_id != task_id:
-            raise HTTPException(status_code=404, detail="gate not found")
+        subject = actor_subject_from_request(request)
+        if not gate or gate.owner_subject != subject:
+            raise HTTPException(status_code=404, detail="Gate not found")
+        if gate.mesh_task_id != task_id:
+            raise HTTPException(status_code=404, detail="Gate not found")
         gate.status = body.decision
         gate.resolved_at = datetime.utcnow()
         session.add(gate)
+        session.flush()  # make current gate's status visible before re-reading all_gates
 
         # After resolving, check task transition
         task = session.get(MeshTask, task_id)
@@ -1212,21 +1217,16 @@ def resolve_gate(task_id: str, gate_id: str, body: GateResolve, request: Request
             all_gates = session.exec(
                 select(ReviewGate).where(ReviewGate.mesh_task_id == task_id)
             ).all()
-            if body.decision == "rejected":
+            if any(g.status == "rejected" for g in all_gates):
                 task.status = "failed"
                 task.updated_at = datetime.utcnow()
                 session.add(task)
-            else:
-                # Check if all gates are now approved or expired
-                non_final = [
-                    g for g in all_gates
-                    if g.id != gate_id and g.status not in ("approved", "rejected", "expired")
-                ]
-                if not non_final:
-                    task.status = "finished"
-                    task.updated_at = datetime.utcnow()
-                    session.add(task)
-                    _unblock_dependents(session, task)
+            elif all(g.status in ("approved", "expired") for g in all_gates):
+                task.status = "finished"
+                task.updated_at = datetime.utcnow()
+                _unblock_dependents(session, task)
+                session.add(task)
+            # else: some still pending → leave as waiting_review
 
         session.commit()
         session.refresh(gate)

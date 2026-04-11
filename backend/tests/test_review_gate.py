@@ -14,12 +14,18 @@ import app.routers.work as work
 from app.models import Kluster, MeshTask
 
 SUBJECT = "agent@example.com"
+OTHER_SUBJECT = "other@example.com"
 
 
 def _req(subject: str = SUBJECT):
     return SimpleNamespace(
         state=SimpleNamespace(principal={"subject": subject, "email": subject})
     )
+
+
+def _actor_from_req(req):
+    """Extract subject from our SimpleNamespace request objects."""
+    return req.state.principal["subject"]
 
 
 class ReviewGateTestCase(unittest.TestCase):
@@ -29,7 +35,7 @@ class ReviewGateTestCase(unittest.TestCase):
         SQLModel.metadata.create_all(self.engine)
         self._patches = [
             patch.object(work, "get_session", self._session_scope()),
-            patch.object(work, "actor_subject_from_request", lambda _req: SUBJECT),
+            patch.object(work, "actor_subject_from_request", _actor_from_req),
         ]
         for p in self._patches:
             p.start()
@@ -145,6 +151,31 @@ class ReviewGateTestCase(unittest.TestCase):
 
         task = self._get_task(tid)
         self.assertEqual(task.status, "failed")
+
+    def test_other_user_cannot_create_gate(self):
+        """A user who does not own the task must get 404 on create_gate."""
+        from fastapi import HTTPException
+
+        kid = self._make_kluster()
+        tid = self._make_task(kid, status="claimed")  # created_by_subject=SUBJECT
+        body = work.GateCreate(gate_type="post_task")
+        with self.assertRaises(HTTPException) as ctx:
+            work.create_gate(tid, body, _req(OTHER_SUBJECT))
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_other_user_cannot_resolve_gate(self):
+        """A user who does not own the gate must get 404 on resolve_gate."""
+        from fastapi import HTTPException
+
+        kid = self._make_kluster()
+        tid = self._make_task(kid, status="claimed")
+        gate = self._create_gate(tid)
+        self._complete_task(tid)
+
+        body = work.GateResolve(decision="approved")
+        with self.assertRaises(HTTPException) as ctx:
+            work.resolve_gate(tid, gate["id"], body, _req(OTHER_SUBJECT))
+        self.assertEqual(ctx.exception.status_code, 404)
 
 
 if __name__ == "__main__":

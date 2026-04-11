@@ -1053,6 +1053,5 @@ class ReviewGate(SQLModel, table=True):
     approval_request_id: Optional[str] = Field(default=None, nullable=True)
     ai_pending_action_id: Optional[str] = Field(default=None, nullable=True)
     policy_rule_id: Optional[str] = Field(default=None, nullable=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    resolved_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    resolved_at: Optional[datetime] = None
