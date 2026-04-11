@@ -19,6 +19,7 @@ use mc_mesh_core::client::BackendClient;
 use mc_mesh_core::types::{AgentHandle, AgentSignal, TaskSpec};
 use mc_mesh_work::watchdog::{ConnectivityState, OfflinePolicy};
 use mc_mesh_work::{claim, task};
+use mc_mesh_work::task::TaskError;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
@@ -48,6 +49,7 @@ pub async fn run_for_agent(
     }
     // Track the last claimed task so we can fail it if we go offline mid-run.
     let mut current_task_id: Option<String> = None;
+    let mut current_lease_id: Option<String> = None;
 
     loop {
         // Enforce offline policy before doing any work.
@@ -60,7 +62,8 @@ pub async fn run_for_agent(
                         "Watchdog strict offline: failing in-flight task {tid} for agent {agent_id}"
                     );
                     // Best-effort: can't reach backend, but record locally.
-                    let _ = task::fail_task(&client, &tid, "watchdog: offline (strict)").await;
+                    let _ = task::fail_task(&client, &tid, current_lease_id.as_deref(), "watchdog: offline (strict)").await;
+                    current_lease_id = None;
                 }
                 tracing::warn!("Watchdog strict offline: pausing task loop for agent {agent_id}");
                 tokio::time::sleep(POLL_INTERVAL).await;
@@ -80,7 +83,8 @@ pub async fn run_for_agent(
                         "Watchdog autonomous TTL {max_ttl_secs}s exceeded for agent {agent_id}: stopping"
                     );
                     if let Some(tid) = current_task_id.take() {
-                        let _ = task::fail_task(&client, &tid, "watchdog: autonomous TTL exceeded").await;
+                        let _ = task::fail_task(&client, &tid, current_lease_id.as_deref(), "watchdog: autonomous TTL exceeded").await;
+                        current_lease_id = None;
                     }
                     tokio::time::sleep(POLL_INTERVAL).await;
                     continue;
@@ -117,11 +121,11 @@ pub async fn run_for_agent(
 
         // Try to claim a task from any kluster.
         let caps = runtime.capabilities().to_vec();
-        let mut claimed: Option<mc_mesh_core::types::MeshTaskRecord> = None;
+        let mut claimed: Option<claim::ClaimOutcome> = None;
         for kluster_id in &klusters {
             match claim::try_claim_one(&client, kluster_id, &caps).await {
-                Ok(Some(task_record)) => {
-                    claimed = Some(task_record);
+                Ok(Some(outcome)) => {
+                    claimed = Some(outcome);
                     break;
                 }
                 Ok(None) => {}
@@ -129,17 +133,22 @@ pub async fn run_for_agent(
             }
         }
 
-        let Some(task_record) = claimed else {
+        let Some(outcome) = claimed else {
             tokio::time::sleep(POLL_INTERVAL).await;
             continue;
         };
 
+        let task_record = outcome.task;
+        let lease_id = outcome.claim_lease_id;
+
         tracing::info!(
-            "Agent {agent_id} claimed task {} ({})",
+            "Agent {agent_id} claimed task {} ({}) lease={:?}",
             task_record.id,
-            task_record.title
+            task_record.title,
+            lease_id,
         );
         current_task_id = Some(task_record.id.clone());
+        current_lease_id = lease_id.clone();
 
         // Update agent status to busy.
         let _ = client
@@ -185,8 +194,10 @@ pub async fn run_for_agent(
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("inject_task failed: {e}");
-                let _ = task::fail_task(&client, &task_record.id, &e.to_string()).await;
+                let _ = task::fail_task(&client, &task_record.id, lease_id.as_deref(), &e.to_string()).await;
                 drop(handle);
+                current_task_id = None;
+                current_lease_id = None;
                 set_agent_idle(&client, &agent_id).await;
                 continue;
             }
@@ -195,33 +206,54 @@ pub async fn run_for_agent(
 
         // Forward progress events with lease heartbeat.
         let result =
-            stream_and_heartbeat(stream, &client, &task_record.id, &agent_id).await;
+            stream_and_heartbeat(stream, &client, &task_record.id, &agent_id, lease_id.as_deref()).await;
 
         match result {
             Ok(success) => {
                 if success {
-                    let _ = task::complete_task(&client, &task_record.id, None).await;
+                    match task::complete_task(&client, &task_record.id, lease_id.as_deref(), None).await {
+                        Err(TaskError::LeaseMismatch) => {
+                            tracing::warn!("lease mismatch or stolen, abandoning task {}", task_record.id);
+                        }
+                        Err(TaskError::Other(e)) => {
+                            tracing::error!("complete_task error: {e}");
+                        }
+                        Ok(()) => {}
+                    }
                 } else {
-                    let _ = task::fail_task(&client, &task_record.id, "agent reported failure").await;
+                    match task::fail_task(&client, &task_record.id, lease_id.as_deref(), "agent reported failure").await {
+                        Err(TaskError::LeaseMismatch) => {
+                            tracing::warn!("lease mismatch or stolen, abandoning task {}", task_record.id);
+                        }
+                        Err(TaskError::Other(e)) => {
+                            tracing::error!("fail_task error: {e}");
+                        }
+                        Ok(()) => {}
+                    }
                 }
             }
             Err(e) => {
                 tracing::error!("stream_and_heartbeat error: {e}");
-                let _ = task::fail_task(&client, &task_record.id, &e.to_string()).await;
+                let _ = task::fail_task(&client, &task_record.id, lease_id.as_deref(), &e.to_string()).await;
             }
         }
 
         current_task_id = None;
+        current_lease_id = None;
         set_agent_idle(&client, &agent_id).await;
     }
 }
 
 /// Forward a progress stream to the backend, heartbeating the lease in parallel.
+///
+/// Returns `Err` on transport errors.  A 409 heartbeat response causes a
+/// warning log and terminates the stream loop (the lease was stolen).
 async fn stream_and_heartbeat(
     mut stream: futures::stream::BoxStream<'static, mc_mesh_core::progress::ProgressEvent>,
     client: &BackendClient,
     task_id: &str,
     _agent_id: &str,
+    claim_lease_id: Option<&str>,
 ) -> Result<bool> {
     let mut last_heartbeat = std::time::Instant::now();
     let mut success = true;
@@ -238,8 +270,15 @@ async fn stream_and_heartbeat(
 
         // Heartbeat if overdue.
         if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
-            if let Err(e) = task::heartbeat_task(client, task_id).await {
-                tracing::warn!("Lease heartbeat failed: {e}");
+            match task::heartbeat_task(client, task_id, claim_lease_id).await {
+                Ok(()) => {}
+                Err(TaskError::LeaseMismatch) => {
+                    tracing::warn!("lease mismatch or stolen, abandoning task {task_id}");
+                    return Ok(false);
+                }
+                Err(TaskError::Other(e)) => {
+                    tracing::warn!("Lease heartbeat failed: {e}");
+                }
             }
             last_heartbeat = std::time::Instant::now();
         }

@@ -2,6 +2,12 @@ use mc_mesh_core::client::BackendClient;
 use mc_mesh_core::types::{Capability, MeshTaskRecord};
 use anyhow::Result;
 
+/// Result of a successful claim attempt.
+pub struct ClaimOutcome {
+    pub task: MeshTaskRecord,
+    pub claim_lease_id: Option<String>,
+}
+
 /// Filter a list of tasks to those matching the given capabilities.
 pub fn filter_eligible<'a>(tasks: &'a [MeshTaskRecord], caps: &[Capability]) -> Vec<&'a MeshTaskRecord> {
     tasks
@@ -14,12 +20,13 @@ pub fn filter_eligible<'a>(tasks: &'a [MeshTaskRecord], caps: &[Capability]) -> 
         .collect()
 }
 
-/// Find and claim the highest-priority eligible task. Returns the claimed record or None.
+/// Find and claim the highest-priority eligible task. Returns the claimed record
+/// together with the `claim_lease_id`, or `None` if nothing was claimable.
 pub async fn try_claim_one(
     client: &BackendClient,
     kluster_id: &str,
     caps: &[Capability],
-) -> Result<Option<MeshTaskRecord>> {
+) -> Result<Option<ClaimOutcome>> {
     let tasks = crate::task::poll_ready_tasks(client, kluster_id, caps).await?;
     let eligible = filter_eligible(&tasks, caps);
     let Some(candidate) = eligible.first() else {
@@ -28,10 +35,10 @@ pub async fn try_claim_one(
 
     // Best-effort claim — another agent may race us; that's fine.
     match crate::task::claim_task(client, &candidate.id).await {
-        Ok(_) => {
-            let mut record = (*candidate).clone();
-            record.status = "claimed".into();
-            Ok(Some(record))
+        Ok(result) => {
+            let mut task = result.task;
+            task.status = "claimed".into();
+            Ok(Some(ClaimOutcome { task, claim_lease_id: result.claim_lease_id }))
         }
         Err(e) => {
             tracing::debug!("claim race lost for task {}: {e}", candidate.id);
@@ -55,6 +62,7 @@ mod tests {
             claim_policy: claim_policy.to_string(),
             required_capabilities: required_caps.iter().map(|s| s.to_string()).collect(),
             lease_expires_at: None,
+            claim_lease_id: None,
         }
     }
 

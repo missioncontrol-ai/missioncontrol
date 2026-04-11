@@ -72,6 +72,18 @@ impl BackendClient {
             .error_for_status()?)
     }
 
+    /// Like `raw_post` but does not call `error_for_status()` — the caller
+    /// inspects the status code directly (e.g. to detect 409 lease mismatch).
+    pub async fn raw_post_no_throw<B: Serialize>(&self, path: &str, body: &B) -> Result<Response> {
+        Ok(self
+            .inner
+            .post(self.url(path))
+            .header("Authorization", self.auth_header())
+            .json(body)
+            .send()
+            .await?)
+    }
+
     pub async fn patch<B: Serialize, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
         let resp = self
             .inner

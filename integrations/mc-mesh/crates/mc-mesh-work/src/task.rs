@@ -1,6 +1,34 @@
 use mc_mesh_core::client::BackendClient;
 use mc_mesh_core::types::MeshTaskRecord;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+
+/// Result of a successful task claim.
+pub struct ClaimResult {
+    pub task: MeshTaskRecord,
+    pub claim_lease_id: Option<String>,
+}
+
+/// Error type that distinguishes a 409 lease-mismatch response from other errors.
+#[derive(Debug)]
+pub enum TaskError {
+    LeaseMismatch,
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for TaskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TaskError::LeaseMismatch => write!(f, "lease mismatch (409)"),
+            TaskError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<anyhow::Error> for TaskError {
+    fn from(e: anyhow::Error) -> Self {
+        TaskError::Other(e)
+    }
+}
 
 /// Poll the backend for tasks this agent can work on.
 ///
@@ -31,18 +59,47 @@ pub async fn poll_ready_tasks(
     Ok(ready)
 }
 
-/// Claim a task.  Returns the lease expiry timestamp string.
-pub async fn claim_task(client: &BackendClient, task_id: &str) -> Result<serde_json::Value> {
-    client
+/// Claim a task.  Returns a `ClaimResult` containing the task record (with
+/// status set to "claimed") and the `claim_lease_id` returned by the backend.
+pub async fn claim_task(client: &BackendClient, task_id: &str) -> Result<ClaimResult> {
+    let resp: serde_json::Value = client
         .post_empty(&format!("/work/tasks/{task_id}/claim"))
-        .await
+        .await?;
+
+    let claim_lease_id = resp
+        .get("claim_lease_id")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    // The claim endpoint returns the full task record; deserialise it if
+    // possible, otherwise fall back to a minimal record.
+    let task: MeshTaskRecord = serde_json::from_value(resp).map_err(|e| anyhow!(e))?;
+
+    Ok(ClaimResult { task, claim_lease_id })
 }
 
 /// Send a heartbeat to renew the lease on a running task.
-pub async fn heartbeat_task(client: &BackendClient, task_id: &str) -> Result<serde_json::Value> {
-    client
-        .post_empty(&format!("/work/tasks/{task_id}/heartbeat"))
+///
+/// Returns `Err(TaskError::LeaseMismatch)` when the backend responds 409.
+pub async fn heartbeat_task(
+    client: &BackendClient,
+    task_id: &str,
+    claim_lease_id: Option<&str>,
+) -> Result<(), TaskError> {
+    let mut body = serde_json::json!({});
+    if let Some(lid) = claim_lease_id {
+        body["claim_lease_id"] = serde_json::Value::String(lid.to_string());
+    }
+    let resp = client
+        .raw_post_no_throw(&format!("/work/tasks/{task_id}/heartbeat"), &body)
         .await
+        .map_err(|e| TaskError::Other(e))?;
+
+    if resp.status() == reqwest::StatusCode::CONFLICT {
+        return Err(TaskError::LeaseMismatch);
+    }
+    resp.error_for_status().map_err(|e| TaskError::Other(anyhow!(e)))?;
+    Ok(())
 }
 
 /// Post a typed progress event.
@@ -66,23 +123,51 @@ pub async fn post_progress(
 }
 
 /// Mark a task complete.
+///
+/// Returns `Err(TaskError::LeaseMismatch)` when the backend responds 409.
 pub async fn complete_task(
     client: &BackendClient,
     task_id: &str,
+    claim_lease_id: Option<&str>,
     result_artifact_id: Option<&str>,
-) -> Result<serde_json::Value> {
-    use serde_json::json;
-    let body = json!({ "result_artifact_id": result_artifact_id });
-    client
-        .post(&format!("/work/tasks/{task_id}/complete"), &body)
+) -> Result<(), TaskError> {
+    let mut body = serde_json::json!({ "result_artifact_id": result_artifact_id });
+    if let Some(lid) = claim_lease_id {
+        body["claim_lease_id"] = serde_json::Value::String(lid.to_string());
+    }
+    let resp = client
+        .raw_post_no_throw(&format!("/work/tasks/{task_id}/complete"), &body)
         .await
+        .map_err(|e| TaskError::Other(e))?;
+
+    if resp.status() == reqwest::StatusCode::CONFLICT {
+        return Err(TaskError::LeaseMismatch);
+    }
+    resp.error_for_status().map_err(|e| TaskError::Other(anyhow!(e)))?;
+    Ok(())
 }
 
 /// Mark a task failed.
-pub async fn fail_task(client: &BackendClient, task_id: &str, error: &str) -> Result<serde_json::Value> {
-    use serde_json::json;
-    let body = json!({ "error": error });
-    client
-        .post(&format!("/work/tasks/{task_id}/fail"), &body)
+///
+/// Returns `Err(TaskError::LeaseMismatch)` when the backend responds 409.
+pub async fn fail_task(
+    client: &BackendClient,
+    task_id: &str,
+    claim_lease_id: Option<&str>,
+    error: &str,
+) -> Result<(), TaskError> {
+    let mut body = serde_json::json!({ "error": error });
+    if let Some(lid) = claim_lease_id {
+        body["claim_lease_id"] = serde_json::Value::String(lid.to_string());
+    }
+    let resp = client
+        .raw_post_no_throw(&format!("/work/tasks/{task_id}/fail"), &body)
         .await
+        .map_err(|e| TaskError::Other(e))?;
+
+    if resp.status() == reqwest::StatusCode::CONFLICT {
+        return Err(TaskError::LeaseMismatch);
+    }
+    resp.error_for_status().map_err(|e| TaskError::Other(anyhow!(e)))?;
+    Ok(())
 }

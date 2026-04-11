@@ -144,4 +144,8 @@ pub struct MeshTaskRecord {
     pub claim_policy: String,
     pub required_capabilities: Vec<String>,
     pub lease_expires_at: Option<DateTime<Utc>>,
+    /// Lease ID returned by the backend on claim; used to authenticate
+    /// heartbeat/complete/fail calls and detect stolen leases (409).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_lease_id: Option<String>,
 }
