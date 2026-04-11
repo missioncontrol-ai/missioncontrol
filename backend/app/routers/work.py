@@ -289,6 +289,8 @@ def create_task(kluster_id: str, body: MeshTaskCreate, request: Request):
         session.add(task)
         session.commit()
         session.refresh(task)
+        from app.services.mesh_events import publish_task_event
+        publish_task_event("task_created", task.id, task.kluster_id, task.mission_id or "", status=task.status)
         return _task_to_read(task)
 
 
@@ -395,6 +397,8 @@ def claim_task(task_id: str, request: Request):
             task.updated_at = datetime.utcnow()
             session.add(task)
             session.commit()
+            from app.services.mesh_events import publish_task_event
+            publish_task_event("task_claimed", task_id, task.kluster_id, task.mission_id or "", status="running")
             return {"task_id": task_id, "lease_expires_at": expires_at}
 
         # --- Exclusive claim path ---
@@ -444,6 +448,8 @@ def claim_task(task_id: str, request: Request):
         # Re-fetch updated task (SQLite doesn't support RETURNING on UPDATE)
         session.expire_all()
         updated = session.get(MeshTask, task_id)
+        from app.services.mesh_events import publish_task_event
+        publish_task_event("task_claimed", task_id, updated.kluster_id, updated.mission_id or "", status="claimed")
         task_dict = _task_to_read(updated)
         task_dict["claim_lease_id"] = new_lease_id
         # Backward-compat alias used by agents and tests
@@ -511,6 +517,8 @@ def append_progress(task_id: str, body: MeshProgressEventCreate, request: Reques
         session.add(ev)
         session.commit()
         session.refresh(ev)
+        from app.services.mesh_events import publish_task_event
+        publish_task_event("task_progress", task_id, task.kluster_id, task.mission_id or "", status=task.status)
         return {"id": ev.id, "seq": ev.seq, "occurred_at": ev.occurred_at}
 
 
@@ -555,6 +563,8 @@ def complete_task(task_id: str, body: CompleteBody = CompleteBody()):
         _unblock_dependents(session, task)
 
         session.commit()
+        from app.services.mesh_events import publish_task_event
+        publish_task_event("task_completed", task_id, task.kluster_id, task.mission_id or "", status="finished")
         return _task_to_read(task)
 
 
@@ -574,6 +584,8 @@ def fail_task(task_id: str, body: FailBody = FailBody()):
         task.updated_at = datetime.utcnow()
         session.add(task)
         session.commit()
+        from app.services.mesh_events import publish_task_event
+        publish_task_event("task_failed", task_id, task.kluster_id, task.mission_id or "", status="failed")
         return _task_to_read(task)
 
 
@@ -987,139 +999,44 @@ def get_task_progress(task_id: str, since_seq: int = -1):
 
 @router.websocket("/klusters/{kluster_id}/stream")
 async def kluster_stream(websocket: WebSocket, kluster_id: str):
-    """Live feed of progress events and messages for a kluster.
-
-    Simple implementation: client connects and we poll every second.
-    Production-grade LISTEN/NOTIFY upgrade is a follow-on.
-    """
+    """Live feed of task lifecycle events for a kluster via the mesh event bus."""
     import asyncio
+    from app.services.mesh_events import subscribe, unsubscribe
 
     await websocket.accept()
-    last_progress_id = 0
-    last_msg_id = 0
+    q = subscribe(f"kluster:{kluster_id}")
     try:
         while True:
-            events_out = []
-            msgs_out = []
-            with get_session() as session:
-                # Progress events for any task in this kluster
-                tasks_q = session.exec(
-                    select(MeshTask.id).where(MeshTask.kluster_id == kluster_id)
-                ).all()
-                task_ids = list(tasks_q)
-                if task_ids:
-                    evs = session.exec(
-                        select(MeshProgressEvent)
-                        .where(MeshProgressEvent.id > last_progress_id)
-                        .where(MeshProgressEvent.task_id.in_(task_ids))
-                        .order_by(MeshProgressEvent.id)
-                        .limit(50)
-                    ).all()
-                    for e in evs:
-                        events_out.append({
-                            "type": "progress",
-                            "task_id": e.task_id,
-                            "agent_id": e.agent_id,
-                            "seq": e.seq,
-                            "event_type": e.event_type,
-                            "phase": e.phase,
-                            "step": e.step,
-                            "summary": e.summary,
-                            "occurred_at": e.occurred_at.isoformat(),
-                        })
-                        last_progress_id = max(last_progress_id, e.id)
-
-                msgs = session.exec(
-                    select(MeshMessage)
-                    .where(MeshMessage.kluster_id == kluster_id)
-                    .where(MeshMessage.id > last_msg_id)
-                    .order_by(MeshMessage.id)
-                    .limit(20)
-                ).all()
-                for m in msgs:
-                    msgs_out.append({
-                        "type": "message",
-                        "id": m.id,
-                        "from_agent_id": m.from_agent_id,
-                        "to_agent_id": m.to_agent_id,
-                        "channel": m.channel,
-                        "body_json": json.loads(m.body_json or "{}"),
-                        "created_at": m.created_at.isoformat(),
-                    })
-                    last_msg_id = max(last_msg_id, m.id)
-
-            for item in events_out + msgs_out:
-                await websocket.send_json(item)
-
-            await asyncio.sleep(1)
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=30.0)
+                await websocket.send_json(event)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping"})
     except WebSocketDisconnect:
         pass
+    finally:
+        unsubscribe(f"kluster:{kluster_id}", q)
 
 
 @router.websocket("/missions/{mission_id}/stream")
 async def mission_stream(websocket: WebSocket, mission_id: str):
-    """Live feed of all progress events and messages across a mission."""
+    """Live feed of task lifecycle events across a mission via the mesh event bus."""
     import asyncio
+    from app.services.mesh_events import subscribe, unsubscribe
 
     await websocket.accept()
-    last_progress_id = 0
-    last_msg_id = 0
+    q = subscribe(f"mission:{mission_id}")
     try:
         while True:
-            events_out = []
-            msgs_out = []
-            with get_session() as session:
-                task_ids = session.exec(
-                    select(MeshTask.id).where(MeshTask.mission_id == mission_id)
-                ).all()
-                if task_ids:
-                    evs = session.exec(
-                        select(MeshProgressEvent)
-                        .where(MeshProgressEvent.id > last_progress_id)
-                        .where(MeshProgressEvent.task_id.in_(task_ids))
-                        .order_by(MeshProgressEvent.id)
-                        .limit(50)
-                    ).all()
-                    for e in evs:
-                        events_out.append({
-                            "type": "progress",
-                            "task_id": e.task_id,
-                            "agent_id": e.agent_id,
-                            "seq": e.seq,
-                            "event_type": e.event_type,
-                            "phase": e.phase,
-                            "step": e.step,
-                            "summary": e.summary,
-                            "occurred_at": e.occurred_at.isoformat(),
-                        })
-                        last_progress_id = max(last_progress_id, e.id)
-
-                msgs = session.exec(
-                    select(MeshMessage)
-                    .where(MeshMessage.mission_id == mission_id)
-                    .where(MeshMessage.id > last_msg_id)
-                    .order_by(MeshMessage.id)
-                    .limit(20)
-                ).all()
-                for m in msgs:
-                    msgs_out.append({
-                        "type": "message",
-                        "id": m.id,
-                        "from_agent_id": m.from_agent_id,
-                        "to_agent_id": m.to_agent_id,
-                        "channel": m.channel,
-                        "body_json": json.loads(m.body_json or "{}"),
-                        "created_at": m.created_at.isoformat(),
-                    })
-                    last_msg_id = max(last_msg_id, m.id)
-
-            for item in events_out + msgs_out:
-                await websocket.send_json(item)
-
-            import asyncio as _aio
-            await _aio.sleep(1)
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=30.0)
+                await websocket.send_json(event)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping"})
     except WebSocketDisconnect:
         pass
+    finally:
+        unsubscribe(f"mission:{mission_id}", q)
 
 
 # ---------------------------------------------------------------------------
