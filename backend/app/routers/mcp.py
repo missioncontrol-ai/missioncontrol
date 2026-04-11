@@ -27,6 +27,10 @@ from app.models import (
     RepoBinding,
     MissionPersistencePolicy,
     MissionPersistenceRoute,
+    MeshTask,
+    MeshAgent,
+    MeshMessage,
+    MeshProgressEvent,
 )
 from app.schemas import MCPCall, MCPResponse, MCPTool
 from app.services.authz import (
@@ -812,6 +816,199 @@ TOOLS = [
             "type": "object",
             "properties": {"launch_id": {"type": "string"}},
             "required": ["launch_id"],
+        },
+    ),
+    # --- Mesh work model tools ---
+    MCPTool(
+        name="submit_mesh_task",
+        description="Create a task in a kluster (mesh work model)",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "kluster_id": {"type": "string"},
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+                "claim_policy": {"type": "string", "description": "assigned | first_claim | broadcast (default: first_claim)"},
+                "priority": {"type": "integer"},
+                "required_capabilities": {"type": "array", "items": {"type": "string"}},
+                "depends_on": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["kluster_id", "title"],
+        },
+    ),
+    MCPTool(
+        name="list_mesh_tasks",
+        description="List tasks in a kluster (mesh work model)",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "kluster_id": {"type": "string"},
+                "status": {"type": "string", "description": "Optional status filter"},
+            },
+            "required": ["kluster_id"],
+        },
+    ),
+    MCPTool(
+        name="get_mesh_task",
+        description="Get a single mesh task by ID",
+        input_schema={
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    ),
+    MCPTool(
+        name="claim_mesh_task",
+        description="Claim a mesh task for an agent; returns claim_lease_id",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "agent_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    ),
+    MCPTool(
+        name="heartbeat_mesh_task",
+        description="Renew a mesh task lease to prevent expiry",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "claim_lease_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    ),
+    MCPTool(
+        name="progress_mesh_task",
+        description="Post a typed progress event for a mesh task",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "event_type": {"type": "string"},
+                "phase": {"type": "string"},
+                "step": {"type": "string"},
+                "summary": {"type": "string"},
+                "payload": {"type": "object"},
+            },
+            "required": ["task_id", "event_type"],
+        },
+    ),
+    MCPTool(
+        name="complete_mesh_task",
+        description="Mark a mesh task as complete",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "claim_lease_id": {"type": "string"},
+                "result_artifact_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    ),
+    MCPTool(
+        name="fail_mesh_task",
+        description="Mark a mesh task as failed",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "claim_lease_id": {"type": "string"},
+                "error": {"type": "string"},
+            },
+            "required": ["task_id", "error"],
+        },
+    ),
+    MCPTool(
+        name="block_mesh_task",
+        description="Mark a mesh task as blocked",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    ),
+    MCPTool(
+        name="unblock_mesh_task",
+        description="Unblock a mesh task (set back to ready)",
+        input_schema={
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    ),
+    MCPTool(
+        name="cancel_mesh_task",
+        description="Cancel a mesh task",
+        input_schema={
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    ),
+    MCPTool(
+        name="retry_mesh_task",
+        description="Retry a failed or cancelled mesh task",
+        input_schema={
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}},
+            "required": ["task_id"],
+        },
+    ),
+    MCPTool(
+        name="enroll_mesh_agent",
+        description="Enroll an agent in a mission (mesh work model)",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "mission_id": {"type": "string"},
+                "runtime_kind": {"type": "string"},
+                "capabilities": {"type": "array", "items": {"type": "string"}},
+                "labels": {"type": "object"},
+            },
+            "required": ["mission_id", "runtime_kind"],
+        },
+    ),
+    MCPTool(
+        name="list_mesh_agents",
+        description="List agents enrolled in a mission",
+        input_schema={
+            "type": "object",
+            "properties": {"mission_id": {"type": "string"}},
+            "required": ["mission_id"],
+        },
+    ),
+    MCPTool(
+        name="send_mesh_message",
+        description="Send a message in a kluster or mission channel",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "kluster_id": {"type": "string"},
+                "mission_id": {"type": "string"},
+                "content": {"type": "string"},
+                "message_type": {"type": "string", "description": "Default: info"},
+            },
+            "required": ["content"],
+        },
+    ),
+    MCPTool(
+        name="list_mesh_messages",
+        description="List messages for an agent inbox",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string"},
+                "since_id": {"type": "integer"},
+            },
+            "required": ["agent_id"],
         },
     ),
 ]
@@ -3309,5 +3506,277 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
             from app.routers.remotectl import delete_launch
             delete_launch(launch_id=args["launch_id"], request=request)
             return _mcp_ok(request_id=request_id, result={"killed": args["launch_id"]})
+
+        # --- Mesh work model tools ---
+
+        elif tool == "submit_mesh_task":
+            import uuid as _uuid
+            from datetime import datetime as _dt
+            from app.routers.work import (
+                MeshTaskCreate,
+                _task_to_read,
+                _detect_cycle,
+                LEASE_TTL_SECONDS,
+            )
+            kluster_id = str(args.get("kluster_id") or "")
+            with get_session() as _s:
+                kluster = _s.get(Kluster, kluster_id)
+                if kluster is None:
+                    return _mcp_error(request_id=request_id, error="kluster not found", error_code="not_found")
+                mission_id = kluster.mission_id or ""
+                body = MeshTaskCreate(
+                    title=str(args.get("title") or ""),
+                    description=str(args.get("description") or ""),
+                    claim_policy=str(args.get("claim_policy") or "first_claim"),
+                    priority=int(args.get("priority") or 0),
+                    required_capabilities=list(args.get("required_capabilities") or []),
+                    depends_on=list(args.get("depends_on") or []),
+                )
+                valid_policies = {"assigned", "first_claim", "broadcast"}
+                if body.claim_policy not in valid_policies:
+                    return _mcp_error(request_id=request_id, error=f"claim_policy must be one of {valid_policies}")
+                for dep_id in body.depends_on:
+                    dep = _s.get(MeshTask, dep_id)
+                    if dep is None or dep.kluster_id != kluster_id:
+                        return _mcp_error(request_id=request_id, error=f"depends_on task {dep_id!r} not found in this kluster")
+                new_id = str(_uuid.uuid4())
+                if body.depends_on and _detect_cycle(kluster_id, new_id, body.depends_on, _s):
+                    return _mcp_error(request_id=request_id, error="depends_on would create a cycle")
+                import json as _json
+                initial_status = "ready" if not body.depends_on else "pending"
+                task = MeshTask(
+                    id=new_id,
+                    kluster_id=kluster_id,
+                    mission_id=mission_id,
+                    title=body.title,
+                    description=body.description,
+                    claim_policy=body.claim_policy,
+                    depends_on=_json.dumps(body.depends_on),
+                    produces=_json.dumps(body.produces),
+                    consumes=_json.dumps(body.consumes),
+                    required_capabilities=_json.dumps(body.required_capabilities),
+                    status=initial_status,
+                    priority=body.priority,
+                    created_by_subject=actor_subject,
+                    created_at=_dt.utcnow(),
+                    updated_at=_dt.utcnow(),
+                )
+                _s.add(task)
+                _s.commit()
+                _s.refresh(task)
+                return _mcp_ok(request_id=request_id, result={"task": _task_to_read(task)})
+
+        elif tool == "list_mesh_tasks":
+            from app.routers.work import _task_to_read, _expire_stale_leases
+            kluster_id = str(args.get("kluster_id") or "")
+            status_filter = args.get("status")
+            with get_session() as _s:
+                _expire_stale_leases(_s, kluster_id)
+                _s.commit()
+                q = select(MeshTask).where(MeshTask.kluster_id == kluster_id)
+                if status_filter:
+                    q = q.where(MeshTask.status == status_filter)
+                q = q.order_by(MeshTask.priority.desc(), MeshTask.created_at)
+                tasks = _s.exec(q).all()
+                return _mcp_ok(request_id=request_id, result={"tasks": [_task_to_read(t) for t in tasks]})
+
+        elif tool == "get_mesh_task":
+            from app.routers.work import _task_to_read
+            task_id = str(args.get("task_id") or "")
+            with get_session() as _s:
+                task = _s.get(MeshTask, task_id)
+                if task is None:
+                    return _mcp_error(request_id=request_id, error="task not found", error_code="not_found")
+                return _mcp_ok(request_id=request_id, result={"task": _task_to_read(task)})
+
+        elif tool == "claim_mesh_task":
+            from app.routers.work import claim_task as _claim_task
+            task_id = str(args.get("task_id") or "")
+            # call the work router function directly
+            try:
+                result = _claim_task(task_id=task_id, request=request)
+                return _mcp_ok(request_id=request_id, result=result if isinstance(result, dict) else dict(result))
+            except HTTPException as exc:
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code=str(exc.status_code))
+
+        elif tool == "heartbeat_mesh_task":
+            from app.routers.work import HeartbeatBody, heartbeat_task as _heartbeat_task
+            task_id = str(args.get("task_id") or "")
+            body = HeartbeatBody(claim_lease_id=args.get("claim_lease_id"))
+            try:
+                result = _heartbeat_task(task_id=task_id, request=request, body=body)
+                return _mcp_ok(request_id=request_id, result=result if isinstance(result, dict) else dict(result))
+            except HTTPException as exc:
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code=str(exc.status_code))
+
+        elif tool == "progress_mesh_task":
+            from app.routers.work import MeshProgressEventCreate, append_progress as _append_progress
+            import json as _json
+            task_id = str(args.get("task_id") or "")
+            payload_raw = args.get("payload") or {}
+            body = MeshProgressEventCreate(
+                event_type=str(args.get("event_type") or ""),
+                phase=args.get("phase"),
+                step=args.get("step"),
+                summary=str(args.get("summary") or ""),
+                payload_json=_json.dumps(payload_raw) if payload_raw else "{}",
+            )
+            try:
+                result = _append_progress(task_id=task_id, body=body, request=request)
+                return _mcp_ok(request_id=request_id, result=result if isinstance(result, dict) else dict(result))
+            except HTTPException as exc:
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code=str(exc.status_code))
+
+        elif tool == "complete_mesh_task":
+            from app.routers.work import CompleteBody, complete_task as _complete_task
+            task_id = str(args.get("task_id") or "")
+            body = CompleteBody(
+                claim_lease_id=args.get("claim_lease_id"),
+                result_artifact_id=args.get("result_artifact_id"),
+            )
+            try:
+                result = _complete_task(task_id=task_id, body=body)
+                return _mcp_ok(request_id=request_id, result=result if isinstance(result, dict) else dict(result))
+            except HTTPException as exc:
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code=str(exc.status_code))
+
+        elif tool == "fail_mesh_task":
+            from app.routers.work import FailBody, fail_task as _fail_task
+            task_id = str(args.get("task_id") or "")
+            body = FailBody(
+                claim_lease_id=args.get("claim_lease_id"),
+                error=str(args.get("error") or ""),
+            )
+            try:
+                result = _fail_task(task_id=task_id, body=body)
+                return _mcp_ok(request_id=request_id, result=result if isinstance(result, dict) else dict(result))
+            except HTTPException as exc:
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code=str(exc.status_code))
+
+        elif tool == "block_mesh_task":
+            from app.routers.work import block_task as _block_task
+            task_id = str(args.get("task_id") or "")
+            reason = args.get("reason")
+            try:
+                result = _block_task(task_id=task_id, waiting_on=reason)
+                return _mcp_ok(request_id=request_id, result=result if isinstance(result, dict) else dict(result))
+            except HTTPException as exc:
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code=str(exc.status_code))
+
+        elif tool == "unblock_mesh_task":
+            from app.routers.work import unblock_task as _unblock_task
+            task_id = str(args.get("task_id") or "")
+            try:
+                result = _unblock_task(task_id=task_id)
+                return _mcp_ok(request_id=request_id, result=result if isinstance(result, dict) else dict(result))
+            except HTTPException as exc:
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code=str(exc.status_code))
+
+        elif tool == "cancel_mesh_task":
+            from app.routers.work import cancel_task as _cancel_task
+            task_id = str(args.get("task_id") or "")
+            try:
+                result = _cancel_task(task_id=task_id, request=request)
+                return _mcp_ok(request_id=request_id, result=result if isinstance(result, dict) else dict(result))
+            except HTTPException as exc:
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code=str(exc.status_code))
+
+        elif tool == "retry_mesh_task":
+            from app.routers.work import retry_task as _retry_task
+            task_id = str(args.get("task_id") or "")
+            try:
+                result = _retry_task(task_id=task_id, request=request)
+                return _mcp_ok(request_id=request_id, result=result if isinstance(result, dict) else dict(result))
+            except HTTPException as exc:
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code=str(exc.status_code))
+
+        elif tool == "enroll_mesh_agent":
+            from app.routers.work import MeshAgentEnroll, enroll_agent as _enroll_agent, _agent_to_read
+            mission_id = str(args.get("mission_id") or "")
+            body = MeshAgentEnroll(
+                runtime_kind=str(args.get("runtime_kind") or "custom"),
+                capabilities=list(args.get("capabilities") or []),
+                labels=dict(args.get("labels") or {}),
+            )
+            try:
+                result = _enroll_agent(mission_id=mission_id, body=body, request=request)
+                return _mcp_ok(request_id=request_id, result={"agent": result if isinstance(result, dict) else dict(result)})
+            except HTTPException as exc:
+                return _mcp_error(request_id=request_id, error=str(exc.detail), error_code=str(exc.status_code))
+
+        elif tool == "list_mesh_agents":
+            from app.routers.work import _agent_to_read
+            mission_id = str(args.get("mission_id") or "")
+            with get_session() as _s:
+                agents = _s.exec(select(MeshAgent).where(MeshAgent.mission_id == mission_id)).all()
+                return _mcp_ok(request_id=request_id, result={"agents": [_agent_to_read(a) for a in agents]})
+
+        elif tool == "send_mesh_message":
+            import json as _json
+            from datetime import datetime as _dt
+            kluster_id = args.get("kluster_id")
+            mission_id_msg = args.get("mission_id")
+            content = str(args.get("content") or "")
+            message_type = str(args.get("message_type") or "info")
+            with get_session() as _s:
+                if kluster_id:
+                    kluster = _s.get(Kluster, kluster_id)
+                    if kluster is None:
+                        return _mcp_error(request_id=request_id, error="kluster not found", error_code="not_found")
+                    msg = MeshMessage(
+                        mission_id=kluster.mission_id or "",
+                        kluster_id=kluster_id,
+                        from_agent_id=actor_subject,
+                        channel=message_type,
+                        body_json=_json.dumps({"content": content}),
+                        created_at=_dt.utcnow(),
+                    )
+                elif mission_id_msg:
+                    msg = MeshMessage(
+                        mission_id=mission_id_msg,
+                        kluster_id=None,
+                        from_agent_id=actor_subject,
+                        channel=message_type,
+                        body_json=_json.dumps({"content": content}),
+                        created_at=_dt.utcnow(),
+                    )
+                else:
+                    return _mcp_error(request_id=request_id, error="kluster_id or mission_id required")
+                _s.add(msg)
+                _s.commit()
+                _s.refresh(msg)
+                return _mcp_ok(request_id=request_id, result={"id": msg.id, "created_at": msg.created_at})
+
+        elif tool == "list_mesh_messages":
+            import json as _json
+            agent_id = str(args.get("agent_id") or "")
+            since_id = int(args.get("since_id") or 0)
+            with get_session() as _s:
+                q = (
+                    select(MeshMessage)
+                    .where(
+                        (MeshMessage.to_agent_id == agent_id) | (MeshMessage.to_agent_id == None)
+                    )
+                    .where(MeshMessage.id > since_id)
+                    .order_by(MeshMessage.id)
+                    .limit(100)
+                )
+                msgs = _s.exec(q).all()
+                return _mcp_ok(request_id=request_id, result={"messages": [
+                    {
+                        "id": m.id,
+                        "mission_id": m.mission_id,
+                        "kluster_id": m.kluster_id,
+                        "from_agent_id": m.from_agent_id,
+                        "to_agent_id": m.to_agent_id,
+                        "task_id": m.task_id,
+                        "channel": m.channel,
+                        "body_json": _json.loads(m.body_json or "{}"),
+                        "in_reply_to": m.in_reply_to,
+                        "created_at": m.created_at,
+                        "read_at": m.read_at,
+                    }
+                    for m in msgs
+                ]})
 
     return _mcp_error(request_id=request_id, error=f"Unknown tool: {tool}", error_code="unknown_tool")
