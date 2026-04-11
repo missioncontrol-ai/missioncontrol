@@ -31,6 +31,7 @@ from app.models import (
     MeshTask,
     MeshTaskArtifact,
     ReviewGate,
+    RuntimeNode,
 )
 from app.services.authz import actor_subject_from_request
 
@@ -130,6 +131,7 @@ class MeshAgentEnroll(BaseModel):
     capabilities: list[str] = PField(default_factory=list)
     labels: dict = PField(default_factory=dict)
     node_id: Optional[str] = None
+    runtime_node_id: Optional[str] = None
     profile: Optional[AgentProfile] = None
     machine: Optional[AgentMachineInfo] = None
     runtime: Optional[AgentRuntimeInfo] = None
@@ -716,10 +718,20 @@ def _detect_cycle(kluster_id: str, new_task_id: str, depends_on: list[str], sess
 def enroll_agent(mission_id: str, body: MeshAgentEnroll, request: Request):
     subject = actor_subject_from_request(request)
     with get_session() as session:
+        if body.runtime_node_id is not None:
+            node = session.exec(
+                select(RuntimeNode).where(
+                    RuntimeNode.id == body.runtime_node_id,
+                    RuntimeNode.owner_subject == subject,
+                )
+            ).first()
+            if node is None:
+                raise HTTPException(status_code=400, detail="runtime_node_id not found or not owned")
         agent = MeshAgent(
             id=str(uuid.uuid4()),
             mission_id=mission_id,
             node_id=body.node_id,
+            runtime_node_id=body.runtime_node_id,
             runtime_kind=body.runtime_kind,
             runtime_version=body.runtime_version,
             capabilities=json.dumps(body.capabilities),

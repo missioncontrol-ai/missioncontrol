@@ -715,6 +715,13 @@ def list_channels():
 
 @router.post("/nodes/register", status_code=201)
 def register_node(body: NodeRegister, request: Request):
+    """
+    Register a runtime node.
+
+    NOTE: For mesh-first workflows, prefer enrolling agents via POST /work/missions/{id}/agents/enroll
+    with runtime_node_id pointing to the registered node. The legacy mc node run path is deprecated
+    in favor of mc mesh up. This endpoint remains functional for backward compatibility.
+    """
     subject = actor_subject_from_request(request)
     node_id = str(uuid.uuid4())
     now = datetime.utcnow()

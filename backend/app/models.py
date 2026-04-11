@@ -586,8 +586,25 @@ class ScheduledAgentJob(SQLModel, table=True):
     enabled: bool = True
     last_run_at: Optional[datetime] = Field(default=None)
     last_session_id: Optional[str] = Field(default=None)
+    target_type: Optional[str] = Field(default="ai_session")
+    target_spec_json: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class EventTrigger(SQLModel, table=True):
+    """Fires when a mesh event matches event_type and optional predicate."""
+    id: Optional[str] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    event_type: str  # task_completed|task_failed|artifact_published|run_completed|custom
+    predicate_json: Optional[str] = Field(default=None, sa_column=Column(Text))
+    target_type: str = Field(default="mesh_task")  # mesh_task|ai_session
+    target_spec_json: str = Field(sa_column=Column(Text))
+    active: bool = True
+    cooldown_seconds: int = 0
+    last_fired_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class RemoteTarget(SQLModel, table=True):
@@ -812,6 +829,10 @@ class MeshAgent(SQLModel, table=True):
     enrolled_by_subject: str = ""
     enrolled_at: datetime = Field(default_factory=datetime.utcnow)
     last_heartbeat_at: Optional[datetime] = None
+    runtime_node_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("runtimenode.id"), nullable=True, index=True),
+    )
 
     # --- Agent profile (user-defined) ---
     # Keys: name, role, description, instructions, scope, permissions, constraints
@@ -1055,3 +1076,20 @@ class ReviewGate(SQLModel, table=True):
     policy_rule_id: Optional[str] = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     resolved_at: Optional[datetime] = None
+
+
+class MissionPack(SQLModel, table=True):
+    __tablename__ = "missionpack"
+    __table_args__ = (
+        UniqueConstraint("owner_subject", "name", "version", name="uq_missionpack_owner_name_version"),
+    )
+    id: Optional[str] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    name: str
+    version: int = Field(default=1)
+    sha256: str
+    signature: Optional[str] = None
+    tarball_b64: str = Field(default="", sa_column=Column("tarball_b64", Text))
+    manifest_json: str = Field(default="{}", sa_column=Column("manifest_json", Text))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
