@@ -255,6 +255,8 @@ def on_startup():
     app.state.mqtt = mqtt_service
     from app.services.agent_scheduler import start_scheduler
     start_scheduler()
+    from app.services.work_watchdog import start_watchdog
+    start_watchdog()
 
 
 @app.on_event("shutdown")
@@ -264,6 +266,8 @@ def on_shutdown():
         mqtt_service.disconnect()
     from app.services.agent_scheduler import stop_scheduler
     stop_scheduler()
+    from app.services.work_watchdog import stop_watchdog
+    stop_watchdog()
 
 
 @app.middleware("http")
