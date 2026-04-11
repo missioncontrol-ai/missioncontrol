@@ -24,6 +24,7 @@ pub mod output;
 pub mod remote;
 pub mod run;
 pub mod runtime;
+pub mod solo_supervisor;
 pub mod schema_pack;
 pub mod secrets;
 pub mod ui;
