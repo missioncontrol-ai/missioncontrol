@@ -134,6 +134,17 @@ struct OwnershipState {
     last_repaired_at: Option<String>,
 }
 
+pub async fn run_codex_compat(
+    profile: Option<String>,
+    extra_args: Vec<String>,
+    config: &McConfig,
+) -> Result<()> {
+    let profile_name = resolve_profile(profile, None, config)?;
+    let paths = codex_paths(&profile_name);
+    run_codex_process(&extra_args, &paths.runtime_home, config, &profile_name)?;
+    Ok(())
+}
+
 pub async fn run(command: CodexCommand, config: &McConfig) -> Result<()> {
     match command {
         CodexCommand::Run(args) => run_codex(args, config).await,

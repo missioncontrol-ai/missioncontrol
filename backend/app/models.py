@@ -846,6 +846,9 @@ class MeshAgent(SQLModel, table=True):
     # Keys: model, context_window, available_tools
     runtime_json: Optional[str] = Field(default=None, sa_column=Column(Text))
 
+    # interactive | headless | solo
+    supervision_mode: Optional[str] = Field(default=None)
+
 
 class MeshProgressEvent(SQLModel, table=True):
     """Typed progress event emitted by an agent while executing a MeshTask.

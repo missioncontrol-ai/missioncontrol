@@ -7,7 +7,7 @@ use crate::{
     codex, compat,
     config::McConfig,
     daemon::{self, DaemonArgs},
-    drift, evolve, gemini, governance, launch, maintenance, mcp_server, mcp_tools, mesh, ops,
+    drift, evolve, gemini, governance, launch, maintenance, mcp_server, mcp_tools, mesh, ops, run,
     output::{self, OutputMode},
     remote, runtime,
     schema_pack::SchemaPack,
@@ -111,6 +111,9 @@ pub enum McCommand {
     /// mc-mesh daemon control and work-model commands.
     #[command(subcommand)]
     Mesh(mesh::MeshCommand),
+    /// Launch an agent runtime with a unified interface.
+    #[command(name = "run")]
+    Run(run::RunArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -716,6 +719,7 @@ pub async fn run(
         McCommand::Profile(cmd) => handle_profile(cmd, client, output_mode).await,
         McCommand::Secrets(cmd) => handle_secrets(cmd, client, output_mode).await,
         McCommand::Mesh(cmd) => mesh::handle(cmd, &client, &config).await,
+        McCommand::Run(args) => run::run(args, &client, &config).await,
     }
 }
 

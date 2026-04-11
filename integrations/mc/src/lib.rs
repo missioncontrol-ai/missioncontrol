@@ -22,6 +22,7 @@ pub mod mesh;
 pub mod ops;
 pub mod output;
 pub mod remote;
+pub mod run;
 pub mod runtime;
 pub mod schema_pack;
 pub mod secrets;

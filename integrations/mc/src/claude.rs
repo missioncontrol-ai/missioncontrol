@@ -117,6 +117,17 @@ struct ClaudeDoctorReport {
     suggested_command: String,
 }
 
+pub async fn run_claude_compat(
+    profile: Option<String>,
+    extra_args: Vec<String>,
+    config: &McConfig,
+) -> Result<()> {
+    let profile_name = resolve_profile(profile, None, config)?;
+    let paths = claude_paths(&profile_name);
+    run_claude_process(&extra_args, &paths.runtime_home, config, &profile_name)?;
+    Ok(())
+}
+
 pub async fn run(command: ClaudeCommand, config: &McConfig) -> Result<()> {
     match command {
         ClaudeCommand::Run(args) => run_claude(args, config).await,
