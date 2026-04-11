@@ -310,9 +310,9 @@ async fn run_sessions(
 }
 
 #[derive(Clone, Debug)]
-struct NodeState {
-    node_id: String,
-    node_name: String,
+pub struct NodeState {
+    pub node_id: String,
+    pub node_name: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -361,7 +361,7 @@ fn node_config_path() -> PathBuf {
         .join("node-config.json")
 }
 
-fn load_node_state() -> Result<Option<NodeState>> {
+pub fn load_node_state() -> Result<Option<NodeState>> {
     let path = node_state_path();
     let raw = match fs::read_to_string(&path) {
         Ok(value) => value,
@@ -384,7 +384,7 @@ fn load_node_state() -> Result<Option<NodeState>> {
     Ok(Some(NodeState { node_id, node_name }))
 }
 
-fn persist_node_state(state: &NodeState) -> Result<()> {
+pub fn persist_node_state(state: &NodeState) -> Result<()> {
     let path = node_state_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

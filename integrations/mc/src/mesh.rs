@@ -364,8 +364,71 @@ async fn handle_up(args: MeshUpArgs, config: &McConfig) -> Result<()> {
         }
     }
 
+    // Auto-register this host as a RuntimeNode if no node state exists.
+    auto_register_node(config).await;
+
     println!("Run `mc mesh status` to check.");
     Ok(())
+}
+
+/// Register this host as a RuntimeNode if no node-state file exists.
+/// Best-effort — logs a warning but does not abort `mc mesh up` on failure.
+async fn auto_register_node(config: &McConfig) {
+    use crate::runtime::{NodeState, load_node_state, persist_node_state};
+
+    if matches!(load_node_state(), Ok(Some(_))) {
+        // Already registered.
+        return;
+    }
+
+    let hostname = std::env::var("HOSTNAME")
+        .or_else(|_| {
+            std::process::Command::new("hostname")
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .map_err(|e| std::env::VarError::NotPresent.into())
+        })
+        .unwrap_or_else(|_: Box<dyn std::error::Error>| "unknown".to_string());
+
+    let client = match crate::client::MissionControlClient::new(config) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("mc mesh up: warning: could not build client for node registration: {e}");
+            return;
+        }
+    };
+
+    let body = serde_json::json!({
+        "node_name": hostname,
+        "hostname": hostname,
+        "trust_tier": "standard",
+        "labels": {},
+        "capabilities": ["claude_code", "codex"],
+    });
+
+    match client.post_json("/runtime/nodes/register", &body).await {
+        Ok(resp) => {
+            let node_id = resp
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !node_id.is_empty() {
+                let state = NodeState {
+                    node_id: node_id.clone(),
+                    node_name: hostname.clone(),
+                };
+                if let Err(e) = persist_node_state(&state) {
+                    eprintln!("mc mesh up: warning: could not save node state: {e}");
+                } else {
+                    println!("Registered as runtime node {node_id} ({hostname})");
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("mc mesh up: warning: could not auto-register runtime node: {e}");
+        }
+    }
 }
 
 fn install_systemd_unit(unit_path: &std::path::Path) -> Result<()> {
