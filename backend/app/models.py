@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from sqlmodel import Field, SQLModel
-from sqlalchemy import CheckConstraint, Column, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Integer, String, Text, UniqueConstraint
 
 
 class Kluster(SQLModel, table=True):
@@ -777,6 +777,9 @@ class MeshTask(SQLModel, table=True):
     result_artifact_id: Optional[str] = Field(default=None)
     priority: int = Field(default=0, index=True)
     lease_expires_at: Optional[datetime] = None
+    # Optimistic locking / claim hardening (migration aaa0420001)
+    claim_lease_id: Optional[str] = Field(default=None)
+    version_counter: int = Field(default=0)
     created_by_subject: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -845,6 +848,11 @@ class MeshProgressEvent(SQLModel, table=True):
     # event-specific typed body (artifact ref, blocker id, input prompt…)
     payload_json: str = Field(default="{}", sa_column=Column(Text))
     occurred_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    # FK to AgentRun when this event was emitted inside a tracked run (migration aaa0423004)
+    agent_run_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("agentrun.id", ondelete="SET NULL")),
+    )
 
 
 class MeshMessage(SQLModel, table=True):
@@ -875,3 +883,68 @@ class MeshTaskArtifact(SQLModel, table=True):
     artifact_name: str = ""  # logical name declared in task produces/consumes
     role: str = "output"      # output | input
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AgentRun(SQLModel, table=True):
+    """A single execution session for an agent, optionally tied to a MeshTask.
+
+    Tracks the full lifecycle of an agent invocation: cost, status, checkpoints,
+    and hierarchical nesting via parent_run_id.
+    """
+
+    __tablename__ = "agentrun"
+
+    id: Optional[str] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    mesh_agent_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("meshagent.id", ondelete="SET NULL"), index=True),
+    )
+    mesh_task_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("meshtask.id", ondelete="SET NULL"), index=True),
+    )
+    # claude_code | codex | gemini | custom | shell | …
+    runtime_kind: str
+    runtime_session_id: Optional[str] = Field(default=None)
+    # starting | running | paused | waiting_review | waiting_budget |
+    # completed | failed | cancelled
+    status: str = Field(default="starting", index=True)
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    # Random UUID minted on creation; used by the agent to resume after restart
+    resume_token: str
+    last_checkpoint_at: Optional[datetime] = None
+    total_cost_cents: int = Field(default=0)
+    parent_run_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("agentrun.id", ondelete="SET NULL")),
+    )
+    # Arbitrary JSON: tool call counts, model, custom agent metadata …
+    metadata_json: Optional[str] = Field(default=None, sa_column=Column(Text))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RunCheckpoint(SQLModel, table=True):
+    """Immutable checkpoint record within an AgentRun.
+
+    Enables replay, audit, and cost attribution for individual tool calls,
+    LLM turns, review gates, and manual pauses.
+    """
+
+    __tablename__ = "runcheckpoint"
+    __table_args__ = (
+        UniqueConstraint("run_id", "seq", name="uq_runcheckpoint_run_seq"),
+    )
+
+    id: Optional[str] = Field(default=None, primary_key=True)
+    run_id: str = Field(
+        sa_column=Column(String, ForeignKey("agentrun.id", ondelete="CASCADE"), index=True)
+    )
+    # Monotonically increasing within a run
+    seq: int
+    # tool_call | turn | review | publish | manual
+    kind: str
+    payload_json: str = Field(sa_column=Column(Text))
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
