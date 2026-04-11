@@ -260,9 +260,15 @@ class MCPCall(BaseModel):
 
 
 class MCPTool(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: str
     description: str
-    input_schema: dict
+    input_schema: dict = Field(
+        default_factory=dict,
+        validation_alias="inputSchema",
+        serialization_alias="inputSchema",
+    )
 
 
 class MCPResponse(BaseModel):

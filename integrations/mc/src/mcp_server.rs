@@ -35,7 +35,7 @@
 use crate::{client::MissionControlClient, mcp_stdio, mcp_tools};
 use anyhow::{Context, Result};
 use clap::Args;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     path::PathBuf,
@@ -45,7 +45,8 @@ use std::{
 use tokio::io::BufReader;
 use tokio::sync::mpsc;
 
-const PROTOCOL_VERSION: &str = "2024-11-05";
+const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
+const LEGACY_PROTOCOL_VERSION: &str = "2024-11-05";
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
@@ -206,11 +207,13 @@ async fn dispatch(
         "initialize" => {
             // Client hello — return server capabilities.
             let _client_info = params.get("clientInfo");
+            let negotiated_version =
+                select_protocol_version(params.get("protocolVersion").and_then(|v| v.as_str()));
             resp!(json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
-                    "protocolVersion": PROTOCOL_VERSION,
+                    "protocolVersion": negotiated_version,
                     "capabilities": {
                         "tools": { "listChanged": true }
                     },
@@ -468,10 +471,12 @@ async fn fetch_tools(
     client: &MissionControlClient,
     cache: &Arc<Mutex<ToolsCache>>,
 ) -> Result<Vec<Value>> {
+    tracing::info!("mcp_server: fetch_tools start");
     // Check freshness under the lock; clone if still valid.
     {
         let c = cache.lock().unwrap();
         if c.is_fresh() {
+            tracing::info!("mcp_server: fetch_tools cache hit ({})", c.tools.len());
             return Ok(c.tools.clone());
         }
     }
@@ -482,6 +487,10 @@ async fn fetch_tools(
     // during initialized) will send a fresh listChanged when ready.
     match mcp_tools::fetch_tools_from_backend(client).await {
         Ok(tools) => {
+            tracing::info!(
+                "mcp_server: fetch_tools backend returned {} tools",
+                tools.len()
+            );
             let mut c = cache.lock().unwrap();
             c.set(tools.clone());
             Ok(tools)
@@ -511,5 +520,46 @@ fn result_to_text(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
         other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
+    }
+}
+
+fn select_protocol_version(requested: Option<&str>) -> &str {
+    match requested {
+        Some(version)
+            if version == DEFAULT_PROTOCOL_VERSION || version == LEGACY_PROTOCOL_VERSION =>
+        {
+            version
+        }
+        _ => DEFAULT_PROTOCOL_VERSION,
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::*;
+
+    #[test]
+    fn selects_latest_protocol_when_client_omits_version() {
+        assert_eq!(select_protocol_version(None), DEFAULT_PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn echoes_known_requested_protocol_versions() {
+        assert_eq!(
+            select_protocol_version(Some(DEFAULT_PROTOCOL_VERSION)),
+            DEFAULT_PROTOCOL_VERSION
+        );
+        assert_eq!(
+            select_protocol_version(Some(LEGACY_PROTOCOL_VERSION)),
+            LEGACY_PROTOCOL_VERSION
+        );
+    }
+
+    #[test]
+    fn falls_back_to_latest_for_unknown_versions() {
+        assert_eq!(
+            select_protocol_version(Some("2099-01-01")),
+            DEFAULT_PROTOCOL_VERSION
+        );
     }
 }

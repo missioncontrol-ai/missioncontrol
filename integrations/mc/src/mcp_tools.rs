@@ -1,6 +1,6 @@
 use crate::{booster::AgentBooster, client::MissionControlClient, schema_pack::SchemaPack};
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Fetch the raw tools list from the backend's /mcp/tools endpoint.
 /// Shared by the MCP server cache and background warm-up.
@@ -11,15 +11,30 @@ pub async fn fetch_tools_from_backend(client: &MissionControlClient) -> Result<V
         .context("failed to fetch tools from backend")?;
 
     let tools: Vec<Value> = match response {
-        Value::Array(arr) => arr,
+        Value::Array(arr) => arr.into_iter().map(normalize_tool).collect(),
         Value::Object(ref obj) => obj
             .get("tools")
             .and_then(|t| t.as_array())
-            .cloned()
+            .map(|arr| arr.iter().cloned().map(normalize_tool).collect())
             .unwrap_or_default(),
         _ => Vec::new(),
     };
     Ok(tools)
+}
+
+fn normalize_tool(mut tool: Value) -> Value {
+    let Some(obj) = tool.as_object_mut() else {
+        return tool;
+    };
+
+    if !obj.contains_key("inputSchema") {
+        let schema = obj
+            .remove("input_schema")
+            .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
+        obj.insert("inputSchema".to_string(), schema);
+    }
+
+    tool
 }
 
 pub async fn call_tool(
@@ -55,4 +70,39 @@ pub async fn call_tool(
         "args": args,
     });
     client.post_json("/mcp/call", &request).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_tool_renames_snake_case_schema() {
+        let tool = json!({
+            "name": "example",
+            "description": "test",
+            "input_schema": {
+                "type": "object",
+                "properties": {}
+            }
+        });
+
+        let normalized = normalize_tool(tool);
+        assert!(normalized.get("input_schema").is_none());
+        assert!(normalized.get("inputSchema").is_some());
+    }
+
+    #[test]
+    fn normalize_tool_inserts_empty_schema_when_missing() {
+        let tool = json!({
+            "name": "example",
+            "description": "test"
+        });
+
+        let normalized = normalize_tool(tool);
+        assert_eq!(
+            normalized.get("inputSchema"),
+            Some(&json!({"type": "object", "properties": {}}))
+        );
+    }
 }

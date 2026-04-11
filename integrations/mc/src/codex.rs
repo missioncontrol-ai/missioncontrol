@@ -164,7 +164,12 @@ async fn run_codex(args: CodexRunArgs, config: &McConfig) -> Result<()> {
     let paths = codex_paths(&profile);
     if args.new {
         mc_info!("{}: starting new session", profile);
-        let status = run_codex_process(&build_new_session_args(), &paths.runtime_home, config, &profile)?;
+        let status = run_codex_process(
+            &build_new_session_args(),
+            &paths.runtime_home,
+            config,
+            &profile,
+        )?;
         if !status.success() {
             bail!("codex exited with status {}", status);
         }
@@ -172,12 +177,8 @@ async fn run_codex(args: CodexRunArgs, config: &McConfig) -> Result<()> {
     }
 
     mc_info!("{}: resuming", profile);
-    let resume_status = run_codex_process(
-        &build_resume_args(),
-        &paths.runtime_home,
-        config,
-        &profile,
-    )?;
+    let resume_status =
+        run_codex_process(&build_resume_args(), &paths.runtime_home, config, &profile)?;
     if !resume_status.success() {
         mc_info!("{}: resume unavailable; starting new session", profile);
         let fresh_status = run_codex_process(
@@ -258,7 +259,10 @@ async fn status_codex(args: CodexStatusArgs, config: &McConfig) -> Result<()> {
     }
 
     println!("Profile: {}", status.profile);
-    println!("Status: {}", if status.ready { "ready" } else { "not ready" });
+    println!(
+        "Status: {}",
+        if status.ready { "ready" } else { "not ready" }
+    );
     println!("Auth: {}", status.auth_mode);
     if status.issues.is_empty() {
         println!("Issues: none");
@@ -396,23 +400,59 @@ fn inspect_profile(profile: &str, config: &McConfig, repair: bool) -> Result<Cod
                 repaired = true;
                 repaired_actions.push("patched missioncontrol MCP entry".to_string());
             }
+        } else {
+            let desired_command = desired_mc_command();
+            let expected = format!("command = \"{}\"", escape_toml(&desired_command));
+            if !raw.contains(&expected) {
+                issues.push(issue(
+                    "MC_MCP_COMMAND_DRIFT",
+                    "error",
+                    "missioncontrol MCP command is not pinned to the installed mc binary",
+                    true,
+                ));
+                if repair {
+                    write_codex_config(&paths.config_path, config, Some(&raw))?;
+                    repaired = true;
+                    repaired_actions.push("repaired missioncontrol MCP command path".to_string());
+                }
+            }
         }
+    }
+
+    if repair && seed_minimal_codex_state(&paths)? {
+        repaired = true;
+        repaired_actions
+            .push("seeded Codex auth and sandbox state from global ~/.codex".to_string());
     }
 
     // OAuth-first default: rely on native Codex login status instead of API-key checks.
     // This supports both file-backed and keyring-backed auth under CODEX_HOME.
     if !is_codex_login_available(&paths.runtime_home, profile)? {
-        issues.push(issue(
-            "AUTH_STATE_MISSING",
-            "error",
-            "codex is not authenticated for this profile; run `CODEX_HOME=<profile-home> codex login`",
-            false,
-        ));
-        has_unfixable = true;
+        if repair
+            && seed_minimal_codex_state(&paths)?
+            && is_codex_login_available(&paths.runtime_home, profile)?
+        {
+            repaired = true;
+            repaired_actions.push("seeded Codex auth from global ~/.codex".to_string());
+        } else {
+            issues.push(issue(
+                "AUTH_STATE_MISSING",
+                "error",
+                "codex is not authenticated for this profile; run `CODEX_HOME=<profile-home> codex login`",
+                false,
+            ));
+            has_unfixable = true;
+        }
     }
 
     if repair && !has_unfixable {
         write_ownership(&paths)?;
+    }
+
+    if repair {
+        let (refreshed_issues, _refreshed_unfixable) =
+            collect_profile_issues(&paths, config, profile)?;
+        issues = refreshed_issues;
     }
 
     let ready = !issues
@@ -443,6 +483,85 @@ fn inspect_profile(profile: &str, config: &McConfig, repair: bool) -> Result<Cod
         repaired_actions,
         suggested_command: format!("mc codex doctor {} --fix", profile),
     })
+}
+
+fn collect_profile_issues(
+    paths: &CodexPaths,
+    _config: &McConfig,
+    profile: &str,
+) -> Result<(Vec<CodexDoctorIssue>, bool)> {
+    let mut issues = Vec::<CodexDoctorIssue>::new();
+    let mut has_unfixable = false;
+
+    if which_binary("codex").is_err() {
+        issues.push(issue(
+            "NATIVE_CODEX_NOT_FOUND",
+            "fatal",
+            "native `codex` binary is not on PATH",
+            false,
+        ));
+        has_unfixable = true;
+    }
+
+    if !paths.profile_root.exists() {
+        issues.push(issue(
+            "RUNTIME_HOME_MISSING",
+            "error",
+            "profile runtime root does not exist",
+            true,
+        ));
+    }
+
+    if !paths.runtime_home.exists() {
+        issues.push(issue(
+            "RUNTIME_HOME_MISSING",
+            "error",
+            "CODEX_HOME directory missing",
+            true,
+        ));
+    }
+
+    if !paths.config_path.exists() {
+        issues.push(issue(
+            "MC_CONFIG_MISSING",
+            "error",
+            "config.toml missing",
+            true,
+        ));
+    } else {
+        let raw = fs::read_to_string(&paths.config_path).unwrap_or_default();
+        if !raw.contains("[mcp_servers.missioncontrol]") {
+            issues.push(issue(
+                "MC_MCP_CONFIG_MISSING",
+                "error",
+                "Mission Control MCP entry missing from config.toml",
+                true,
+            ));
+        } else {
+            let desired_command = desired_mc_command();
+            let expected = format!("command = \"{}\"", escape_toml(&desired_command));
+            if !raw.contains(&expected) {
+                issues.push(issue(
+                    "MC_MCP_COMMAND_DRIFT",
+                    "error",
+                    "missioncontrol MCP command is not pinned to the installed mc binary",
+                    true,
+                ));
+            }
+        }
+    }
+
+    if !is_codex_login_available(&paths.runtime_home, profile)? {
+        issues.push(issue(
+            "AUTH_STATE_MISSING",
+            "error",
+            "codex is not authenticated for this profile; run `CODEX_HOME=<profile-home> codex login`",
+            false,
+        ));
+        has_unfixable = true;
+    }
+
+    Ok((issues, has_unfixable))
 }
 
 fn is_codex_login_available(runtime_home: &Path, profile: &str) -> Result<bool> {
@@ -527,6 +646,15 @@ fn write_codex_config(path: &Path, config: &McConfig, existing: Option<&str>) ->
     Ok(())
 }
 
+fn desired_mc_command() -> String {
+    std::env::current_exe()
+        .ok()
+        .filter(|p| p.is_file())
+        .or_else(|| which_binary("mc").ok())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "mc".to_string())
+}
+
 fn strip_mc_managed_block(existing: &str) -> String {
     let mut output = Vec::<String>::new();
     let mut skip = false;
@@ -549,13 +677,15 @@ fn strip_mc_managed_block(existing: &str) -> String {
 }
 
 fn render_mc_managed_block(base_url: &str, token: Option<&str>) -> String {
+    let mc_command = desired_mc_command();
+
     let mut buf = String::new();
     buf.push_str(MC_CODEX_MARKER_BEGIN);
     buf.push('\n');
     buf.push_str("approval_policy = \"on-request\"\n");
     buf.push_str("sandbox_mode = \"workspace-write\"\n\n");
     buf.push_str("[mcp_servers.missioncontrol]\n");
-    buf.push_str("command = \"mc\"\n");
+    buf.push_str(&format!("command = \"{}\"\n", escape_toml(&mc_command)));
     buf.push_str("args = [\"serve\"]\n");
     buf.push_str("startup_timeout_sec = 30\n");
     buf.push_str("tool_timeout_sec = 60\n");
@@ -608,6 +738,89 @@ fn which_binary(name: &str) -> Result<PathBuf> {
 fn resolved_command(name: &str) -> std::process::Command {
     let binary = which_binary(name).unwrap_or_else(|_| PathBuf::from(name));
     std::process::Command::new(binary)
+}
+
+fn seed_minimal_codex_state(paths: &CodexPaths) -> Result<bool> {
+    let Some(global_home) = dirs::home_dir() else {
+        return Ok(false);
+    };
+    let mut changed = false;
+
+    let global_codex = global_home.join(".codex");
+    let runtime_codex = &paths.runtime_home;
+    fs::create_dir_all(runtime_codex)?;
+
+    let src_auth = global_codex.join("auth.json");
+    let dst_auth = runtime_codex.join("auth.json");
+    if src_auth.exists() && !dst_auth.exists() {
+        fs::copy(&src_auth, &dst_auth).with_context(|| {
+            format!(
+                "failed to seed codex auth from {} to {}",
+                src_auth.display(),
+                dst_auth.display()
+            )
+        })?;
+        changed = true;
+    }
+
+    let workspace_root = std::env::current_dir().context("unable to locate current directory")?;
+    let sandbox_dir = runtime_codex.join(".sandbox");
+    fs::create_dir_all(&sandbox_dir)?;
+    let setup_marker = sandbox_dir.join("setup_marker.json");
+    let global_setup_marker = global_codex.join(".sandbox").join("setup_marker.json");
+    let template: serde_json::Value = if global_setup_marker.exists() {
+        serde_json::from_str(&fs::read_to_string(&global_setup_marker)?)
+            .unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+    let mut root = template.as_object().cloned().unwrap_or_default();
+    root.insert(
+        "version".to_string(),
+        template
+            .get("version")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!(5)),
+    );
+    root.insert(
+        "offline_username".to_string(),
+        template
+            .get("offline_username")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!("CodexSandboxOffline")),
+    );
+    root.insert(
+        "online_username".to_string(),
+        template
+            .get("online_username")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!("CodexSandboxOnline")),
+    );
+    root.insert(
+        "created_at".to_string(),
+        serde_json::json!(chrono::Utc::now().to_rfc3339()),
+    );
+    let root_str = workspace_root.display().to_string();
+    root.insert(
+        "read_roots".to_string(),
+        serde_json::json!([root_str.clone()]),
+    );
+    root.insert("write_roots".to_string(), serde_json::json!([root_str]));
+
+    let desired = serde_json::to_string_pretty(&serde_json::Value::Object(root))?;
+    let current = fs::read_to_string(&setup_marker).unwrap_or_default();
+    if current != desired {
+        fs::write(&setup_marker, desired)?;
+        changed = true;
+    }
+
+    let setup_error = sandbox_dir.join("setup_error.json");
+    if setup_error.exists() {
+        fs::remove_file(&setup_error)?;
+        changed = true;
+    }
+
+    Ok(changed)
 }
 
 fn escape_toml(value: &str) -> String {
