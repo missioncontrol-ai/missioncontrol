@@ -62,6 +62,7 @@ from app.routers import (
     work,
     runs,
     budgets,
+    mission_packs,
 )
 
 app = FastAPI(
@@ -714,6 +715,7 @@ app.include_router(hooks.codex_router)
 app.include_router(work.router)
 app.include_router(runs.router)
 app.include_router(budgets.router, prefix="/budgets", tags=["budgets"])
+app.include_router(mission_packs.router, prefix="/packs", tags=["mission_packs"])
 
 
 def _web_dir() -> Path | None:

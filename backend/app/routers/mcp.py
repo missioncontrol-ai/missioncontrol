@@ -1011,6 +1011,32 @@ TOOLS = [
             "required": ["agent_id"],
         },
     ),
+    MCPTool(
+        name="list_mission_packs",
+        description="List mission packs owned by the current principal",
+        input_schema={"type": "object", "properties": {}},
+    ),
+    MCPTool(
+        name="export_mission_pack",
+        description="Export a mission into a portable mission pack tarball",
+        input_schema={
+            "type": "object",
+            "properties": {"mission_id": {"type": "string"}},
+            "required": ["mission_id"],
+        },
+    ),
+    MCPTool(
+        name="install_mission_pack",
+        description="Install a mission pack, creating mission + klusters + skills + budgets",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "pack_id": {"type": "string"},
+                "target_mission_id": {"type": "string"},
+            },
+            "required": ["pack_id"],
+        },
+    ),
 ]
 
 
@@ -3781,5 +3807,38 @@ def call_tool(payload: MCPCall, request: Request, response: Response):
                     }
                     for m in msgs
                 ]})
+
+        if tool == "list_mission_packs":
+            from app.models import MissionPack as _MissionPack
+            packs = session.exec(
+                select(_MissionPack).where(_MissionPack.owner_subject == actor_subject)
+            ).all()
+            return _mcp_ok(request_id=request_id, result={"packs": [
+                {"id": p.id, "name": p.name, "version": p.version, "sha256": p.sha256[:8], "created_at": p.created_at}
+                for p in packs
+            ]})
+
+        if tool == "export_mission_pack":
+            mission_id = str(args.get("mission_id") or "").strip()
+            if not mission_id:
+                return _mcp_error(request_id=request_id, error="mission_id is required")
+            from app.services.mission_pack import pack_mission as _pack_mission
+            try:
+                pack = _pack_mission(mission_id, actor_subject)
+                return _mcp_ok(request_id=request_id, result={"pack_id": pack.id, "name": pack.name, "sha256": pack.sha256})
+            except ValueError as e:
+                return _mcp_error(request_id=request_id, error=str(e), error_code="not_found")
+
+        if tool == "install_mission_pack":
+            pack_id = str(args.get("pack_id") or "").strip()
+            if not pack_id:
+                return _mcp_error(request_id=request_id, error="pack_id is required")
+            target_mission_id = args.get("target_mission_id") or None
+            from app.services.mission_pack import install_mission_pack as _install_pack
+            try:
+                result = _install_pack(pack_id, actor_subject, target_mission_id)
+                return _mcp_ok(request_id=request_id, result=result)
+            except ValueError as e:
+                return _mcp_error(request_id=request_id, error=str(e), error_code="not_found")
 
     return _mcp_error(request_id=request_id, error=f"Unknown tool: {tool}", error_code="unknown_tool")
