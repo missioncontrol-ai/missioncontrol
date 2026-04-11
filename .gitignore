@@ -194,3 +194,4 @@ artifacts/
 
 # Kluster update artifacts (personal session files)
 integrations/mc/kluster-*.md
+.worktrees/
