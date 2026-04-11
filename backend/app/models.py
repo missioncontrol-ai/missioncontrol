@@ -927,6 +927,86 @@ class AgentRun(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class BudgetPolicy(SQLModel, table=True):
+    __tablename__ = "budgetpolicy"
+
+    id: Optional[str] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    scope_type: str  # tenant|mission|kluster|agent|runtime|provider
+    scope_id: str
+    window_type: str  # day|week|month|rolling_24h
+    hard_cap_cents: int
+    soft_cap_cents: Optional[int] = Field(default=None)
+    action_on_breach: str = Field(default="alert_only")  # pause|require_approval|alert_only
+    active: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class BudgetWindow(SQLModel, table=True):
+    __tablename__ = "budgetwindow"
+
+    id: Optional[str] = Field(default=None, primary_key=True)
+    policy_id: str = Field(
+        sa_column=Column(String, ForeignKey("budgetpolicy.id", ondelete="CASCADE"), index=True)
+    )
+    window_start: datetime
+    window_end: datetime
+    consumed_cents: int = Field(default=0)
+    state: str = Field(default="open")  # open|soft_tripped|hard_tripped|closed
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class UsageRecord(SQLModel, table=True):
+    __tablename__ = "usagerecord"
+
+    id: Optional[str] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    run_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("agentrun.id", ondelete="SET NULL")),
+    )
+    mesh_task_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("meshtask.id", ondelete="SET NULL")),
+    )
+    mesh_agent_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("meshagent.id", ondelete="SET NULL")),
+    )
+    mission_id: Optional[str] = Field(default=None)
+    kluster_id: Optional[str] = Field(default=None)
+    runtime_kind: str
+    provider: str = Field(default="unknown")
+    model: str = Field(default="unknown")
+    input_tokens: int = Field(default=0)
+    output_tokens: int = Field(default=0)
+    reasoning_tokens: int = Field(default=0)
+    tool_calls: int = Field(default=0)
+    wall_ms: int = Field(default=0)
+    cost_cents: int = Field(default=0)
+    recorded_at: datetime = Field(default_factory=datetime.utcnow)
+    source: str = Field(default="adapter")  # adapter|proxy|reconciled
+
+
+class CostProfile(SQLModel, table=True):
+    __tablename__ = "costprofile"
+    __table_args__ = (
+        UniqueConstraint("runtime_kind", "provider", "model", name="uq_costprofile_runtime_provider_model"),
+    )
+
+    id: Optional[str] = Field(default=None, primary_key=True)
+    runtime_kind: str
+    provider: str
+    model: str
+    input_rate_per_mtok_cents: int = Field(default=0)
+    output_rate_per_mtok_cents: int = Field(default=0)
+    reasoning_rate_per_mtok_cents: int = Field(default=0)
+    tool_call_flat_cents: int = Field(default=0)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class RunCheckpoint(SQLModel, table=True):
     """Immutable checkpoint record within an AgentRun.
 

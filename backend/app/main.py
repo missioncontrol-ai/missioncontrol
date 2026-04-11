@@ -60,6 +60,7 @@ from app.routers import (
     hooks,
     work,
     runs,
+    budgets,
 )
 
 app = FastAPI(
@@ -701,6 +702,7 @@ app.include_router(hooks.router)
 app.include_router(hooks.codex_router)
 app.include_router(work.router)
 app.include_router(runs.router)
+app.include_router(budgets.router, prefix="/budgets", tags=["budgets"])
 
 
 def _web_dir() -> Path | None:
