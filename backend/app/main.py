@@ -59,6 +59,7 @@ from app.routers import (
     remotectl,
     hooks,
     work,
+    runs,
 )
 
 app = FastAPI(
@@ -699,6 +700,7 @@ app.include_router(remotectl.router)
 app.include_router(hooks.router)
 app.include_router(hooks.codex_router)
 app.include_router(work.router)
+app.include_router(runs.router)
 
 
 def _web_dir() -> Path | None:
