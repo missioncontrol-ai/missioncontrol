@@ -182,6 +182,21 @@ class ClaimRaceTestCase(unittest.TestCase):
             work.complete_task(tid, body=work.CompleteBody(claim_lease_id=wrong_lease))
         self.assertEqual(ctx.exception.status_code, 409)
 
+    def test_complete_no_lease_id_allowed(self):
+        """Completing a task with no claim_lease_id in body is backward-compat: should return 200."""
+        kid = self._make_kluster()
+        tid = self._make_task(kid, status="running")
+        # Manually assign a known lease
+        known_lease = "known-lease-123"
+        with Session(self.engine) as s:
+            t = s.get(MeshTask, tid)
+            t.claim_lease_id = known_lease
+            s.commit()
+
+        # No claim_lease_id → should succeed (backward compat)
+        result = work.complete_task(tid, body=work.CompleteBody())
+        self.assertIsNotNone(result)
+
     def test_version_counter_increments(self):
         """After a successful claim, version_counter should be > 0."""
         kid = self._make_kluster()
