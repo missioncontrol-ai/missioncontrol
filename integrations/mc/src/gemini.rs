@@ -61,6 +61,7 @@ async fn run_gemini(
     client: &MissionControlClient,
     config: &McConfig,
 ) -> Result<()> {
+    eprintln!("mc: deprecation notice: `mc gemini run` is being unified — prefer `mc run gemini` (identical behavior)");
     let profile = resolve_profile(args.profile_positional, args.profile_name)?;
     let launch_args = LaunchArgs {
         agent: Some("gemini".to_string()),

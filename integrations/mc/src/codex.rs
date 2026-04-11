@@ -155,6 +155,7 @@ pub async fn run(command: CodexCommand, config: &McConfig) -> Result<()> {
 }
 
 async fn run_codex(args: CodexRunArgs, config: &McConfig) -> Result<()> {
+    eprintln!("mc: deprecation notice: `mc codex run` is being unified — prefer `mc run codex` (identical behavior)");
     let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
     let report = inspect_profile(&profile, config, true)?;
 

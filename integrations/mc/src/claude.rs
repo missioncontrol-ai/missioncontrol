@@ -138,6 +138,7 @@ pub async fn run(command: ClaudeCommand, config: &McConfig) -> Result<()> {
 }
 
 async fn run_claude(args: ClaudeRunArgs, config: &McConfig) -> Result<()> {
+    eprintln!("mc: deprecation notice: `mc claude run` is being unified — prefer `mc run claude` (identical behavior)");
     let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
     let report = inspect_profile(&profile, config, true)?;
     if !report.ready {
