@@ -88,14 +88,14 @@ enum ClaudeHookEvent {
 }
 
 #[derive(Debug, Clone)]
-struct ClaudePaths {
-    runtime_home: PathBuf,
-    manifest_path: PathBuf,
-    state_path: PathBuf,
-    claude_config_path: PathBuf,
-    settings_path: PathBuf,
-    hooks_dir: PathBuf,
-    self_link_path: PathBuf,
+pub struct ClaudePaths {
+    pub runtime_home: PathBuf,
+    pub manifest_path: PathBuf,
+    pub state_path: PathBuf,
+    pub claude_config_path: PathBuf,
+    pub settings_path: PathBuf,
+    pub hooks_dir: PathBuf,
+    pub self_link_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -319,7 +319,7 @@ fn resolve_profile(
     Ok(resolved.trim().to_string())
 }
 
-fn claude_paths(profile: &str) -> ClaudePaths {
+pub fn claude_paths(profile: &str) -> ClaudePaths {
     let runtime_root = mc_home_dir()
         .join("profiles")
         .join(profile)
@@ -822,9 +822,43 @@ fn which_binary(name: &str) -> Result<PathBuf> {
     which::which(name).map_err(|_| anyhow!("not found on PATH"))
 }
 
-fn resolved_command(name: &str) -> std::process::Command {
+pub fn resolved_command(name: &str) -> std::process::Command {
     let binary = which_binary(name).unwrap_or_else(|_| PathBuf::from(name));
     std::process::Command::new(binary)
+}
+
+/// Blocking launch helper for SoloSupervisor — sets MC_MESH_AGENT_ID / MC_RUN_ID env vars.
+pub fn launch_claude_blocking(
+    extra_args: &[String],
+    runtime_home: &Path,
+    config: &McConfig,
+    profile: &str,
+    agent_id: &str,
+    run_id: Option<&str>,
+) -> Result<std::process::ExitStatus> {
+    let mut cmd = resolved_command("claude");
+    cmd.args(extra_args);
+    cmd.env("HOME", runtime_home);
+    cmd.env("MC_AGENT_PROFILE", profile);
+    cmd.env("MC_MESH_AGENT_ID", agent_id);
+    if let Some(rid) = run_id {
+        cmd.env("MC_RUN_ID", rid);
+    }
+    if let Some(token) = &config.token {
+        if !token.trim().is_empty() {
+            cmd.env("MC_TOKEN", token);
+            cmd.env("MC_AGENT_TOKEN", token);
+        }
+    }
+    let runtime_local_bin = runtime_home.join(".local").join("bin");
+    if let Some(current_path) = std::env::var_os("PATH") {
+        let new_path = std::env::join_paths(
+            std::iter::once(runtime_local_bin).chain(std::env::split_paths(&current_path)),
+        )
+        .unwrap_or(current_path);
+        cmd.env("PATH", new_path);
+    }
+    cmd.status().context("failed to spawn claude")
 }
 
 fn issue(code: &str, severity: &str, detail: &str, fixable: bool) -> ClaudeDoctorIssue {

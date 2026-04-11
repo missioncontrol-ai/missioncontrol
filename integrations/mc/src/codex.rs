@@ -85,11 +85,11 @@ pub struct CodexExecArgs {
 }
 
 #[derive(Debug, Clone)]
-struct CodexPaths {
-    profile_root: PathBuf,
-    runtime_home: PathBuf,
-    config_path: PathBuf,
-    ownership_path: PathBuf,
+pub struct CodexPaths {
+    pub profile_root: PathBuf,
+    pub runtime_home: PathBuf,
+    pub config_path: PathBuf,
+    pub ownership_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -325,7 +325,7 @@ fn resolve_profile(
     Ok(resolved.trim().to_string())
 }
 
-fn codex_paths(profile: &str) -> CodexPaths {
+pub fn codex_paths(profile: &str) -> CodexPaths {
     let profile_root = mc_home_dir().join("profiles").join("codex").join(profile);
     let runtime_home = profile_root.join("codex-home");
     CodexPaths {
@@ -746,9 +746,35 @@ fn which_binary(name: &str) -> Result<PathBuf> {
     which::which(name).context(format!("binary `{}` not found on PATH", name))
 }
 
-fn resolved_command(name: &str) -> std::process::Command {
+pub fn resolved_command(name: &str) -> std::process::Command {
     let binary = which_binary(name).unwrap_or_else(|_| PathBuf::from(name));
     std::process::Command::new(binary)
+}
+
+/// Blocking launch helper for SoloSupervisor — sets MC_MESH_AGENT_ID / MC_RUN_ID env vars.
+pub fn launch_codex_blocking(
+    args: &[String],
+    runtime_home: &Path,
+    config: &McConfig,
+    profile: &str,
+    agent_id: &str,
+    run_id: Option<&str>,
+) -> Result<std::process::ExitStatus> {
+    let mut cmd = resolved_command("codex");
+    cmd.args(args);
+    cmd.env("CODEX_HOME", runtime_home);
+    cmd.env("MC_AGENT_PROFILE", profile);
+    cmd.env("MC_BASE_URL", config.base_url.as_str());
+    cmd.env("MC_MESH_AGENT_ID", agent_id);
+    if let Some(rid) = run_id {
+        cmd.env("MC_RUN_ID", rid);
+    }
+    if let Some(token) = &config.token {
+        if !token.trim().is_empty() {
+            cmd.env("MC_TOKEN", token);
+        }
+    }
+    cmd.status().context("failed to execute codex")
 }
 
 fn seed_minimal_codex_state(paths: &CodexPaths) -> Result<bool> {
