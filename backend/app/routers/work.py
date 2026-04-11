@@ -160,10 +160,6 @@ class MeshMessageCreate(BaseModel):
         return self.body_json
 
 
-class TaskClaimResult(BaseModel):
-    task_id: str
-    lease_expires_at: datetime
-
 
 class HeartbeatBody(BaseModel):
     claim_lease_id: Optional[str] = None
@@ -523,6 +519,8 @@ def complete_task(task_id: str, body: CompleteBody = CompleteBody()):
         task = session.get(MeshTask, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
+        if task.status not in ('claimed', 'running', 'waiting_review'):
+            raise HTTPException(status_code=409, detail=f"Cannot complete task in status '{task.status}'")
         # Lease mismatch check
         if task.claim_lease_id and body.claim_lease_id and task.claim_lease_id != body.claim_lease_id:
             raise HTTPException(status_code=409, detail="Lease mismatch: task has been reclaimed")
@@ -545,6 +543,8 @@ def fail_task(task_id: str, body: FailBody = FailBody()):
         task = session.get(MeshTask, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
+        if task.status not in ('claimed', 'running', 'waiting_review'):
+            raise HTTPException(status_code=409, detail=f"Cannot complete task in status '{task.status}'")
         # Lease mismatch check
         if task.claim_lease_id and body.claim_lease_id and task.claim_lease_id != body.claim_lease_id:
             raise HTTPException(status_code=409, detail="Lease mismatch: task has been reclaimed")
