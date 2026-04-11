@@ -12,6 +12,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -34,6 +35,19 @@ from app.models import (
 from app.services.authz import actor_subject_from_request
 
 router = APIRouter(prefix="/work", tags=["work"])
+
+# Process-level lock to serialize exclusive claims on SQLite (which lacks
+# SELECT FOR UPDATE).  Postgres uses SKIP LOCKED instead and never acquires
+# this lock.
+_sqlite_claim_lock = threading.Lock()
+
+
+from contextlib import contextmanager
+
+@contextmanager
+def _null_ctx():
+    """No-op context manager used on the Postgres path (no lock needed)."""
+    yield
 
 # ---------------------------------------------------------------------------
 # Default task lease TTL
@@ -378,83 +392,90 @@ def claim_task(task_id: str, request: Request):
     subject = actor_subject_from_request(request)
     is_postgres = engine.dialect.name == "postgresql"
 
-    with get_session() as session:
-        task = session.get(MeshTask, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail="task not found")
+    # For SQLite we serialise the entire claim operation with a process-level
+    # lock acquired *before* opening the session.  This prevents concurrent
+    # threads from interleaving reads and writes on the single shared
+    # connection that StaticPool (test) and WAL (prod SQLite) expose.
+    # Postgres uses SELECT FOR UPDATE SKIP LOCKED and never acquires this lock.
+    _lock = _sqlite_claim_lock if not is_postgres else None
 
-        is_broadcast = task.claim_policy == "broadcast"
+    with (_lock if _lock is not None else _null_ctx()):
+        with get_session() as session:
+            task = session.exec(select(MeshTask).where(MeshTask.id == task_id)).first()
+            if task is None:
+                raise HTTPException(status_code=404, detail="task not found")
 
-        if is_broadcast:
-            # Broadcast: allow any agent to claim while ready or running.
-            if task.status not in ("ready", "running"):
-                raise HTTPException(
-                    status_code=409, detail=f"broadcast task is {task.status}"
+            is_broadcast = task.claim_policy == "broadcast"
+
+            if is_broadcast:
+                # Broadcast: allow any agent to claim while ready or running.
+                if task.status not in ("ready", "running"):
+                    raise HTTPException(
+                        status_code=409, detail=f"broadcast task is {task.status}"
+                    )
+                expires_at = datetime.utcnow() + timedelta(seconds=LEASE_TTL_SECONDS)
+                task.status = "running"
+                task.lease_expires_at = expires_at
+                task.updated_at = datetime.utcnow()
+                session.add(task)
+                session.commit()
+                from app.services.mesh_events import publish_task_event
+                publish_task_event("task_claimed", task_id, task.kluster_id, task.mission_id or "", status="running")
+                return {"task_id": task_id, "lease_expires_at": expires_at}
+
+            # --- Exclusive claim path ---
+            # 1. Lock the row (Postgres: SKIP LOCKED; SQLite: serialised by _lock above)
+            if is_postgres:
+                result = session.exec(
+                    select(MeshTask)
+                    .where(MeshTask.id == task_id)
+                    .where(MeshTask.status == "ready")
+                    .with_for_update(skip_locked=True)
                 )
+                task = result.first()
+            else:
+                if task.status != "ready":
+                    task = None
+
+            if task is None:
+                raise HTTPException(status_code=423, detail="Task not available for claiming")
+
+            # 2. Issue new lease id and bump version
+            new_lease_id = str(uuid.uuid4())
+            new_version = task.version_counter + 1
             expires_at = datetime.utcnow() + timedelta(seconds=LEASE_TTL_SECONDS)
-            task.status = "running"
-            task.lease_expires_at = expires_at
-            task.updated_at = datetime.utcnow()
-            session.add(task)
-            session.commit()
-            from app.services.mesh_events import publish_task_event
-            publish_task_event("task_claimed", task_id, task.kluster_id, task.mission_id or "", status="running")
-            return {"task_id": task_id, "lease_expires_at": expires_at}
+            now = datetime.utcnow()
 
-        # --- Exclusive claim path ---
-        # 1. Lock the row (Postgres: SKIP LOCKED; SQLite: plain select)
-        if is_postgres:
-            result = session.exec(
-                select(MeshTask)
+            # 3. CAS update — only succeeds if version_counter hasn't changed
+            stmt = (
+                sa_update(MeshTask)
                 .where(MeshTask.id == task_id)
-                .where(MeshTask.status == "ready")
-                .with_for_update(skip_locked=True)
+                .where(MeshTask.version_counter == task.version_counter)
+                .values(
+                    status="claimed",
+                    claimed_by_agent_id=subject,
+                    claim_lease_id=new_lease_id,
+                    version_counter=new_version,
+                    lease_expires_at=expires_at,
+                    updated_at=now,
+                )
             )
-            task = result.first()
-        else:
-            task = session.get(MeshTask, task_id)
-            if task is not None and task.status != "ready":
-                task = None
+            result = session.execute(stmt)
+            if result.rowcount == 0:
+                raise HTTPException(status_code=409, detail="Claim lost to concurrent claimer")
 
-        if task is None:
-            raise HTTPException(status_code=423, detail="Task not available for claiming")
+            session.commit()
 
-        # 2. Issue new lease id and bump version
-        new_lease_id = str(uuid.uuid4())
-        new_version = task.version_counter + 1
-        expires_at = datetime.utcnow() + timedelta(seconds=LEASE_TTL_SECONDS)
-        now = datetime.utcnow()
-
-        # 3. CAS update — only succeeds if version_counter hasn't changed
-        stmt = (
-            sa_update(MeshTask)
-            .where(MeshTask.id == task_id)
-            .where(MeshTask.version_counter == task.version_counter)
-            .values(
-                status="claimed",
-                claimed_by_agent_id=subject,
-                claim_lease_id=new_lease_id,
-                version_counter=new_version,
-                lease_expires_at=expires_at,
-                updated_at=now,
-            )
-        )
-        result = session.execute(stmt)
-        if result.rowcount == 0:
-            raise HTTPException(status_code=409, detail="Claim lost to concurrent claimer")
-
-        session.commit()
-
-        # Re-fetch updated task (SQLite doesn't support RETURNING on UPDATE)
-        session.expire_all()
-        updated = session.get(MeshTask, task_id)
-        from app.services.mesh_events import publish_task_event
-        publish_task_event("task_claimed", task_id, updated.kluster_id, updated.mission_id or "", status="claimed")
-        task_dict = _task_to_read(updated)
-        task_dict["claim_lease_id"] = new_lease_id
-        # Backward-compat alias used by agents and tests
-        task_dict["task_id"] = task_id
-        return task_dict
+            # Re-fetch updated task (SQLite doesn't support RETURNING on UPDATE)
+            session.expire_all()
+            updated = session.get(MeshTask, task_id)
+            from app.services.mesh_events import publish_task_event
+            publish_task_event("task_claimed", task_id, updated.kluster_id, updated.mission_id or "", status="claimed")
+            task_dict = _task_to_read(updated)
+            task_dict["claim_lease_id"] = new_lease_id
+            # Backward-compat alias used by agents and tests
+            task_dict["task_id"] = task_id
+            return task_dict
 
 
 @router.post("/tasks/{task_id}/heartbeat")
