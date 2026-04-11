@@ -32,8 +32,13 @@ queen hosts, or local planners that need an exceptional offline/online experienc
    3. (Optional) `export MC_AGENT_ID=<agent identifier for approval traces>`
    4. (Optional) `export MC_ALLOW_INSECURE=true` when targeting a dev proxy or self-signed TLS endpoint.
 2. Install the binary — prebuilt binaries are the fastest option:
+   Linux / macOS:
    ```bash
    bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/install-mc.sh)
+   ```
+   Windows PowerShell:
+   ```powershell
+   irm https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/install-mc.ps1 | iex
    ```
    Or build from source: `cd integrations/mc && cargo build --release && cp target/release/mc ~/.local/bin/mc`.
 3. Use the command surface described below for tools, sync, governance, and approvals.

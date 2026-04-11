@@ -786,7 +786,7 @@ fn run_claude_process(
     config: &McConfig,
     profile: &str,
 ) -> Result<std::process::ExitStatus> {
-    let mut cmd = std::process::Command::new("claude");
+    let mut cmd = resolved_command("claude");
     cmd.args(extra_args);
     cmd.env("HOME", runtime_home);
     cmd.env("MC_AGENT_PROFILE", profile);
@@ -811,14 +811,12 @@ fn run_claude_process(
 }
 
 fn which_binary(name: &str) -> Result<PathBuf> {
-    let path_var = std::env::var_os("PATH").unwrap_or_default();
-    for dir in std::env::split_paths(&path_var) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    Err(anyhow!("not found on PATH"))
+    which::which(name).map_err(|_| anyhow!("not found on PATH"))
+}
+
+fn resolved_command(name: &str) -> std::process::Command {
+    let binary = which_binary(name).unwrap_or_else(|_| PathBuf::from(name));
+    std::process::Command::new(binary)
 }
 
 fn issue(code: &str, severity: &str, detail: &str, fixable: bool) -> ClaudeDoctorIssue {

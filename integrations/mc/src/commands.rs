@@ -84,6 +84,8 @@ pub enum McCommand {
     Daemon(DaemonArgs),
     /// Launch an agent with a fully wired MissionControl harness.
     Launch(launch::LaunchArgs),
+    /// Self-update helper for the mc binary.
+    Update(update::SelfUpdateArgs),
     /// Initialize MC profile state for first-time usage.
     Init(InitArgs),
     /// Start an MCP server (stdio JSON-RPC 2.0) for LLM runtime connections.
@@ -699,6 +701,9 @@ pub async fn run(
         McCommand::Ops(cmd) => ops::run(cmd, &client, &booster, &config.schema_pack).await,
         McCommand::Daemon(args) => daemon::run(&args, &client, ctx).await,
         McCommand::Launch(args) => launch::run(args, &client, &config).await,
+        McCommand::Update(args) => {
+            update::run(update::UpdateCommand::SelfUpdate(args), &config).await
+        }
         McCommand::Init(args) => handle_init(args, client, &config, output_mode).await,
         McCommand::Serve(args) => mcp_server::run(&args, &client).await,
         McCommand::Channel(cmd) => channel::run(cmd, &client).await,

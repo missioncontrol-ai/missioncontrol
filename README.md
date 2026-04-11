@@ -76,8 +76,8 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 | | |
 |---|---|
 | Docker full stack (default) | `bash scripts/dev-up.sh` |
-| Install mc CLI | `bash scripts/install-mc.sh` (pre-built binary or source build) |
-| Curl bootstrap mc | `bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/bootstrap-mc.sh)` |
+| Install mc CLI | `bash scripts/install-mc.sh` or `powershell -ExecutionPolicy Bypass -File .\scripts\install-mc.ps1` |
+| Curl bootstrap mc | `bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/bootstrap-mc.sh)` (Linux/macOS) or `irm https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/bootstrap-mc.ps1 | iex` (PowerShell) |
 | Bootstrap remote node | `curl -fsSL "$BASE_URL/runtime/nodes/$NODE_ID/install-script" | sh` |
 | Philosophy & vision | [MISSIONCONTROL_PHILOSOPHY.md](MISSIONCONTROL_PHILOSOPHY.md) |
 | API reference | `/api/docs` (Swagger UI, when running locally) |
@@ -91,6 +91,12 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 bash scripts/dev-up.sh
 bash scripts/install-mc.sh
 MC_TOKEN="TopSecret" mc system doctor
+```
+
+```powershell
+.\scripts\install-mc.ps1
+$env:MC_TOKEN="TopSecret"
+mc system doctor
 ```
 
 Optional (auto-load env on new shells):
@@ -270,8 +276,14 @@ Set `MC_LOG_EXPORT_PATH=/abs/path/missioncontrol.jsonl` to export structured eve
 
 Install `mc`:
 
+Linux / macOS:
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/bootstrap-mc.sh)
+```
+
+Windows PowerShell:
+```powershell
+irm https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/bootstrap-mc.ps1 | iex
 ```
 
 Then launch:

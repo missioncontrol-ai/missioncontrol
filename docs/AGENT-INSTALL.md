@@ -11,7 +11,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncon
 
 **Windows** (PowerShell):
 ```powershell
-irm https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/install-mc.ps1 | iex
+irm https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/bootstrap-mc.ps1 | iex
 ```
 
 **Step 2 — Authenticate:**

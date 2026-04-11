@@ -449,7 +449,7 @@ fn inspect_profile(profile: &str, config: &McConfig, repair: bool) -> Result<Cod
 }
 
 fn is_codex_login_available(runtime_home: &Path, profile: &str) -> Result<bool> {
-    let mut cmd = std::process::Command::new("codex");
+    let mut cmd = resolved_command("codex");
     cmd.arg("login")
         .arg("status")
         .env("CODEX_HOME", runtime_home)
@@ -590,7 +590,7 @@ fn run_codex_process(
     config: &McConfig,
     profile: &str,
 ) -> Result<std::process::ExitStatus> {
-    let mut cmd = std::process::Command::new("codex");
+    let mut cmd = resolved_command("codex");
     cmd.args(args);
     cmd.env("CODEX_HOME", runtime_home);
     cmd.env("MC_AGENT_PROFILE", profile);
@@ -605,14 +605,12 @@ fn run_codex_process(
 }
 
 fn which_binary(name: &str) -> Result<PathBuf> {
-    let path_var = std::env::var("PATH").unwrap_or_default();
-    for dir in std::env::split_paths(&path_var) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    bail!("binary `{}` not found on PATH", name)
+    which::which(name).context(format!("binary `{}` not found on PATH", name))
+}
+
+fn resolved_command(name: &str) -> std::process::Command {
+    let binary = which_binary(name).unwrap_or_else(|_| PathBuf::from(name));
+    std::process::Command::new(binary)
 }
 
 fn escape_toml(value: &str) -> String {

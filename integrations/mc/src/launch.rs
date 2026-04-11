@@ -233,7 +233,7 @@ impl AgentDriver for ClaudeDriver {
     }
 
     fn command(&self, extra_args: &[String], _target_mc_home: &Path) -> std::process::Command {
-        let mut cmd = std::process::Command::new("claude");
+        let mut cmd = resolved_command("claude");
         cmd.args(extra_args);
         cmd
     }
@@ -581,7 +581,7 @@ impl AgentDriver for GeminiDriver {
     }
 
     fn command(&self, extra_args: &[String], _target_mc_home: &Path) -> std::process::Command {
-        let mut cmd = std::process::Command::new("gemini");
+        let mut cmd = resolved_command("gemini");
         cmd.args(extra_args);
         cmd
     }
@@ -669,7 +669,7 @@ impl AgentDriver for OpenClawDriver {
 
     fn command(&self, extra_args: &[String], target_mc_home: &Path) -> std::process::Command {
         let config = target_mc_home.join("config").join("openclaw.acp.json");
-        let mut cmd = std::process::Command::new("openclaw");
+        let mut cmd = resolved_command("openclaw");
         cmd.arg("--acp-config").arg(config);
         cmd.args(extra_args);
         cmd
@@ -699,7 +699,7 @@ impl AgentDriver for CustomDriver {
 
     fn command(&self, extra_args: &[String], target_mc_home: &Path) -> std::process::Command {
         let config = target_mc_home.join("config").join("custom.acp.json");
-        let mut cmd = std::process::Command::new("custom");
+        let mut cmd = resolved_command("custom");
         cmd.arg("--acp-config").arg(config);
         cmd.args(extra_args);
         cmd
@@ -1443,14 +1443,12 @@ fn check_binary(driver: &dyn AgentDriver) -> Result<()> {
 }
 
 fn which_binary(name: &str) -> Result<PathBuf> {
-    let path_var = std::env::var_os("PATH").unwrap_or_default();
-    for dir in std::env::split_paths(&path_var) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    Err(anyhow!("not found on PATH"))
+    which::which(name).map_err(|_| anyhow!("not found on PATH"))
+}
+
+fn resolved_command(name: &str) -> std::process::Command {
+    let binary = which_binary(name).unwrap_or_else(|_| PathBuf::from(name));
+    std::process::Command::new(binary)
 }
 
 async fn fetch_and_stage_agent_config(

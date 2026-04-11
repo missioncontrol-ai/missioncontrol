@@ -309,7 +309,7 @@ async fn handle_up(args: MeshUpArgs, config: &McConfig) -> Result<()> {
         if install {
             build_and_install_mc_mesh()?;
         } else {
-            println!("Skipped. Run `cargo install` from mc-mesh/ to install manually.");
+            println!("Skipped. Run `cargo install` from integrations/mc-mesh/ to install manually.");
             return Ok(());
         }
     }
@@ -1201,6 +1201,7 @@ async fn handle_watch(args: MeshWatchArgs, client: &MissionControlClient) -> Res
 // Attach (PTY proxy via local daemon unix socket)
 // ---------------------------------------------------------------------------
 
+#[cfg(unix)]
 async fn handle_attach(args: MeshAttachArgs, client: &MissionControlClient) -> Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
@@ -1283,6 +1284,11 @@ async fn handle_attach(args: MeshAttachArgs, client: &MissionControlClient) -> R
     }
 
     Ok(())
+}
+
+#[cfg(not(unix))]
+async fn handle_attach(_args: MeshAttachArgs, _client: &MissionControlClient) -> Result<()> {
+    anyhow::bail!("`mc mesh attach` is currently only supported on Unix-like hosts");
 }
 
 /// Auto-detect whether `target` is a task ID or an agent ID.
@@ -1454,19 +1460,20 @@ fn build_and_install_mc_mesh() -> Result<()> {
         println!("mc-mesh installed.");
     } else {
         println!("Could not locate mc-mesh workspace. Install manually:");
-        println!("  cd mc-mesh && cargo install --path crates/mc-mesh");
+        println!("  cd integrations/mc-mesh && cargo install --path crates/mc-mesh");
     }
     Ok(())
 }
 
 fn locate_mc_mesh_workspace() -> Option<std::path::PathBuf> {
-    // Walk up from current exe to find mc-mesh/Cargo.toml.
+    // Walk up from current exe to find the mc-mesh workspace in development.
     let mut dir = std::env::current_exe().ok()?;
     for _ in 0..8 {
         dir = dir.parent()?.to_path_buf();
-        let candidate = dir.join("mc-mesh").join("Cargo.toml");
+        let relative = "integrations/mc-mesh";
+        let candidate = dir.join(relative).join("Cargo.toml");
         if candidate.exists() {
-            return Some(dir.join("mc-mesh"));
+            return Some(dir.join(relative));
         }
     }
     None
