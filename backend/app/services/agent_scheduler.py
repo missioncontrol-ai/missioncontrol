@@ -5,10 +5,11 @@ and exposes add/remove helpers for dynamic management by the scheduled_jobs rout
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -16,6 +17,7 @@ from apscheduler.triggers.cron import CronTrigger
 logger = logging.getLogger(__name__)
 
 _scheduler: AsyncIOScheduler | None = None
+_evaluator_task: Optional[asyncio.Task] = None
 
 
 def get_scheduler() -> AsyncIOScheduler:
@@ -29,12 +31,49 @@ def _make_apscheduler_id(job_id: int) -> str:
     return f"scheduled-agent-job-{job_id}"
 
 
+def _create_mesh_task_from_spec(db, spec: dict, owner_subject: str) -> None:
+    """Create a MeshTask from a spec dict and publish the mesh event."""
+    import uuid
+    from app.models import MeshTask
+    from app.services.mesh_events import publish_task_event
+
+    kluster_id = spec.get("kluster_id", "")
+    mission_id = spec.get("mission_id", "")
+    task_id = str(uuid.uuid4())
+    task = MeshTask(
+        id=task_id,
+        kluster_id=kluster_id,
+        mission_id=mission_id,
+        title=spec.get("title", "Scheduled task"),
+        description=spec.get("description", ""),
+        claim_policy=spec.get("claim_policy", "first_claim"),
+        priority=spec.get("priority", 0),
+        required_capabilities=json.dumps(spec.get("required_capabilities", [])),
+        status="ready",
+        created_by_subject=owner_subject,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(task)
+    db.commit()
+    publish_task_event(
+        event_type="task_created",
+        task_id=task_id,
+        kluster_id=kluster_id,
+        mission_id=mission_id,
+        status="ready",
+    )
+    logger.info("mesh_task_created_from_spec task_id=%s kluster_id=%s", task_id, kluster_id)
+
+
 async def _run_job(job_id: int) -> None:
-    """Execute a scheduled agent job: create AiSession → submit initial prompt → update run metadata."""
-    from app.ai_console.gateway import get_gateway
+    """Execute a scheduled agent job.
+
+    If target_type == 'mesh_task' and target_spec_json is set, creates a MeshTask.
+    Otherwise falls back to the original ai_session path.
+    """
     from app.db import get_session
-    from app.models import AiSession, AiTurn, ScheduledAgentJob
-    from app.services.ids import new_hash_id
+    from app.models import ScheduledAgentJob
     from sqlmodel import select
 
     with get_session() as db:
@@ -43,6 +82,26 @@ async def _run_job(job_id: int) -> None:
         ).first()
         if job is None or not job.enabled:
             return
+
+        target_type = getattr(job, "target_type", "ai_session") or "ai_session"
+
+        if target_type == "mesh_task" and job.target_spec_json:
+            try:
+                spec = json.loads(job.target_spec_json)
+                _create_mesh_task_from_spec(db, spec, job.owner_subject)
+                job.last_run_at = datetime.utcnow()
+                job.updated_at = datetime.utcnow()
+                db.add(job)
+                db.commit()
+                logger.info("scheduled_job_mesh_task_complete job_id=%s", job_id)
+            except Exception as exc:
+                logger.error("scheduled_job_mesh_task_error job_id=%s error=%s", job_id, exc)
+            return
+
+        # ai_session path (original)
+        from app.ai_console.gateway import get_gateway
+        from app.models import AiSession, AiTurn
+        from app.services.ids import new_hash_id
 
         policy_dict: dict[str, Any] = {}
         try:
@@ -131,7 +190,7 @@ def start_scheduler() -> None:
     try:
         with get_session() as db:
             jobs = db.exec(
-                select(ScheduledAgentJob).where(ScheduledAgentJob.enabled == True)
+                select(ScheduledAgentJob).where(ScheduledAgentJob.enabled == True)  # noqa: E712
             ).all()
             for job in jobs:
                 try:
@@ -153,3 +212,90 @@ def stop_scheduler() -> None:
         logger.info("agent_scheduler_stopped")
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Event trigger evaluator
+# ---------------------------------------------------------------------------
+
+
+def _predicate_matches(predicate: dict, event: dict) -> bool:
+    """Returns True if all predicate key/value pairs match the event."""
+    return all(event.get(k) == v for k, v in predicate.items())
+
+
+async def _evaluate_triggers(event: dict) -> None:
+    """Check all active EventTriggers against this event."""
+    from app.models import EventTrigger
+    from app.db import get_session
+    from sqlmodel import select
+
+    with get_session() as session:
+        triggers = list(session.exec(
+            select(EventTrigger).where(
+                EventTrigger.active == True,  # noqa: E712
+                EventTrigger.event_type == event.get("event"),
+            )
+        ).all())
+
+        now = datetime.utcnow()
+        for trigger in triggers:
+            # Check cooldown
+            if trigger.last_fired_at and trigger.cooldown_seconds:
+                elapsed = (now - trigger.last_fired_at).total_seconds()
+                if elapsed < trigger.cooldown_seconds:
+                    continue
+
+            # Check predicate
+            if trigger.predicate_json:
+                try:
+                    predicate = json.loads(trigger.predicate_json)
+                    if not _predicate_matches(predicate, event):
+                        continue
+                except Exception:
+                    continue
+
+            # Fire the trigger
+            try:
+                spec = json.loads(trigger.target_spec_json)
+                if trigger.target_type == "mesh_task":
+                    _create_mesh_task_from_spec(session, spec, trigger.owner_subject)
+                # ai_session trigger type: future work
+
+                trigger.last_fired_at = now
+                session.add(trigger)
+                session.commit()
+                logger.info("EventTrigger %s fired on event %s", trigger.id, event.get("event"))
+            except Exception as e:
+                logger.error("EventTrigger %s failed to fire: %s", trigger.id, e)
+
+
+def start_event_trigger_listener() -> None:
+    """Subscribe to the mesh event bus and evaluate triggers on each event."""
+    from app.services.mesh_events import subscribe
+
+    q = subscribe("__all_events__")
+
+    async def loop():
+        while True:
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=5.0)
+                await _evaluate_triggers(event)
+            except asyncio.TimeoutError:
+                pass
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Event trigger listener error: %s", e)
+
+    global _evaluator_task
+    _evaluator_task = asyncio.create_task(loop(), name="event-trigger-evaluator")
+    logger.info("event_trigger_listener_started")
+
+
+def stop_event_trigger_listener() -> None:
+    """Cancel the event trigger listener task."""
+    global _evaluator_task
+    if _evaluator_task and not _evaluator_task.done():
+        _evaluator_task.cancel()
+    _evaluator_task = None

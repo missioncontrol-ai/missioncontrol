@@ -55,6 +55,7 @@ from app.routers import (
     evolve,
     ai,
     scheduled_jobs,
+    event_triggers,
     persistence,
     remotectl,
     hooks,
@@ -255,8 +256,9 @@ def on_startup():
     if mqtt_service is not None:
         mqtt_service.connect()
     app.state.mqtt = mqtt_service
-    from app.services.agent_scheduler import start_scheduler
+    from app.services.agent_scheduler import start_scheduler, start_event_trigger_listener
     start_scheduler()
+    start_event_trigger_listener()
     from app.services.work_watchdog import start_watchdog
     start_watchdog()
     from app.db import engine as _engine
@@ -271,7 +273,8 @@ def on_shutdown():
     mqtt_service = getattr(app.state, "mqtt", None)
     if mqtt_service is not None:
         mqtt_service.disconnect()
-    from app.services.agent_scheduler import stop_scheduler
+    from app.services.agent_scheduler import stop_scheduler, stop_event_trigger_listener
+    stop_event_trigger_listener()
     stop_scheduler()
     from app.services.work_watchdog import stop_watchdog
     stop_watchdog()
@@ -701,6 +704,7 @@ app.include_router(profiles.router)
 app.include_router(evolve.router)
 app.include_router(ai.router)
 app.include_router(scheduled_jobs.router)
+app.include_router(event_triggers.router, prefix="/event-triggers", tags=["event-triggers"])
 app.include_router(persistence.router)
 app.include_router(auth_sessions.router)
 app.include_router(oidc_web.router)

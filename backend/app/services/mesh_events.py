@@ -65,9 +65,10 @@ def publish_task_event(
         "status": status,
         **extra,
     }
-    # Fan out to kluster and mission channels
+    # Fan out to kluster, mission, and all-events channels
     _publish_local(f"kluster:{kluster_id}", event)
     _publish_local(f"mission:{mission_id}", event)
+    _publish_local("__all_events__", event)
 
     # Postgres NOTIFY (if configured)
     _notify_postgres(event)
