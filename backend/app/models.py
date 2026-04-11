@@ -1028,4 +1028,31 @@ class RunCheckpoint(SQLModel, table=True):
     # tool_call | turn | review | publish | manual
     kind: str
     payload_json: str = Field(sa_column=Column(Text))
+
+
+class ReviewGate(SQLModel, table=True):
+    """Approval checkpoint that can block a MeshTask from completing."""
+
+    __tablename__ = "reviewgate"
+
+    id: Optional[str] = Field(default=None, primary_key=True)
+    owner_subject: str = Field(index=True)
+    mesh_task_id: str = Field(
+        sa_column=Column(String, ForeignKey("meshtask.id"), index=True, nullable=False)
+    )
+    run_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("agentrun.id"), index=True, nullable=True),
+    )
+    # pre_tool | pre_publish | post_task | custom
+    gate_type: str
+    # auto | peer_agent | human | policy
+    required_approvals: str = Field(default="human")
+    # pending | approved | rejected | expired
+    status: str = Field(default="pending")
+    approval_request_id: Optional[str] = Field(default=None, nullable=True)
+    ai_pending_action_id: Optional[str] = Field(default=None, nullable=True)
+    policy_rule_id: Optional[str] = Field(default=None, nullable=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    resolved_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)

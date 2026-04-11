@@ -29,6 +29,7 @@ from app.models import (
     MeshProgressEvent,
     MeshTask,
     MeshTaskArtifact,
+    ReviewGate,
 )
 from app.services.authz import actor_subject_from_request
 
@@ -524,6 +525,25 @@ def complete_task(task_id: str, body: CompleteBody = CompleteBody()):
         # Lease mismatch check
         if task.claim_lease_id and body.claim_lease_id and task.claim_lease_id != body.claim_lease_id:
             raise HTTPException(status_code=409, detail="Lease mismatch: task has been reclaimed")
+        # Check for pending review gates
+        pending_gates = session.exec(
+            select(ReviewGate).where(
+                ReviewGate.mesh_task_id == task_id,
+                ReviewGate.status == "pending",
+            )
+        ).all()
+
+        if pending_gates:
+            task.status = "waiting_review"
+            task.updated_at = datetime.utcnow()
+            session.add(task)
+            session.commit()
+            return {
+                "status": "waiting_review",
+                "pending_gates": [g.id for g in pending_gates],
+                "message": "Task pending review gate approval",
+            }
+
         task.status = "finished"
         task.result_artifact_id = body.result_artifact_id
         task.lease_expires_at = None
@@ -1099,3 +1119,115 @@ async def mission_stream(websocket: WebSocket, mission_id: str):
             await _aio.sleep(1)
     except WebSocketDisconnect:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Review Gate endpoints
+# ---------------------------------------------------------------------------
+
+
+class GateCreate(BaseModel):
+    gate_type: str
+    required_approvals: str = "human"
+    run_id: Optional[str] = None
+    approval_request_id: Optional[str] = None
+
+
+class GateResolve(BaseModel):
+    decision: str  # approved | rejected
+    notes: str = ""
+
+
+def _gate_to_dict(gate: ReviewGate) -> dict:
+    return {
+        "id": gate.id,
+        "owner_subject": gate.owner_subject,
+        "mesh_task_id": gate.mesh_task_id,
+        "run_id": gate.run_id,
+        "gate_type": gate.gate_type,
+        "required_approvals": gate.required_approvals,
+        "status": gate.status,
+        "approval_request_id": gate.approval_request_id,
+        "ai_pending_action_id": gate.ai_pending_action_id,
+        "policy_rule_id": gate.policy_rule_id,
+        "created_at": gate.created_at,
+        "resolved_at": gate.resolved_at,
+    }
+
+
+@router.post("/tasks/{task_id}/gates", status_code=201)
+def create_gate(task_id: str, body: GateCreate, request: Request):
+    subject = actor_subject_from_request(request)
+    with get_session() as session:
+        task = session.get(MeshTask, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        gate = ReviewGate(
+            id=str(uuid.uuid4()),
+            owner_subject=subject,
+            mesh_task_id=task_id,
+            run_id=body.run_id,
+            gate_type=body.gate_type,
+            required_approvals=body.required_approvals,
+            status="pending",
+            approval_request_id=body.approval_request_id,
+            created_at=datetime.utcnow(),
+        )
+        session.add(gate)
+        session.commit()
+        session.refresh(gate)
+        return _gate_to_dict(gate)
+
+
+@router.get("/tasks/{task_id}/gates")
+def list_gates(task_id: str, request: Request):
+    subject = actor_subject_from_request(request)
+    with get_session() as session:
+        task = session.get(MeshTask, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        gates = session.exec(
+            select(ReviewGate)
+            .where(ReviewGate.mesh_task_id == task_id)
+            .where(ReviewGate.owner_subject == subject)
+        ).all()
+        return [_gate_to_dict(g) for g in gates]
+
+
+@router.post("/tasks/{task_id}/gates/{gate_id}/resolve")
+def resolve_gate(task_id: str, gate_id: str, body: GateResolve, request: Request):
+    if body.decision not in ("approved", "rejected"):
+        raise HTTPException(status_code=422, detail="decision must be 'approved' or 'rejected'")
+    with get_session() as session:
+        gate = session.get(ReviewGate, gate_id)
+        if gate is None or gate.mesh_task_id != task_id:
+            raise HTTPException(status_code=404, detail="gate not found")
+        gate.status = body.decision
+        gate.resolved_at = datetime.utcnow()
+        session.add(gate)
+
+        # After resolving, check task transition
+        task = session.get(MeshTask, task_id)
+        if task and task.status == "waiting_review":
+            all_gates = session.exec(
+                select(ReviewGate).where(ReviewGate.mesh_task_id == task_id)
+            ).all()
+            if body.decision == "rejected":
+                task.status = "failed"
+                task.updated_at = datetime.utcnow()
+                session.add(task)
+            else:
+                # Check if all gates are now approved or expired
+                non_final = [
+                    g for g in all_gates
+                    if g.id != gate_id and g.status not in ("approved", "rejected", "expired")
+                ]
+                if not non_final:
+                    task.status = "finished"
+                    task.updated_at = datetime.utcnow()
+                    session.add(task)
+                    _unblock_dependents(session, task)
+
+        session.commit()
+        session.refresh(gate)
+        return _gate_to_dict(gate)
