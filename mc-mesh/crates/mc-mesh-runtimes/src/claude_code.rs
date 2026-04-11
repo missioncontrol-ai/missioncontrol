@@ -52,12 +52,9 @@ fn detect_version() -> String {
 }
 
 /// Build the prompt to send to claude from a TaskSpec.
+/// Uses the shared builder which injects agent profile and mission roster.
 fn build_prompt(task: &TaskSpec) -> String {
-    if task.description.is_empty() {
-        task.title.clone()
-    } else {
-        format!("{}\n\n{}", task.title, task.description)
-    }
+    crate::shared::build_prompt(task)
 }
 
 /// Parse a single stream-json line into zero or more ProgressEvents.

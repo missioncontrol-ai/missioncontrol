@@ -79,12 +79,44 @@ class MeshTaskRead(BaseModel):
     updated_at: datetime
 
 
+class AgentProfile(BaseModel):
+    """User-defined agent role and operating parameters."""
+    name: Optional[str] = None
+    role: Optional[str] = None
+    description: Optional[str] = None
+    instructions: Optional[str] = None
+    scope: Optional[dict] = None        # {directories: [...], repos: [...], read_only: bool}
+    permissions: Optional[dict] = None  # {can_create_tasks, can_assign_to, allowed_tools, ...}
+    constraints: Optional[list] = None  # list of constraint strings or {id, description} dicts
+
+
+class AgentMachineInfo(BaseModel):
+    """Host machine info auto-detected by mc-mesh at enrollment."""
+    hostname: Optional[str] = None
+    os: Optional[str] = None
+    cpu_cores: Optional[int] = None
+    ram_gb: Optional[float] = None
+    disk_free_gb: Optional[float] = None
+    working_dir: Optional[str] = None
+    installed_tools: Optional[list] = None  # [{name, version}]
+
+
+class AgentRuntimeInfo(BaseModel):
+    """Runtime metadata reported by mc-mesh."""
+    model: Optional[str] = None
+    context_window: Optional[int] = None
+    available_tools: Optional[list] = None  # tool names this runtime exposes
+
+
 class MeshAgentEnroll(BaseModel):
     runtime_kind: str  # claude_code | codex | gemini | custom
     runtime_version: str = ""
     capabilities: list[str] = PField(default_factory=list)
     labels: dict = PField(default_factory=dict)
     node_id: Optional[str] = None
+    profile: Optional[AgentProfile] = None
+    machine: Optional[AgentMachineInfo] = None
+    runtime: Optional[AgentRuntimeInfo] = None
 
 
 class MeshAgentRead(BaseModel):
@@ -99,6 +131,9 @@ class MeshAgentRead(BaseModel):
     current_task_id: Optional[str]
     enrolled_at: datetime
     last_heartbeat_at: Optional[datetime]
+    profile: Optional[dict] = None
+    machine: Optional[dict] = None
+    runtime: Optional[dict] = None
 
 
 class MeshProgressEventCreate(BaseModel):
@@ -171,6 +206,9 @@ def _agent_to_read(a: MeshAgent) -> dict:
         "current_task_id": a.current_task_id,
         "enrolled_at": a.enrolled_at,
         "last_heartbeat_at": a.last_heartbeat_at,
+        "profile": json.loads(a.profile_json) if a.profile_json else None,
+        "machine": json.loads(a.machine_json) if a.machine_json else None,
+        "runtime": json.loads(a.runtime_json) if a.runtime_json else None,
     }
 
 
@@ -568,6 +606,9 @@ def enroll_agent(mission_id: str, body: MeshAgentEnroll, request: Request):
             status="offline",
             enrolled_by_subject=subject,
             enrolled_at=datetime.utcnow(),
+            profile_json=json.dumps(body.profile.model_dump(exclude_none=True)) if body.profile else None,
+            machine_json=json.dumps(body.machine.model_dump(exclude_none=True)) if body.machine else None,
+            runtime_json=json.dumps(body.runtime.model_dump(exclude_none=True)) if body.runtime else None,
         )
         session.add(agent)
         session.commit()
@@ -612,6 +653,61 @@ def set_agent_status(agent_id: str, status: str):
         session.add(agent)
         session.commit()
         return _agent_to_read(agent)
+
+
+@router.patch("/agents/{agent_id}/profile")
+def update_agent_profile(agent_id: str, profile: AgentProfile):
+    """Update (replace) the user-defined profile for an agent."""
+    with get_session() as session:
+        agent = session.get(MeshAgent, agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        agent.profile_json = json.dumps(profile.model_dump(exclude_none=True))
+        session.add(agent)
+        session.commit()
+        return _agent_to_read(agent)
+
+
+@router.get("/agents/{agent_id}")
+def get_agent(agent_id: str):
+    """Get full detail for a single agent including profile, machine, and runtime info."""
+    with get_session() as session:
+        agent = session.get(MeshAgent, agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        return _agent_to_read(agent)
+
+
+@router.get("/missions/{mission_id}/roster")
+def get_mission_roster(mission_id: str):
+    """Return a concise roster of all agents in a mission, suitable for injecting into agent prompts.
+
+    Each entry includes name/role from profile, capabilities, status, and machine summary.
+    This is what agents read to decide who to delegate work to.
+    """
+    with get_session() as session:
+        agents = session.exec(
+            select(MeshAgent).where(MeshAgent.mission_id == mission_id)
+        ).all()
+        roster = []
+        for a in agents:
+            profile = json.loads(a.profile_json) if a.profile_json else {}
+            machine = json.loads(a.machine_json) if a.machine_json else {}
+            caps = json.loads(a.capabilities or "[]")
+            roster.append({
+                "id": a.id,
+                "runtime_kind": a.runtime_kind,
+                "status": a.status,
+                "name": profile.get("name") or a.runtime_kind,
+                "role": profile.get("role"),
+                "description": profile.get("description"),
+                "scope": profile.get("scope"),
+                "constraints": profile.get("constraints"),
+                "capabilities": caps,
+                "hostname": machine.get("hostname"),
+                "os": machine.get("os"),
+            })
+        return roster
 
 
 # ---------------------------------------------------------------------------

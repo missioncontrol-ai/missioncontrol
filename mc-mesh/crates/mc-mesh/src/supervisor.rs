@@ -53,6 +53,9 @@ impl Supervisor {
             backend_url: self.backend_url.clone(),
             backend_token: self.token.clone(),
             env,
+            // Profile and roster are injected per-task in the task loop, not at launch time.
+            profile: None,
+            roster: vec![],
         };
 
         let handle = runtime.launch(ctx).await?;

@@ -786,6 +786,11 @@ class MeshAgent(SQLModel, table=True):
     """Agent runtime enrolled in a mission's durable pool.
 
     Agents enroll at the mission level and persist across klusters / tasks.
+
+    Three JSON blobs capture the full agent picture:
+    - profile_json: user-defined role, instructions, scope, constraints, permissions
+    - machine_json: auto-detected by mc-mesh at enrollment (host, OS, CPU, RAM, tools)
+    - runtime_json: runtime metadata reported by mc-mesh (model, context_window, etc.)
     """
 
     id: Optional[str] = Field(default=None, primary_key=True)
@@ -804,6 +809,18 @@ class MeshAgent(SQLModel, table=True):
     enrolled_by_subject: str = ""
     enrolled_at: datetime = Field(default_factory=datetime.utcnow)
     last_heartbeat_at: Optional[datetime] = None
+
+    # --- Agent profile (user-defined) ---
+    # Keys: name, role, description, instructions, scope, permissions, constraints
+    profile_json: Optional[str] = Field(default=None, sa_column=Column(Text))
+
+    # --- Machine info (auto-detected by mc-mesh daemon at enrollment) ---
+    # Keys: hostname, os, cpu_cores, ram_gb, disk_free_gb, working_dir, installed_tools
+    machine_json: Optional[str] = Field(default=None, sa_column=Column(Text))
+
+    # --- Runtime metadata (reported by mc-mesh) ---
+    # Keys: model, context_window, available_tools
+    runtime_json: Optional[str] = Field(default=None, sa_column=Column(Text))
 
 
 class MeshProgressEvent(SQLModel, table=True):

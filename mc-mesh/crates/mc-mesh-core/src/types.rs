@@ -32,7 +32,7 @@ impl Capability {
     }
 }
 
-/// Spec for a task as received from the backend.
+/// Spec for a task as received from the backend, enriched with agent context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSpec {
     pub id: String,
@@ -44,6 +44,12 @@ pub struct TaskSpec {
     pub required_capabilities: Vec<String>,
     pub produces: serde_json::Value,
     pub consumes: serde_json::Value,
+    /// This agent's own profile (name, role, instructions, scope, constraints).
+    /// Injected by the daemon before calling inject_task.
+    pub agent_profile: Option<serde_json::Value>,
+    /// Concise roster of other agents in this mission.
+    /// Each entry: {id, name, role, description, scope, capabilities, status, hostname}.
+    pub mission_roster: Vec<serde_json::Value>,
 }
 
 /// Context passed to `AgentRuntime::launch`.
@@ -59,6 +65,12 @@ pub struct LaunchContext {
     pub backend_token: String,
     /// Environment variables to inject.
     pub env: Vec<(String, String)>,
+    /// This agent's profile (name, role, instructions, scope, constraints).
+    /// Injected into every task prompt so the agent knows who it is.
+    pub profile: Option<serde_json::Value>,
+    /// Concise roster of other agents in the mission.
+    /// Injected into every task prompt so the agent can reason about delegation.
+    pub roster: Vec<serde_json::Value>,
 }
 
 /// A handle to a running agent runtime process.

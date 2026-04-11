@@ -87,6 +87,8 @@ pub enum MeshAgentCommand {
     Ls(AgentLsArgs),
     Enroll(AgentEnrollArgs),
     Attach(AgentAttachArgs),
+    /// Set or update an agent's profile (role, instructions, scope, constraints).
+    Profile(AgentProfileArgs),
 }
 
 #[derive(Args, Debug)]
@@ -105,6 +107,25 @@ pub struct AgentEnrollArgs {
     pub runtime: String,
     #[arg(long)]
     pub node: Option<String>,
+    /// Path to a YAML or JSON profile file for this agent.
+    #[arg(long)]
+    pub profile: Option<std::path::PathBuf>,
+}
+
+#[derive(Args, Debug)]
+pub struct AgentProfileArgs {
+    /// Agent ID to update.
+    pub agent_id: String,
+    /// Path to a YAML or JSON file containing the profile.
+    #[arg(long)]
+    pub file: Option<std::path::PathBuf>,
+    /// Quick single-field overrides: --name, --role, --instructions
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long)]
+    pub role: Option<String>,
+    #[arg(long)]
+    pub instructions: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -546,12 +567,36 @@ async fn handle_agent(cmd: MeshAgentCommand, client: &MissionControlClient) -> R
             Ok(())
         }
         MeshAgentCommand::Enroll(a) => {
-            let body = json!({
+            // Auto-detect machine info.
+            let machine = detect_machine_info();
+
+            // Load optional profile from file.
+            let profile: Option<Value> = match &a.profile {
+                Some(path) => {
+                    let raw = std::fs::read_to_string(path)
+                        .with_context(|| format!("reading profile file {}", path.display()))?;
+                    let v: Value = if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                        serde_json::from_str(&raw)?
+                    } else {
+                        serde_yaml::from_str(&raw)
+                            .context("parsing profile as YAML")?
+                    };
+                    Some(v)
+                }
+                None => None,
+            };
+
+            let mut body = json!({
                 "runtime_kind": a.runtime.replace('-', "_"),
-                "capabilities": [],
+                "capabilities": default_capabilities_for(&a.runtime),
                 "labels": {},
                 "node_id": a.node,
+                "machine": machine,
             });
+            if let Some(p) = profile {
+                body["profile"] = p;
+            }
+
             let path = format!("/work/missions/{}/agents/enroll", a.mission);
             let result = client.post_json(&path, &body).await?;
             let agent_id = result.get("id").and_then(|v| v.as_str()).unwrap_or("?");
@@ -568,10 +613,14 @@ async fn handle_agent(cmd: MeshAgentCommand, client: &MissionControlClient) -> R
                 a.mission,
                 a.runtime.replace('-', "_")
             );
+            println!("\nSet a profile: mc mesh agent profile {agent_id} --role \"...\" --name \"...\"");
             Ok(())
         }
         MeshAgentCommand::Attach(a) => {
             handle_attach(MeshAttachArgs { target: a.agent_id }, client).await
+        }
+        MeshAgentCommand::Profile(a) => {
+            handle_agent_profile(a, client).await
         }
     }
 }
@@ -582,16 +631,154 @@ fn print_agents(agents: &Value) {
             println!("No agents enrolled.");
             return;
         }
-        println!("{:<38} {:<12} {:<10} {}", "ID", "RUNTIME", "STATUS", "TASK");
-        println!("{}", "-".repeat(75));
+        println!(
+            "{:<38} {:<14} {:<10} {:<20} {}",
+            "ID", "RUNTIME", "STATUS", "NAME / ROLE", "TASK"
+        );
+        println!("{}", "-".repeat(95));
         for a in arr {
             let id = a["id"].as_str().unwrap_or("?");
             let rt = a["runtime_kind"].as_str().unwrap_or("?");
             let st = a["status"].as_str().unwrap_or("?");
             let task = a["current_task_id"].as_str().unwrap_or("-");
-            println!("{id:<38} {rt:<12} {st:<10} {task}");
+            let name_role = {
+                let name = a["profile"]["name"].as_str().unwrap_or("");
+                let role = a["profile"]["role"].as_str().unwrap_or("");
+                match (name, role) {
+                    ("", "") => "-".to_string(),
+                    (n, "") => n.to_string(),
+                    ("", r) => r.to_string(),
+                    (n, r) => format!("{n} / {r}"),
+                }
+            };
+            println!("{id:<38} {rt:<14} {st:<10} {name_role:<20} {task}");
         }
     }
+}
+
+/// Detect host machine info to send at enrollment.
+fn detect_machine_info() -> Value {
+    let hostname = std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()));
+
+    let os = {
+        let kernel = std::process::Command::new("uname")
+            .arg("-sr")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        // Try /etc/os-release pretty name on Linux.
+        let pretty = std::fs::read_to_string("/etc/os-release")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.starts_with("PRETTY_NAME="))
+                    .and_then(|l| l.strip_prefix("PRETTY_NAME="))
+                    .map(|v| v.trim_matches('"').to_string())
+            });
+        match pretty {
+            Some(p) if !kernel.is_empty() => format!("{p} ({kernel})"),
+            Some(p) => p,
+            None => kernel,
+        }
+    };
+
+    let cpu_cores: u32 = std::process::Command::new("nproc")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+
+    let work_dir = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".missioncontrol")
+        .join("mc-mesh")
+        .join("work");
+
+    // Detect key tools.
+    let tools: Vec<Value> = [
+        ("claude", &["--version"][..]),
+        ("codex",  &["--version"]),
+        ("gemini", &["version"]),
+        ("git",    &["--version"]),
+        ("cargo",  &["--version"]),
+        ("docker", &["--version"]),
+    ]
+    .iter()
+    .filter_map(|(name, args)| {
+        let out = std::process::Command::new(name).args(*args).output().ok()?;
+        let raw = if out.stdout.is_empty() { out.stderr } else { out.stdout };
+        let version = String::from_utf8_lossy(&raw)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if version.is_empty() { return None; }
+        Some(json!({ "name": name, "version": version }))
+    })
+    .collect();
+
+    json!({
+        "hostname": hostname,
+        "os": os,
+        "cpu_cores": cpu_cores,
+        "working_dir": work_dir.display().to_string(),
+        "installed_tools": tools,
+    })
+}
+
+/// Default capabilities for a runtime kind.
+fn default_capabilities_for(runtime: &str) -> Vec<&'static str> {
+    match runtime.replace('-', "_").as_str() {
+        "claude_code" => vec!["claude_code", "code.read", "code.edit", "code.plan", "test.run"],
+        "codex"       => vec!["codex", "code.read", "code.edit", "test.run"],
+        "gemini"      => vec!["gemini", "code.read", "code.plan"],
+        _             => vec![],
+    }
+}
+
+async fn handle_agent_profile(
+    a: AgentProfileArgs,
+    client: &MissionControlClient,
+) -> Result<()> {
+    // Start from file if provided, else empty object.
+    let mut profile: serde_json::Map<String, Value> = match &a.file {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let v: Value = if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                serde_json::from_str(&raw)?
+            } else {
+                serde_yaml::from_str(&raw).context("parsing profile as YAML")?
+            };
+            v.as_object().cloned().unwrap_or_default()
+        }
+        None => serde_json::Map::new(),
+    };
+
+    // CLI overrides take precedence.
+    if let Some(name) = a.name { profile.insert("name".into(), Value::String(name)); }
+    if let Some(role) = a.role { profile.insert("role".into(), Value::String(role)); }
+    if let Some(inst) = a.instructions { profile.insert("instructions".into(), Value::String(inst)); }
+
+    if profile.is_empty() {
+        anyhow::bail!("Provide --file or at least one of --name, --role, --instructions");
+    }
+
+    let path = format!("/work/agents/{}/profile", a.agent_id);
+    let result = client.patch_json(&path, &Value::Object(profile)).await?;
+    let name = result["profile"]["name"].as_str().unwrap_or("-");
+    let role = result["profile"]["role"].as_str().unwrap_or("-");
+    println!("Updated profile for {} — name: {name}, role: {role}", a.agent_id);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

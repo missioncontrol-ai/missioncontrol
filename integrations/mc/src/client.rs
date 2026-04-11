@@ -111,6 +111,20 @@ impl MissionControlClient {
             .context("unable to parse json response")
     }
 
+    pub async fn patch_json(&self, path: &str, body: &Value) -> Result<Value> {
+        let resp = self.request_builder(Method::PATCH, path)?;
+        let resp = resp
+            .json(body)
+            .send()
+            .await
+            .context("request failed")?
+            .error_for_status()
+            .context("unexpected status code")?;
+        resp.json::<Value>()
+            .await
+            .context("unable to parse json response")
+    }
+
     pub async fn put_json(&self, path: &str, body: &Value) -> Result<Value> {
         let resp = self.request_builder(Method::PUT, path)?;
         let resp = resp

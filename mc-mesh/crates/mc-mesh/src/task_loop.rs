@@ -149,6 +149,21 @@ pub async fn run_for_agent(
             )
             .await;
 
+        // Fetch agent profile and mission roster for context injection.
+        let agent_profile = client.get_agent(&agent_id).await
+            .ok()
+            .and_then(|v| v.get("profile").cloned())
+            .filter(|v| !v.is_null());
+
+        let mission_roster = client.get_mission_roster(&mission_id).await
+            .unwrap_or_default()
+            .into_iter()
+            // Exclude this agent from the roster it sees (it knows itself already).
+            .filter(|entry| {
+                entry.get("id").and_then(|v| v.as_str()) != Some(&agent_id)
+            })
+            .collect::<Vec<_>>();
+
         // Build the TaskSpec.
         let task_spec = TaskSpec {
             id: task_record.id.clone(),
@@ -160,6 +175,8 @@ pub async fn run_for_agent(
             required_capabilities: task_record.required_capabilities.clone(),
             produces: serde_json::Value::Object(Default::default()),
             consumes: serde_json::Value::Object(Default::default()),
+            agent_profile,
+            mission_roster,
         };
 
         // Inject and stream progress.

@@ -67,11 +67,7 @@ fn detect_version() -> String {
 }
 
 fn build_prompt(task: &TaskSpec) -> String {
-    if task.description.is_empty() {
-        task.title.clone()
-    } else {
-        format!("{}\n\n{}", task.title, task.description)
-    }
+    crate::shared::build_prompt(task)
 }
 
 /// Classify a Gemini CLI output line into a ProgressEvent.
