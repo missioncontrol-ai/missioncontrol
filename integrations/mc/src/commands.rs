@@ -9,7 +9,7 @@ use crate::{
     daemon::{self, DaemonArgs},
     drift, evolve, governance, launch, maintenance, mcp_server, mcp_tools, mesh, ops,
     output::{self, OutputMode},
-    remote, runtime,
+    remote, runtime, gemini,
     schema_pack::SchemaPack,
     secrets, update,
 };
@@ -96,6 +96,9 @@ pub enum McCommand {
     /// Claude profile runtime workflows.
     #[command(subcommand)]
     Claude(claude::ClaudeCommand),
+    /// Gemini profile runtime workflows.
+    #[command(subcommand)]
+    Gemini(gemini::GeminiCommand),
     /// Codex profile runtime workflows.
     #[command(subcommand)]
     Codex(codex::CodexCommand),
@@ -708,6 +711,7 @@ pub async fn run(
         McCommand::Serve(args) => mcp_server::run(&args, &client).await,
         McCommand::Channel(cmd) => channel::run(cmd, &client).await,
         McCommand::Claude(cmd) => claude::run(cmd, &config).await,
+        McCommand::Gemini(cmd) => gemini::run(cmd, &client, &config).await,
         McCommand::Codex(cmd) => codex::run(cmd, &config).await,
         McCommand::Profile(cmd) => handle_profile(cmd, client, output_mode).await,
         McCommand::Secrets(cmd) => handle_secrets(cmd, client, output_mode).await,

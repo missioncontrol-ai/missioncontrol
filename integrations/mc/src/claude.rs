@@ -299,15 +299,12 @@ async fn hook_claude(args: ClaudeHookArgs, config: &McConfig) -> Result<()> {
 fn resolve_profile(
     positional: Option<String>,
     flag: Option<String>,
-    config: &McConfig,
+    _config: &McConfig,
 ) -> Result<String> {
     if positional.is_some() && flag.is_some() {
         bail!("profile provided both positionally and via --profile; choose one");
     }
-    let resolved = positional
-        .or(flag)
-        .or_else(|| config.agent_context.profile_name.clone())
-        .unwrap_or_else(|| "default".to_string());
+    let resolved = positional.or(flag).unwrap_or_else(|| "default".to_string());
     Ok(resolved.trim().to_string())
 }
 

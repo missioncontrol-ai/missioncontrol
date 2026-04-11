@@ -5,6 +5,8 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import app.routers.runtime as runtime
+from app.models import RuntimeJoinToken
 from app.routers.runtime import (
     JobCreate,
     LeaseComplete,
@@ -43,14 +45,30 @@ class _Session:
         self.added = []
 
     def exec(self, *_args, **_kwargs):
+        query_text = " ".join(str(arg) for arg in _args).lower()
         session = self
+
+        def _matches(row):
+            if "runtimejointoken" in query_text or "runtime_join_token" in query_text:
+                return hasattr(row, "token_hash")
+            if "runtimenode" in query_text:
+                return hasattr(row, "node_name") and hasattr(row, "hostname") and not hasattr(row, "token_hash")
+            if "runtimejob" in query_text:
+                return hasattr(row, "mission_id") and hasattr(row, "runtime_class") and hasattr(row, "args_json")
+            if "runtimelease" in query_text:
+                return hasattr(row, "job_id") and hasattr(row, "node_id") and hasattr(row, "status") and not hasattr(row, "token_hash")
+            if "executionsession" in query_text:
+                return hasattr(row, "lease_id") and hasattr(row, "runtime_class") and hasattr(row, "pty_requested")
+            return True
+
+        filtered = [row for row in self.rows if _matches(row)]
 
         class _Result:
             def first(self_inner):
-                return session.rows[0] if session.rows else None
+                return filtered[0] if filtered else None
 
             def all(self_inner):
-                return list(session.rows)
+                return list(filtered)
 
         return _Result()
 
@@ -93,6 +111,22 @@ def _node(node_id="node-1", owner=SUBJECT, node_name="node-a"):
         last_heartbeat_at=None,
         registered_at=None,
         updated_at=None,
+    )
+
+
+def _join_token(token="mcs_123", owner=SUBJECT):
+    return RuntimeJoinToken(
+        id="join-1",
+        owner_subject=owner,
+        token_hash=runtime._hash_token(token),
+        config_json="{}",
+        upgrade_channel="stable",
+        desired_version="",
+        expires_at=None,
+        used_at=None,
+        status="active",
+        rotation_count=0,
+        node_id=None,
     )
 
 
@@ -141,7 +175,7 @@ def _lease(lease_id="lease-1", job_id="job-1", node_id="node-1"):
 
 class RuntimeFabricTests(unittest.TestCase):
     def test_register_list_and_heartbeat_node(self):
-        with patch("app.routers.runtime.get_session", _session([])):
+        with patch("app.routers.runtime.get_session", _session([_join_token()])):
             result = register_node(
                 body=NodeRegister(node_name="node-a", hostname="host-a", bootstrap_token="mcs_123"),
                 request=_req(),

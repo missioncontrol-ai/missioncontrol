@@ -32,20 +32,20 @@ MC_TOKEN="<your-token>" mc auth login   # saves ~/.missioncontrol/session.json
 **Step 3 — Launch your agent:**
 
 ```bash
-mc claude run default   # Claude Code
-mc codex run default    # OpenAI Codex CLI
-mc launch gemini        # Google Gemini CLI
+mc claude run           # Claude Code
+mc codex run            # OpenAI Codex CLI
+mc gemini run           # Google Gemini CLI
 mc launch openclaw      # OpenClaw
 mc launch custom        # Custom ACP agent
 ```
 
-That's it. `mc claude run` / `mc codex run` are the primary paths for Claude/Codex. `mc launch` remains for gemini/openclaw/custom.
+That's it. `mc claude run` / `mc codex run` / `mc gemini run` are the primary paths. `mc launch` remains for openclaw/custom and legacy compatibility.
 
 Codex quick checks:
 ```bash
-mc codex status default         # read-only quick status (human)
-mc codex status default --json  # read-only quick status (machine)
-mc codex doctor default --json  # detailed readiness diagnostics (machine)
+mc codex status                 # read-only quick status (human)
+mc codex status --json          # read-only quick status (machine)
+mc codex doctor --json          # detailed readiness diagnostics (machine)
 ```
 
 ---
@@ -120,8 +120,8 @@ export MC_BASE_URL="https://your-mc.example.com"
 MC_TOKEN="<static-token>" mc auth login
 
 # From now on — no MC_TOKEN needed in env
-mc claude run default   # session loaded from ~/.missioncontrol/session.json
-mc codex run default # token injected into agent process at exec, not written to config
+mc claude run   # session loaded from ~/.missioncontrol/session.json
+mc codex run    # token injected into agent process at exec, not written to config
 mc auth whoami          # verify identity
 mc auth logout          # revoke when done
 ```
@@ -134,14 +134,14 @@ The recommended pattern is to exchange it for a session token immediately:
 ```bash
 # Exchange OIDC JWT for a longer-lived mc session token
 MC_TOKEN="$(get-oidc-token)" mc auth login --ttl-hours 8
-mc claude run default
+mc claude run
 ```
 
 Or run Claude directly with an env token (Claude profile runtime path):
 
 ```bash
 export MC_TOKEN="$(get-oidc-token)"
-mc claude run default
+mc claude run
 ```
 
 **Token embedding rules in `mc launch` (non-Claude/Codex agents):**

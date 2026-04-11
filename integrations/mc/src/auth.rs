@@ -411,7 +411,7 @@ fn finish_session_login(resp: serde_json::Value, base_url: &str, print_token: bo
         );
         eprintln!();
         eprintln!(
-            "  {}Next:{}  {}mc claude run default{}  ·  {}mc auth whoami{}",
+            "  {}Next:{}  {}mc claude run{}  ·  {}mc auth whoami{}",
             ui::BOLD,
             ui::RESET,
             ui::CYAN,

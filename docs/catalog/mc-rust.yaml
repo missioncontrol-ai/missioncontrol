@@ -7,7 +7,7 @@ owners:
 summary: >
   Rust-native local agent gateway. The mc binary connects agents to MissionControl
   via MCP tool calls, manages the local daemon for SSE stream fan-out, and provides
-  profile management. Canonical entry point for Codex and Claude Code agents.
+  profile management. Canonical entry point for Codex, Claude Code, and Gemini agents.
 
 source_of_truth:
   docs:
@@ -22,10 +22,12 @@ entrypoints:
   run:
     - command: mc daemon
       purpose: Start local mc daemon (SSE fan-out, tool dispatch)
-    - command: mc claude run default
+    - command: mc claude run
       purpose: Launch Claude Code in a prepared profile runtime
-    - command: mc codex run default
+    - command: mc codex run
       purpose: Launch Codex in a prepared profile runtime
+    - command: mc gemini run
+      purpose: Launch Gemini in a prepared profile runtime
   verify:
     - command: mc system doctor
       purpose: Health check (backend connectivity, token, daemon)
@@ -41,7 +43,7 @@ interfaces:
     - mc auth whoami
     - mc auth logout
     - mc daemon
-    - mc launch <agent>   # gemini/openclaw/custom legacy launch surface
+    - mc launch <agent>   # openclaw/custom legacy launch surface
     - mc data tools list
     - mc data tools call <tool> <args>
     - mc data sync status

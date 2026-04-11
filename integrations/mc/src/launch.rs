@@ -43,32 +43,32 @@ use uuid::Uuid;
 pub struct LaunchArgs {
     /// Agent to launch: gemini, openclaw, custom
     /// (`claude` moved to `mc claude run`; `codex` moved to `mc codex run`)
-    agent: Option<String>,
+    pub(crate) agent: Option<String>,
 
     /// No-op (daemon is no longer started by mc launch; kept for backwards compat)
     #[arg(long)]
-    no_daemon: bool,
+    pub(crate) no_daemon: bool,
 
     /// Run preflights only; do not launch agent (useful for CI)
     #[arg(long)]
-    preflight_only: bool,
+    pub(crate) preflight_only: bool,
 
     /// Skip config generation (use existing ~/.missioncontrol/config/)
     #[arg(long)]
-    skip_config_gen: bool,
+    pub(crate) skip_config_gen: bool,
 
     /// Profile name (research, dev, security, etc). Defaults to active/default profile.
     #[arg(long)]
-    profile: Option<String>,
+    pub(crate) profile: Option<String>,
 
     /// Write agent config to global locations (~/.codex, ~/.claude.json, ~/.gemini)
     /// instead of the instance-local runtime home. Compatibility escape hatch only.
     #[arg(long)]
-    legacy_global_config: bool,
+    pub(crate) legacy_global_config: bool,
 
     /// Allow launching when local profile pin does not match remote profile sha.
     #[arg(long)]
-    allow_pin_mismatch: bool,
+    pub(crate) allow_pin_mismatch: bool,
 
     /// Do not embed MC_TOKEN in the written agent config.
     ///
@@ -76,11 +76,11 @@ pub struct LaunchArgs {
     /// shell environment at agent exec time instead of being written to disk.
     /// Automatically implied when MC_TOKEN is absent.
     #[arg(long)]
-    no_embed_token: bool,
+    pub(crate) no_embed_token: bool,
 
     /// Extra args forwarded verbatim to the agent binary (after --)
     #[arg(last = true)]
-    agent_args: Vec<String>,
+    pub(crate) agent_args: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1244,83 +1244,13 @@ fn parse_agent_kind(value: &str) -> Result<AgentKind> {
 
 async fn resolve_profile_name(
     requested: &Option<String>,
-    agent_key: Option<&str>,
-    client: &MissionControlClient,
+    _agent_key: Option<&str>,
+    _client: &MissionControlClient,
 ) -> Result<String> {
     if let Some(profile) = requested {
         return Ok(profile.trim().to_string());
     }
-    let profiles = mcp_profile_call(client, "list_profiles", json!({ "limit": 200 })).await?;
-    if let Some(items) = profiles.get("profiles").and_then(|v| v.as_array()) {
-        for item in items {
-            if item
-                .get("is_default")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-            {
-                if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
-                    return Ok(name.to_string());
-                }
-            }
-        }
-        if items.is_empty() {
-            let bootstrap_name = "default";
-            mc_info!(
-                "no remote profiles found; bootstrapping '{}' via MCP",
-                bootstrap_name
-            );
-            let tarball_b64 = empty_profile_tarball_b64()?;
-            let published = mcp_profile_call(
-                client,
-                "publish_profile",
-                json!({
-                    "name": bootstrap_name,
-                    "description": "Bootstrap profile created by mc launch",
-                    "is_default": true,
-                    "manifest": [],
-                    "tarball_b64": tarball_b64
-                }),
-            )
-            .await?;
-            if let Some(name) = published
-                .get("profile")
-                .and_then(|v| v.get("name"))
-                .and_then(|v| v.as_str())
-            {
-                return Ok(name.to_string());
-            }
-            return Ok(bootstrap_name.to_string());
-        }
-    }
-    Ok(agent_key.unwrap_or("default").to_string())
-}
-
-async fn mcp_profile_call(client: &MissionControlClient, tool: &str, args: Value) -> Result<Value> {
-    let response = client
-        .post_json("/mcp/call", &json!({ "tool": tool, "args": args }))
-        .await?;
-    let ok = response
-        .get("ok")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if !ok {
-        let err = response
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("mcp profile tool failed");
-        anyhow::bail!("{}", err);
-    }
-    Ok(response.get("result").cloned().unwrap_or_else(|| json!({})))
-}
-
-fn empty_profile_tarball_b64() -> Result<String> {
-    use base64::Engine;
-    let mut bytes = Vec::<u8>::new();
-    {
-        let mut builder = tar::Builder::new(&mut bytes);
-        builder.finish()?;
-    }
-    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+    Ok("default".to_string())
 }
 
 fn session_index_path(base_mc_home: &Path) -> PathBuf {
@@ -1507,6 +1437,10 @@ fn exec_agent(
         cmd.env("MC_AGENT_TOKEN", token);
     }
     cmd.env("HOME", agent_home);
+    #[cfg(windows)]
+    {
+        cmd.env("USERPROFILE", agent_home);
+    }
 
     // Claude Code checks that $HOME/.local/bin is in PATH to confirm its install
     // method. Since we override HOME to the isolated instance home, prepend the

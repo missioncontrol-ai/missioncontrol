@@ -12,6 +12,7 @@ pub mod daemon;
 pub mod drift;
 pub mod evolve;
 pub mod governance;
+pub mod gemini;
 pub mod launch;
 pub mod maintenance;
 pub mod mcp_server;
