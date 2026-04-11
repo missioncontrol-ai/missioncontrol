@@ -1,7 +1,7 @@
 """Budget policy and usage tracking router."""
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -20,12 +20,12 @@ router = APIRouter(tags=["budgets"])
 # ---------------------------------------------------------------------------
 
 class BudgetPolicyCreate(BaseModel):
-    scope_type: str
+    scope_type: Literal["tenant", "mission", "kluster", "agent", "runtime", "provider"]
     scope_id: str
-    window_type: str
+    window_type: Literal["day", "week", "month", "rolling_24h"]
     hard_cap_cents: int
     soft_cap_cents: Optional[int] = None
-    action_on_breach: str = "alert_only"
+    action_on_breach: Literal["pause", "require_approval", "alert_only"] = "alert_only"
 
 
 class BudgetPolicyRead(BaseModel):

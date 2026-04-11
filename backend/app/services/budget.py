@@ -231,8 +231,8 @@ def _window_bounds(window_type: str, now: datetime):
         import calendar
         days = calendar.monthrange(now.year, now.month)[1]
         end = start + timedelta(days=days)
-    else:  # rolling_24h
-        start = now - timedelta(hours=24)
+    else:  # rolling_24h — window lasts 24h from creation, then resets to 0
+        start = now
         end = now + timedelta(hours=24)
     return start, end
 
