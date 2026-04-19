@@ -15,6 +15,8 @@
   - `cd integrations/mc && cargo check -p mc`
 
 ## Agent launch defaults (mc)
-- Claude now uses the dedicated command family: `mc claude run|doctor|exec`.
-- Codex now uses the dedicated command family: `mc codex run|doctor|exec`.
-- `mc launch` remains for `gemini|openclaw|custom`.
+- Launch any agent runtime: `mc run claude`, `mc run codex`, `mc run gemini`.
+- Pass a profile with `-p <name>` or `--profile <name>`.
+- For mesh-visible runs: `mc run claude --mission <id> --mode solo`.
+- Diagnostics: `mc run claude doctor [--fix]`, `mc run codex doctor [--fix]`, `mc run codex status`.
+- `mc launch` remains for `openclaw|custom`.

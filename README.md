@@ -25,7 +25,7 @@ MissionControl solves the coordination problem. It is a control plane for AI age
 - **Missions & Klusters** — organizational units that scope knowledge, tools, permissions, and governance. Agents and humans switch profiles without losing context or integrity.
 - **Overlap Detection** — fuzzy + vector similarity analysis runs before task/artifact creation to proactively reduce collisions and enable safer parallelism at scale.
 - **Artifact Ledger** — every significant mutation is recorded in Postgres, indexed for search, and optionally committed to Git with full provenance metadata.
-- **MCP-Native Agent Interface** — agents interact via standard MCP stdio tools (`search_tasks`, `detect_overlaps`, `load_kluster_workspace`, `publish_pending_ledger_events`). No custom SDK required.
+- **MCP-Native Agent Interface** — agents interact via standard MCP stdio tools (`search_tasks`, `get_overlap_suggestions`, `load_kluster_workspace`, `publish_pending_ledger_events`). No custom SDK required.
 - **Governance & Approvals** — versioned policy lifecycle (draft → active → rollback), role-based access (Admin / Contributor / Viewer), HMAC-signed approval tokens on sensitive mutations.
 - **Integrations for Slack and other channels** — mission-aware notifications, task creation from threads, approval workflows, and search queries — where your team already works.
 - **Semantic Search** — tasks, docs, and klusters are vector-indexed (pgvector or Chroma) for similarity and hybrid search.
@@ -292,13 +292,13 @@ Then launch:
 export MC_TOKEN="<your-token>"
 export MC_BASE_URL="https://your-mc.example.com"
 
-mc claude run           # Claude Code (profile runtime)
-mc codex run            # OpenAI Codex CLI (profile runtime)
-mc gemini run           # Google Gemini CLI — writes ~/.gemini/settings.json
-mc launch openclaw  # OpenClaw — writes ~/.missioncontrol/config/openclaw.acp.json
+mc run claude           # Claude Code (profile runtime)
+mc run codex            # OpenAI Codex CLI (profile runtime)
+mc run gemini           # Google Gemini CLI
+mc launch openclaw      # OpenClaw — writes ~/.missioncontrol/config/openclaw.acp.json
 ```
 
-`mc claude run` / `mc codex run` / `mc gemini run` are the primary paths.  
+`mc run <runtime>` is the unified launch path.  
 `mc launch` remains the launch surface for openclaw/custom and compatibility.
 
 Use `mc auth login` to create a server-issued session token (`mcs_*`) stored locally — no more
@@ -306,7 +306,7 @@ token in agent config files, revocable any time, auto-loaded by `mc` on next run
 
 ```bash
 MC_TOKEN="<static-token>" mc auth login   # exchange for session token
-mc claude run                       # session auto-loaded, token injected at exec
+mc run claude                       # session auto-loaded, token injected at exec
 mc auth whoami                       # verify identity
 mc auth logout                       # revoke session
 ```

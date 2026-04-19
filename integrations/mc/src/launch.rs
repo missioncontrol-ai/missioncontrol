@@ -42,7 +42,7 @@ use uuid::Uuid;
 #[derive(Args, Debug)]
 pub struct LaunchArgs {
     /// Agent to launch: gemini, openclaw, custom
-    /// (`claude` moved to `mc claude run`; `codex` moved to `mc codex run`)
+    /// (`claude`, `codex`, `gemini` moved to `mc run <runtime>`)
     pub(crate) agent: Option<String>,
 
     /// No-op (daemon is no longer started by mc launch; kept for backwards compat)
@@ -1306,9 +1306,9 @@ fn merge_missing_dir_entries(src: &Path, dst: &Path) -> Result<usize> {
 
 fn parse_agent_kind(value: &str) -> Result<AgentKind> {
     match value.trim().to_lowercase().as_str() {
-        "codex" => bail!("`mc launch codex` has been replaced. Use `mc codex run <profile>`."),
-        "claude" => bail!("`mc launch claude` has been replaced. Use `mc claude run <profile>`."),
-        "resume" => bail!("`mc launch resume` has been removed. Use `mc codex run <profile>`."),
+        "codex" => bail!("`mc launch codex` has been replaced. Use `mc run codex [-p <profile>]`."),
+        "claude" => bail!("`mc launch claude` has been replaced. Use `mc run claude [-p <profile>]`."),
+        "resume" => bail!("`mc launch resume` has been removed. Use `mc run codex [-p <profile>]`."),
         "gemini" => Ok(AgentKind::Gemini),
         "openclaw" => Ok(AgentKind::Openclaw),
         "custom" | "nanoclaw" => Ok(AgentKind::Custom),

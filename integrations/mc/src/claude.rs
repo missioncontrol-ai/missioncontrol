@@ -3,7 +3,7 @@ use crate::{
     mc_info, mc_ok, mc_warn,
 };
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::ValueEnum;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -12,73 +12,6 @@ use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
-
-#[derive(Subcommand, Debug)]
-pub enum ClaudeCommand {
-    /// Run Claude in a prepared profile runtime (resume by default).
-    Run(ClaudeRunArgs),
-    /// Inspect/repair Claude profile runtime readiness.
-    Doctor(ClaudeDoctorArgs),
-    /// Thin native Claude execution with raw arg passthrough.
-    Exec(ClaudeExecArgs),
-    /// Internal lifecycle hook dispatcher used by Claude hook wrappers.
-    #[command(hide = true)]
-    Hook(ClaudeHookArgs),
-}
-
-#[derive(Args, Debug)]
-pub struct ClaudeRunArgs {
-    /// Profile name (preferred positional form).
-    #[arg(value_name = "PROFILE")]
-    profile_positional: Option<String>,
-    /// Profile name.
-    #[arg(short = 'p', long = "profile")]
-    profile_name: Option<String>,
-    /// Force new Claude session.
-    #[arg(long, default_value_t = false)]
-    new: bool,
-    /// Never prompt; fail on ambiguity.
-    #[arg(long, default_value_t = false)]
-    headless: bool,
-}
-
-#[derive(Args, Debug)]
-pub struct ClaudeDoctorArgs {
-    /// Profile name (preferred positional form).
-    #[arg(value_name = "PROFILE")]
-    profile_positional: Option<String>,
-    /// Profile name.
-    #[arg(short = 'p', long = "profile")]
-    profile_name: Option<String>,
-    /// Apply safe deterministic repairs.
-    #[arg(long, default_value_t = false)]
-    fix: bool,
-    /// Never prompt; fail on ambiguity.
-    #[arg(long, default_value_t = false)]
-    headless: bool,
-    /// Emit machine-readable JSON.
-    #[arg(long, default_value_t = false)]
-    json: bool,
-}
-
-#[derive(Args, Debug)]
-pub struct ClaudeExecArgs {
-    /// Profile name (preferred positional form).
-    #[arg(value_name = "PROFILE")]
-    profile_positional: Option<String>,
-    /// Profile name.
-    #[arg(short = 'p', long = "profile")]
-    profile_name: Option<String>,
-    /// Raw Claude CLI args (after --).
-    #[arg(last = true)]
-    claude_args: Vec<String>,
-}
-
-#[derive(Args, Debug)]
-pub struct ClaudeHookArgs {
-    #[arg(value_enum)]
-    event: ClaudeHookEvent,
-}
 
 #[derive(ValueEnum, Clone, Debug)]
 enum ClaudeHookEvent {
@@ -117,33 +50,18 @@ struct ClaudeDoctorReport {
     suggested_command: String,
 }
 
-pub async fn run_claude_compat(
-    profile: Option<String>,
-    extra_args: Vec<String>,
+/// Launch Claude in a prepared profile runtime (auto-repair + resume).
+pub async fn run_launch(
+    profile: String,
+    new: bool,
+    _headless: bool,
+    _passthrough: Vec<String>,
     config: &McConfig,
 ) -> Result<()> {
-    let profile_name = resolve_profile(profile, None, config)?;
-    let paths = claude_paths(&profile_name);
-    run_claude_process(&extra_args, &paths.runtime_home, config, &profile_name)?;
-    Ok(())
-}
-
-pub async fn run(command: ClaudeCommand, config: &McConfig) -> Result<()> {
-    match command {
-        ClaudeCommand::Run(args) => run_claude(args, config).await,
-        ClaudeCommand::Doctor(args) => doctor_claude(args, config).await,
-        ClaudeCommand::Exec(args) => exec_claude(args, config).await,
-        ClaudeCommand::Hook(args) => hook_claude(args, config).await,
-    }
-}
-
-async fn run_claude(args: ClaudeRunArgs, config: &McConfig) -> Result<()> {
-    eprintln!("mc: deprecation notice: `mc claude run` is being unified — prefer `mc run claude` (identical behavior)");
-    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
     let report = inspect_profile(&profile, config, true)?;
     if !report.ready {
         bail!(
-            "{}: not ready; run `mc claude doctor {} --fix`",
+            "{}: not ready; run `mc run claude doctor --fix -p {}`",
             profile,
             profile
         );
@@ -157,7 +75,7 @@ async fn run_claude(args: ClaudeRunArgs, config: &McConfig) -> Result<()> {
 
     let paths = claude_paths(&profile);
     let has_resume = load_state_session(&paths.state_path).is_some();
-    let use_resume = !args.new && has_resume;
+    let use_resume = !new && has_resume;
 
     if use_resume {
         mc_info!("{}: resuming", profile);
@@ -181,16 +99,20 @@ async fn run_claude(args: ClaudeRunArgs, config: &McConfig) -> Result<()> {
         bail!("claude exited with status {}", status);
     }
 
-    let _ = args.headless;
-
     Ok(())
 }
 
-async fn doctor_claude(args: ClaudeDoctorArgs, config: &McConfig) -> Result<()> {
-    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
-    let report = inspect_profile(&profile, config, args.fix)?;
+/// Inspect and optionally repair Claude runtime readiness.
+pub async fn run_doctor(
+    profile: String,
+    fix: bool,
+    json: bool,
+    _headless: bool,
+    config: &McConfig,
+) -> Result<()> {
+    let report = inspect_profile(&profile, config, fix)?;
 
-    if args.json {
+    if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return if report.ready {
             Ok(())
@@ -215,9 +137,6 @@ async fn doctor_claude(args: ClaudeDoctorArgs, config: &McConfig) -> Result<()> 
     if !report.ready {
         println!("Fix: {}", report.suggested_command);
     }
-    if args.headless {
-        // No interactive behavior is implemented.
-    }
 
     if report.ready {
         Ok(())
@@ -226,36 +145,49 @@ async fn doctor_claude(args: ClaudeDoctorArgs, config: &McConfig) -> Result<()> 
     }
 }
 
-async fn exec_claude(args: ClaudeExecArgs, config: &McConfig) -> Result<()> {
-    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
+/// Thin native Claude execution — passthrough args verbatim to the claude binary.
+pub async fn run_exec(
+    profile: String,
+    passthrough: Vec<String>,
+    config: &McConfig,
+) -> Result<()> {
     let paths = claude_paths(&profile);
 
-    if !which_binary("claude").is_ok() {
+    if which_binary("claude").is_err() {
         bail!(
             "native claude binary not found on PATH; install with: npm install -g @anthropic-ai/claude-code"
         );
     }
     if !paths.runtime_home.exists() || !paths.claude_config_path.exists() {
         bail!(
-            "{}: runtime is not prepared; run `mc claude doctor {} --fix`",
+            "{}: runtime is not prepared; run `mc run claude doctor --fix -p {}`",
             profile,
             profile
         );
     }
 
-    let status = run_claude_process(&args.claude_args, &paths.runtime_home, config, &profile)?;
+    let status = run_claude_process(&passthrough, &paths.runtime_home, config, &profile)?;
     if !status.success() {
         bail!("claude exited with status {}", status);
     }
     Ok(())
 }
 
-async fn hook_claude(args: ClaudeHookArgs, config: &McConfig) -> Result<()> {
+/// Internal lifecycle hook dispatcher — called by Claude hook scripts.
+/// Invoked as: mc run claude hook --event <session-start|post-tool-use|session-end>
+pub async fn run_hook(event: String, config: &McConfig) -> Result<()> {
+    let hook_event = match event.as_str() {
+        "session-start" => ClaudeHookEvent::SessionStart,
+        "post-tool-use" => ClaudeHookEvent::PostToolUse,
+        "session-end" => ClaudeHookEvent::SessionEnd,
+        other => bail!("unknown hook event '{}'; valid: session-start, post-tool-use, session-end", other),
+    };
+
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
     let payload: Value = serde_json::from_str(&input).unwrap_or_else(|_| json!({}));
 
-    if matches!(args.event, ClaudeHookEvent::SessionStart) {
+    if matches!(hook_event, ClaudeHookEvent::SessionStart) {
         if let Some(session_id) = payload.get("session_id").and_then(|v| v.as_str()) {
             let home = std::env::var("HOME").unwrap_or_default();
             let home_path = PathBuf::from(home);
@@ -266,7 +198,7 @@ async fn hook_claude(args: ClaudeHookArgs, config: &McConfig) -> Result<()> {
         }
     }
 
-    let endpoint = match args.event {
+    let endpoint = match hook_event {
         ClaudeHookEvent::SessionStart => "/hooks/claude/session-start",
         ClaudeHookEvent::PostToolUse => "/hooks/claude/tool-audit",
         ClaudeHookEvent::SessionEnd => "/hooks/claude/session-end",
@@ -292,7 +224,7 @@ async fn hook_claude(args: ClaudeHookArgs, config: &McConfig) -> Result<()> {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             if status.is_success() {
-                if matches!(args.event, ClaudeHookEvent::SessionStart) && !body.trim().is_empty() {
+                if matches!(hook_event, ClaudeHookEvent::SessionStart) && !body.trim().is_empty() {
                     print!("{}", body);
                 }
                 Ok(())
@@ -306,18 +238,6 @@ async fn hook_claude(args: ClaudeHookArgs, config: &McConfig) -> Result<()> {
             Ok(())
         }
     }
-}
-
-fn resolve_profile(
-    positional: Option<String>,
-    flag: Option<String>,
-    _config: &McConfig,
-) -> Result<String> {
-    if positional.is_some() && flag.is_some() {
-        bail!("profile provided both positionally and via --profile; choose one");
-    }
-    let resolved = positional.or(flag).unwrap_or_else(|| "default".to_string());
-    Ok(resolved.trim().to_string())
 }
 
 pub fn claude_paths(profile: &str) -> ClaudePaths {
@@ -451,7 +371,7 @@ fn inspect_profile(profile: &str, config: &McConfig, fix: bool) -> Result<Claude
         fixable,
         repaired,
         issues,
-        suggested_command: format!("mc claude doctor {} --fix", profile),
+        suggested_command: format!("mc run claude doctor --fix -p {}", profile),
     })
 }
 

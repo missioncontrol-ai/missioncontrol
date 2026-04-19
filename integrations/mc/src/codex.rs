@@ -3,86 +3,12 @@ use crate::{
     mc_info, mc_ok,
 };
 use anyhow::{Context, Result, bail};
-use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const MC_CODEX_MARKER_BEGIN: &str = "# mc-codex: missioncontrol managed block (begin)";
 const MC_CODEX_MARKER_END: &str = "# mc-codex: missioncontrol managed block (end)";
-
-#[derive(Subcommand, Debug)]
-pub enum CodexCommand {
-    /// Run Codex in a prepared profile runtime (resume by default).
-    Run(CodexRunArgs),
-    /// Read-only profile readiness and auth status (no mutation).
-    Status(CodexStatusArgs),
-    /// Inspect/repair Codex profile runtime readiness.
-    Doctor(CodexDoctorArgs),
-    /// Thin native Codex execution with raw arg passthrough.
-    Exec(CodexExecArgs),
-}
-
-#[derive(Args, Debug)]
-pub struct CodexRunArgs {
-    /// Profile name (preferred positional form).
-    #[arg(value_name = "PROFILE")]
-    profile_positional: Option<String>,
-    /// Profile name.
-    #[arg(short = 'p', long = "profile")]
-    profile_name: Option<String>,
-    /// Force new Codex session instead of resume-last.
-    #[arg(long, default_value_t = false)]
-    new: bool,
-    /// Never prompt; fail on ambiguity.
-    #[arg(long, default_value_t = false)]
-    headless: bool,
-}
-
-#[derive(Args, Debug)]
-pub struct CodexDoctorArgs {
-    /// Profile name (preferred positional form).
-    #[arg(value_name = "PROFILE")]
-    profile_positional: Option<String>,
-    /// Profile name.
-    #[arg(short = 'p', long = "profile")]
-    profile_name: Option<String>,
-    /// Apply safe deterministic repairs.
-    #[arg(long, default_value_t = false)]
-    fix: bool,
-    /// Never prompt; fail on ambiguity.
-    #[arg(long, default_value_t = false)]
-    headless: bool,
-    /// Emit machine-readable JSON.
-    #[arg(long, default_value_t = false)]
-    json: bool,
-}
-
-#[derive(Args, Debug)]
-pub struct CodexStatusArgs {
-    /// Profile name (preferred positional form).
-    #[arg(value_name = "PROFILE")]
-    profile_positional: Option<String>,
-    /// Profile name.
-    #[arg(short = 'p', long = "profile")]
-    profile_name: Option<String>,
-    /// Emit machine-readable JSON.
-    #[arg(long, default_value_t = false)]
-    json: bool,
-}
-
-#[derive(Args, Debug)]
-pub struct CodexExecArgs {
-    /// Profile name (preferred positional form).
-    #[arg(value_name = "PROFILE")]
-    profile_positional: Option<String>,
-    /// Profile name.
-    #[arg(short = 'p', long = "profile")]
-    profile_name: Option<String>,
-    /// Raw Codex CLI args (after --).
-    #[arg(last = true)]
-    codex_args: Vec<String>,
-}
 
 #[derive(Debug, Clone)]
 pub struct CodexPaths {
@@ -134,34 +60,19 @@ struct OwnershipState {
     last_repaired_at: Option<String>,
 }
 
-pub async fn run_codex_compat(
-    profile: Option<String>,
-    extra_args: Vec<String>,
+/// Launch Codex in a prepared profile runtime (auto-repair + resume).
+pub async fn run_launch(
+    profile: String,
+    new: bool,
+    _headless: bool,
+    _passthrough: Vec<String>,
     config: &McConfig,
 ) -> Result<()> {
-    let profile_name = resolve_profile(profile, None, config)?;
-    let paths = codex_paths(&profile_name);
-    run_codex_process(&extra_args, &paths.runtime_home, config, &profile_name)?;
-    Ok(())
-}
-
-pub async fn run(command: CodexCommand, config: &McConfig) -> Result<()> {
-    match command {
-        CodexCommand::Run(args) => run_codex(args, config).await,
-        CodexCommand::Status(args) => status_codex(args, config).await,
-        CodexCommand::Doctor(args) => doctor_codex(args, config).await,
-        CodexCommand::Exec(args) => exec_codex(args, config).await,
-    }
-}
-
-async fn run_codex(args: CodexRunArgs, config: &McConfig) -> Result<()> {
-    eprintln!("mc: deprecation notice: `mc codex run` is being unified — prefer `mc run codex` (identical behavior)");
-    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
     let report = inspect_profile(&profile, config, true)?;
 
     if !report.ready {
         bail!(
-            "{}: not ready; run `mc codex doctor {} --fix`",
+            "{}: not ready; run `mc run codex doctor --fix -p {}`",
             profile,
             profile
         );
@@ -174,7 +85,7 @@ async fn run_codex(args: CodexRunArgs, config: &McConfig) -> Result<()> {
     }
 
     let paths = codex_paths(&profile);
-    if args.new {
+    if new {
         mc_info!("{}: starting new session", profile);
         let status = run_codex_process(
             &build_new_session_args(),
@@ -203,16 +114,20 @@ async fn run_codex(args: CodexRunArgs, config: &McConfig) -> Result<()> {
             bail!("codex exited with status {}", fresh_status);
         }
     }
-
-    let _ = args.headless;
     Ok(())
 }
 
-async fn doctor_codex(args: CodexDoctorArgs, config: &McConfig) -> Result<()> {
-    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
-    let report = inspect_profile(&profile, config, args.fix)?;
+/// Inspect and optionally repair Codex runtime readiness.
+pub async fn run_doctor(
+    profile: String,
+    fix: bool,
+    json: bool,
+    _headless: bool,
+    config: &McConfig,
+) -> Result<()> {
+    let report = inspect_profile(&profile, config, fix)?;
 
-    if args.json {
+    if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return if report.ready {
             Ok(())
@@ -243,7 +158,6 @@ async fn doctor_codex(args: CodexDoctorArgs, config: &McConfig) -> Result<()> {
     if !report.ready {
         println!("Fix: {}", report.suggested_command);
     }
-    let _ = args.headless;
 
     if report.ready {
         Ok(())
@@ -252,8 +166,8 @@ async fn doctor_codex(args: CodexDoctorArgs, config: &McConfig) -> Result<()> {
     }
 }
 
-async fn status_codex(args: CodexStatusArgs, config: &McConfig) -> Result<()> {
-    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
+/// Read-only runtime status (exits 0 even when not ready).
+pub async fn run_status(profile: String, json: bool, config: &McConfig) -> Result<()> {
     let report = inspect_profile(&profile, config, false)?;
     let status = CodexStatusReport {
         tool: report.tool,
@@ -265,7 +179,7 @@ async fn status_codex(args: CodexStatusArgs, config: &McConfig) -> Result<()> {
         suggested_command: report.suggested_command,
     };
 
-    if args.json {
+    if json {
         println!("{}", serde_json::to_string_pretty(&status)?);
         return Ok(());
     }
@@ -290,8 +204,12 @@ async fn status_codex(args: CodexStatusArgs, config: &McConfig) -> Result<()> {
     Ok(())
 }
 
-async fn exec_codex(args: CodexExecArgs, config: &McConfig) -> Result<()> {
-    let profile = resolve_profile(args.profile_positional, args.profile_name, config)?;
+/// Thin native Codex execution — passthrough args verbatim to the codex binary.
+pub async fn run_exec(
+    profile: String,
+    passthrough: Vec<String>,
+    config: &McConfig,
+) -> Result<()> {
     let paths = codex_paths(&profile);
 
     if which_binary("codex").is_err() {
@@ -299,31 +217,19 @@ async fn exec_codex(args: CodexExecArgs, config: &McConfig) -> Result<()> {
     }
     if !paths.runtime_home.exists() || !paths.config_path.exists() {
         bail!(
-            "{}: runtime is not prepared; run `mc codex doctor {} --fix`",
+            "{}: runtime is not prepared; run `mc run codex doctor --fix -p {}`",
             profile,
             profile
         );
     }
 
-    let forwarded = normalize_exec_args(args.codex_args);
+    let forwarded = normalize_exec_args(passthrough);
 
     let status = run_codex_process(&forwarded, &paths.runtime_home, config, &profile)?;
     if !status.success() {
         bail!("codex exited with status {}", status);
     }
     Ok(())
-}
-
-fn resolve_profile(
-    positional: Option<String>,
-    flag: Option<String>,
-    _config: &McConfig,
-) -> Result<String> {
-    if positional.is_some() && flag.is_some() {
-        bail!("profile provided both positionally and via --profile; choose one");
-    }
-    let resolved = positional.or(flag).unwrap_or_else(|| "default".to_string());
-    Ok(resolved.trim().to_string())
 }
 
 pub fn codex_paths(profile: &str) -> CodexPaths {
@@ -493,7 +399,7 @@ fn inspect_profile(profile: &str, config: &McConfig, repair: bool) -> Result<Cod
         status,
         issues,
         repaired_actions,
-        suggested_command: format!("mc codex doctor {} --fix", profile),
+        suggested_command: format!("mc run codex doctor --fix -p {}", profile),
     })
 }
 
@@ -944,7 +850,7 @@ b = 2
                 fixable: true,
             }],
             repaired_actions: vec![],
-            suggested_command: "mc codex doctor default --fix".to_string(),
+            suggested_command: "mc run codex doctor --fix".to_string(),
         };
 
         let value = serde_json::to_value(report).expect("serialize");
@@ -1007,7 +913,7 @@ b = 2
                 detail: "not logged in".to_string(),
                 fixable: false,
             }],
-            suggested_command: "mc codex doctor default --fix".to_string(),
+            suggested_command: "mc run codex doctor --fix".to_string(),
         };
         let value = serde_json::to_value(report).expect("serialize");
         let obj = value.as_object().expect("json object");

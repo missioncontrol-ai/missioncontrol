@@ -69,9 +69,10 @@ When no `MC_AGENT_ID` is provided, `mc` looks for `~/.missioncontrol/agent_id` a
 ## Command surface
 
 ### Launch isolation
-- Claude uses `mc claude run <profile>` with profile-scoped runtime preparation + native execution.
-- Codex uses `mc codex run <profile>` with profile-scoped `CODEX_HOME` + native execution.
-- `mc launch <agent>` remains for `gemini|openclaw|custom` and legacy compatibility paths.
+- `mc run claude [-p <profile>]` — unified launch for Claude Code with profile-scoped runtime preparation.
+- `mc run codex [-p <profile>]` — unified launch for Codex with profile-scoped `CODEX_HOME`.
+- `mc run gemini [-p <profile>]` — unified launch for Gemini.
+- `mc launch <agent>` remains for `openclaw|custom` and legacy compatibility paths.
 
 ### Data + admin surface
 - `mc data tools list` / `mc data tools call --tool <tool> --payload '{...}'` map directly to `/mcp/tools` and `/mcp/call`.

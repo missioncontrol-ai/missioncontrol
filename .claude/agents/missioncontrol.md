@@ -129,7 +129,7 @@ mc data tools call --tool get_kluster --payload '{"kluster_id": "<id>"}'
 mc data sync status --mission-id <mission-id> --kluster-id <id>
 
 # Check sync status
-mc data tools call --tool get_skills_sync_status --payload '{"kluster_id": "<id>"}'
+mc data tools call --tool get_skill_sync_status --payload '{"kluster_id": "<id>"}'
 ```
 
 ## Visual Output Patterns
@@ -142,9 +142,9 @@ mc data tools list | jq -r '.[] | "| \(.name) | \(.description[:60]) |"'
 mc data tools call --tool list_tasks --payload '{}' | \
   jq -r '.tasks[] | "\(.id)\t\(.status)\t\(.title)"' | column -t
 
-# Active workspace summary
-mc data tools call --tool list_workspaces --payload '{"status": "active"}' | \
-  jq -r '.workspaces[] | "[\(.id)] \(.kluster_id) — expires \(.lease_expires_at)"'
+# Active workspace summary (list active leases via heartbeat/load pattern)
+mc data tools call --tool list_tasks --payload '{"status": "active"}' | \
+  jq -r '.tasks[] | "[\(.id)] \(.title) — \(.status)"'
 ```
 
 ## Authentication
