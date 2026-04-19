@@ -140,6 +140,7 @@ age-key.txt
 .env.*
 !.env.example
 !.env.sample
+!.env.dev.example
 
 ############################################
 # Editor / OS / misc

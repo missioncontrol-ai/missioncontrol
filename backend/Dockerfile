@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+# ── base: shared deps layer ─────────────────────────────────────────────────
+FROM python:3.11-slim AS base
 
 WORKDIR /app
 
@@ -25,6 +26,14 @@ RUN if [ "$INSTALL_CHROMA" = "true" ]; then \
     else \
       pip install --no-cache-dir -r /app/requirements.txt; \
     fi
+
+# ── dev: source is bind-mounted at runtime; runs as root for clean permissions
+FROM base AS dev
+EXPOSE 8008
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8008", "--reload"]
+
+# ── prod: source baked in, non-root user ────────────────────────────────────
+FROM base AS prod
 
 COPY backend /app
 COPY web /app/web
