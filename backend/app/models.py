@@ -1052,6 +1052,7 @@ class RunCheckpoint(SQLModel, table=True):
     # tool_call | turn | review | publish | manual
     kind: str
     payload_json: str = Field(sa_column=Column(Text))
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 
 class ReviewGate(SQLModel, table=True):

@@ -22,15 +22,16 @@ fi
 H="Authorization: Bearer $TOKEN"
 CT="Content-Type: application/json"
 
-pass() { echo "  PASS: $1"; ((PASS++)); }
-fail() { echo "  FAIL: $1 -- $2"; ((FAIL++)); }
+pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
+fail() { echo "  FAIL: $1 -- $2"; FAIL=$((FAIL + 1)); }
 section() { echo; echo "=== $1 ==="; }
 jq_field() { python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$1',''))" 2>/dev/null || echo ""; }
 
 # --- Setup: create test mission ---
 section "Setup"
+SMOKE_NAME="smoke-exec-substrate-$$-$(date +%s)"
 MISSION_JSON=$(curl -sf -H "$H" -H "$CT" -X POST "$BASE_URL/missions" \
-  -d '{"name":"smoke-test-exec-substrate","description":"auto-generated smoke test"}') || { echo "ABORT: could not reach backend at $BASE_URL"; exit 1; }
+  -d "{\"name\":\"$SMOKE_NAME\",\"description\":\"auto-generated smoke test\",\"owners\":\"smoke-test\"}") || { echo "ABORT: could not reach backend at $BASE_URL"; exit 1; }
 MISSION=$(echo "$MISSION_JSON" | jq_field id)
 if [[ -z "$MISSION" ]]; then echo "ABORT: mission creation failed"; exit 1; fi
 echo "  Created mission: $MISSION"
@@ -49,7 +50,7 @@ if [[ "$BUDGET_FETCH" == "$BUDGET" ]]; then pass "Fetched budget policy"; else f
 # --- 2. Mesh kluster + task ---
 section "Mesh task and claim hardening"
 KLUSTER=$(curl -sf -H "$H" -H "$CT" -X POST "$BASE_URL/missions/$MISSION/k" \
-  -d '{"name":"smoke-kluster","required_capabilities":[]}' | jq_field id)
+  -d '{"name":"smoke-kluster","required_capabilities":[],"owners":"smoke-test"}' | jq_field id)
 if [[ -n "$KLUSTER" ]]; then pass "Created kluster"; else fail "Kluster creation" "no id"; fi
 
 TASK=$(curl -sf -H "$H" -H "$CT" -X POST "$BASE_URL/work/klusters/$KLUSTER/tasks" \
