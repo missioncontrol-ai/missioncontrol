@@ -262,6 +262,8 @@ def on_startup():
     start_event_trigger_listener()
     from app.services.work_watchdog import start_watchdog
     start_watchdog()
+    from app.services.mesh_dispatcher import start_dispatcher
+    start_dispatcher()
     from app.db import engine as _engine
     if _engine.dialect.name == "postgresql":
         postgres_dsn = str(_engine.url)
@@ -279,6 +281,8 @@ def on_shutdown():
     stop_scheduler()
     from app.services.work_watchdog import stop_watchdog
     stop_watchdog()
+    from app.services.mesh_dispatcher import stop_dispatcher
+    stop_dispatcher()
     from app.services.mesh_events import stop_postgres_listener
     stop_postgres_listener()
 
