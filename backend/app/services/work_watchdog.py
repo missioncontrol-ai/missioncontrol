@@ -71,10 +71,11 @@ def _tick(session: Session) -> int:
 
     session.commit()
 
-    # Fan out lease_expired events after commit (best-effort)
+    # Fan out events after commit (best-effort)
     from app.services.mesh_events import publish_task_event
     for task in stale:
         publish_task_event("lease_expired", task.id, task.kluster_id, task.mission_id or "", status="ready")
+        publish_task_event("task_ready", task.id, task.kluster_id, task.mission_id or "", status="ready")
 
     return freed
 

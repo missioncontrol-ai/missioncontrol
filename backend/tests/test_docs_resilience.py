@@ -23,6 +23,7 @@ def _request(email: str):
 
 class DocsResilienceTests(unittest.TestCase):
     def setUp(self):
+        engine.dispose()
         SQLModel.metadata.drop_all(engine)
         SQLModel.metadata.create_all(engine)
         self.req = _request("owner@example.com")

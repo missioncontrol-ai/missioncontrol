@@ -160,7 +160,7 @@ class TestTaskCreate(WorkTestCase):
         self.assertEqual(result["title"], "hello")
         self.assertEqual(result["kluster_id"], kid)
 
-    def test_creates_pending_task_with_deps(self):
+    def test_creates_blocked_task_with_deps(self):
         kid = self._make_kluster()
         dep_id = self._make_task(kid, title="dep")
         result = work.create_task(
@@ -168,7 +168,7 @@ class TestTaskCreate(WorkTestCase):
             work.MeshTaskCreate(title="child", depends_on=[dep_id]),
             _req(),
         )
-        self.assertEqual(result["status"], "pending")
+        self.assertEqual(result["status"], "blocked")
         self.assertIn(dep_id, result["depends_on"])
 
     def test_rejects_unknown_dep_id(self):

@@ -25,6 +25,7 @@ def _run(coro):
 
 class AiSessionRouterTests(unittest.TestCase):
     def setUp(self):
+        engine.dispose()
         SQLModel.metadata.drop_all(engine, checkfirst=True)
         SQLModel.metadata.create_all(engine)
 

@@ -16,6 +16,7 @@ def _request(email: str, subject: str = "oidc-subject"):
 
 class ArtifactDownloadUrlTests(unittest.TestCase):
     def setUp(self):
+        engine.dispose()
         SQLModel.metadata.drop_all(engine)
         SQLModel.metadata.create_all(engine)
         with get_session() as session:

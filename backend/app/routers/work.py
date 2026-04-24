@@ -280,8 +280,8 @@ def create_task(kluster_id: str, body: MeshTaskCreate, request: Request):
                 detail=f"claim_policy must be one of {valid_policies}",
             )
 
-        # Compute initial status: pending unless all deps resolved (empty deps = ready)
-        initial_status = "ready" if not body.depends_on else "pending"
+        # Compute initial status: ready when no deps; blocked until all deps finish
+        initial_status = "ready" if not body.depends_on else "blocked"
 
         task = MeshTask(
             id=new_id,
@@ -583,11 +583,13 @@ def complete_task(task_id: str, body: CompleteBody = CompleteBody()):
         session.add(task)
 
         # Unblock dependents whose all deps are now finished
-        _unblock_dependents(session, task)
+        newly_ready = _unblock_dependents(session, task)
 
         session.commit()
         from app.services.mesh_events import publish_task_event
         publish_task_event("task_completed", task_id, task.kluster_id, task.mission_id or "", status="finished")
+        for dep in newly_ready:
+            publish_task_event("task_ready", dep.id, dep.kluster_id, dep.mission_id or "", status="ready")
         return _task_to_read(task)
 
 
@@ -638,14 +640,19 @@ def unblock_task(task_id: str):
         return _task_to_read(task)
 
 
-def _unblock_dependents(session, finished_task: MeshTask) -> None:
-    """After a task finishes, flip any pending task to ready if all its deps are done."""
+def _unblock_dependents(session, finished_task: MeshTask) -> list:
+    """After a task finishes, flip blocked tasks to ready if all deps are done.
+
+    Returns the list of newly-ready MeshTask objects so callers can emit
+    task_ready events after committing.
+    """
     candidates = session.exec(
         select(MeshTask)
         .where(MeshTask.kluster_id == finished_task.kluster_id)
-        .where(MeshTask.status == "pending")
+        .where(MeshTask.status.in_(["pending", "blocked"]))
     ).all()
 
+    newly_ready = []
     for candidate in candidates:
         dep_ids: list = json.loads(candidate.depends_on or "[]")
         if finished_task.id not in dep_ids:
@@ -657,6 +664,8 @@ def _unblock_dependents(session, finished_task: MeshTask) -> None:
             candidate.status = "ready"
             candidate.updated_at = datetime.utcnow()
             session.add(candidate)
+            newly_ready.append(candidate)
+    return newly_ready
 
 
 def _expire_stale_leases(session, kluster_id: str) -> None:
@@ -1163,6 +1172,8 @@ def resolve_gate(task_id: str, gate_id: str, body: GateResolve, request: Request
 
         # After resolving, check task transition
         task = session.get(MeshTask, task_id)
+        gate_task_event: tuple | None = None
+        gate_newly_ready: list = []
         if task and task.status == "waiting_review":
             all_gates = session.exec(
                 select(ReviewGate).where(ReviewGate.mesh_task_id == task_id)
@@ -1171,13 +1182,20 @@ def resolve_gate(task_id: str, gate_id: str, body: GateResolve, request: Request
                 task.status = "failed"
                 task.updated_at = datetime.utcnow()
                 session.add(task)
+                gate_task_event = ("task_failed", "failed")
             elif all(g.status in ("approved", "expired") for g in all_gates):
                 task.status = "finished"
                 task.updated_at = datetime.utcnow()
-                _unblock_dependents(session, task)
+                gate_newly_ready = _unblock_dependents(session, task)
                 session.add(task)
+                gate_task_event = ("task_completed", "finished")
             # else: some still pending → leave as waiting_review
 
         session.commit()
+        if gate_task_event and task:
+            from app.services.mesh_events import publish_task_event
+            publish_task_event(gate_task_event[0], task.id, task.kluster_id, task.mission_id or "", status=gate_task_event[1])
+            for dep in gate_newly_ready:
+                publish_task_event("task_ready", dep.id, dep.kluster_id, dep.mission_id or "", status="ready")
         session.refresh(gate)
         return _gate_to_dict(gate)

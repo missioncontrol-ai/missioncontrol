@@ -787,8 +787,9 @@ class MeshTask(SQLModel, table=True):
     consumes: str = Field(default="{}", sa_column=Column(Text))
     # JSON ["claude_code"] or ["code.edit", "test.run"]
     required_capabilities: str = Field(default="[]", sa_column=Column(Text))
-    # pending | ready | claimed | running | blocked | waiting_input |
-    # finished | failed | cancelled
+    # blocked (has unmet deps) → ready (all deps finished, claimable) →
+    # claimed → running → finished | failed | cancelled
+    # pending: legacy alias for blocked; waiting_input / waiting_review: paused
     status: str = Field(default="pending", index=True)
     claimed_by_agent_id: Optional[str] = Field(default=None, index=True)
     result_artifact_id: Optional[str] = Field(default=None)

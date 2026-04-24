@@ -19,6 +19,7 @@ def _request(subject: str):
 
 class EvolveRouterTests(unittest.TestCase):
     def setUp(self):
+        engine.dispose()
         SQLModel.metadata.drop_all(engine)
         SQLModel.metadata.create_all(engine)
 
