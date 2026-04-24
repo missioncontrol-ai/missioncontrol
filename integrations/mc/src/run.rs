@@ -139,19 +139,21 @@ async fn dispatch_launch(
         match runtime.as_str() {
             "claude" => {
                 let paths = claude::claude_paths(&profile);
-                crate::solo_supervisor::run_solo(
+                crate::solo_supervisor::run_solo_work_loop(
                     client,
                     &mission_id,
                     "claude_code",
                     &profile,
-                    move |agent_id, run_id| {
+                    move |agent_id: &str, task_id: &str, task_md_path: &std::path::Path| {
                         claude::launch_claude_blocking(
                             &passthrough_clone,
                             &paths.runtime_home,
                             &config_clone,
                             &profile_clone,
                             agent_id,
-                            run_id,
+                            None,
+                            Some(task_id),
+                            Some(task_md_path),
                         )
                     },
                 )
@@ -159,19 +161,21 @@ async fn dispatch_launch(
             }
             "codex" => {
                 let paths = codex::codex_paths(&profile);
-                crate::solo_supervisor::run_solo(
+                crate::solo_supervisor::run_solo_work_loop(
                     client,
                     &mission_id,
                     "codex",
                     &profile,
-                    move |agent_id, run_id| {
+                    move |agent_id: &str, task_id: &str, task_md_path: &std::path::Path| {
                         codex::launch_codex_blocking(
                             &passthrough_clone,
                             &paths.runtime_home,
                             &config_clone,
                             &profile_clone,
                             agent_id,
-                            run_id,
+                            None,
+                            Some(task_id),
+                            Some(task_md_path),
                         )
                     },
                 )

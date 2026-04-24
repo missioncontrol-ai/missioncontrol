@@ -756,6 +756,8 @@ pub fn launch_claude_blocking(
     profile: &str,
     agent_id: &str,
     run_id: Option<&str>,
+    task_id: Option<&str>,
+    task_md_path: Option<&Path>,
 ) -> Result<std::process::ExitStatus> {
     let mut cmd = resolved_command("claude");
     cmd.args(extra_args);
@@ -764,6 +766,12 @@ pub fn launch_claude_blocking(
     cmd.env("MC_MESH_AGENT_ID", agent_id);
     if let Some(rid) = run_id {
         cmd.env("MC_RUN_ID", rid);
+    }
+    if let Some(tid) = task_id {
+        cmd.env("MC_MESH_TASK_ID", tid);
+    }
+    if let Some(p) = task_md_path {
+        cmd.env("MC_TASK_MD_PATH", p);
     }
     if let Some(token) = &config.token {
         if !token.trim().is_empty() {
