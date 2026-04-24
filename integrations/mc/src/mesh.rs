@@ -3,8 +3,10 @@ use crate::client::MissionControlClient;
 use crate::config::McConfig;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::time::Duration;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 // ---------------------------------------------------------------------------
 // Top-level group
@@ -1154,19 +1156,71 @@ async fn watch_task(
     Ok(())
 }
 
-/// Poll /work/klusters/{id}/stream equivalent via REST for now.
+/// Stream /work/klusters/{id}/stream via WebSocket with exponential-backoff reconnect.
 async fn watch_kluster(kluster_id: &str, client: &MissionControlClient) -> Result<()> {
     println!("Watching kluster {kluster_id} (Ctrl-C to stop)…\n");
+    watch_ws_stream(
+        &format!("/work/klusters/{kluster_id}/stream"),
+        client,
+    )
+    .await
+}
+
+/// Connect to a WebSocket event stream path and print events until Ctrl-C.
+/// Reconnects with exponential backoff (1s → 30s) on disconnect.
+async fn watch_ws_stream(path: &str, client: &MissionControlClient) -> Result<()> {
+    let mut backoff = Duration::from_secs(1);
+
+    loop {
+        let mut url = client.ws_url(path)?;
+        if let Some(token) = client.token() {
+            url.query_pairs_mut().append_pair("token", token);
+        }
+
+        match connect_async(url.as_str()).await {
+            Ok((mut ws, _)) => {
+                backoff = Duration::from_secs(1); // reset on successful connect
+                while let Some(msg) = ws.next().await {
+                    match msg {
+                        Ok(Message::Text(text)) => {
+                            if let Ok(event) = serde_json::from_str::<Value>(&text) {
+                                let event_kind = event["event"].as_str().unwrap_or("");
+                                let event_type = event["type"].as_str().unwrap_or("");
+                                if event_type == "ping" || event_kind.is_empty() {
+                                    continue;
+                                }
+                                let task_id = event["task_id"].as_str().unwrap_or("");
+                                let status = event["status"].as_str().unwrap_or("");
+                                println!("{event_kind:<24} task={task_id}  status={status}");
+                            }
+                        }
+                        Ok(Message::Close(_)) | Err(_) => break,
+                        _ => {}
+                    }
+                }
+                eprintln!("[watch] disconnected — reconnecting in {}s…", backoff.as_secs());
+            }
+            Err(e) => {
+                eprintln!("[watch] connect failed: {e} — retrying in {}s…", backoff.as_secs());
+            }
+        }
+
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(Duration::from_secs(30));
+    }
+}
+
+// Legacy REST poll kept for reference; replaced by watch_kluster above.
+#[allow(dead_code)]
+async fn _watch_kluster_rest(kluster_id: &str, client: &MissionControlClient) -> Result<()> {
+    println!("Watching kluster {kluster_id} (REST poll, Ctrl-C to stop)…\n");
     let mut _last_progress_id: i64 = 0;
     let mut last_msg_id: i64 = 0;
 
     loop {
-        // Get all tasks to see their status.
         let tasks = client
             .get_json(&format!("/work/klusters/{kluster_id}/tasks"))
             .await?;
-
-        // Get new messages.
         let msgs = client
             .get_json(&format!(
                 "/work/klusters/{kluster_id}/messages?since_id={last_msg_id}"
@@ -1184,7 +1238,6 @@ async fn watch_kluster(kluster_id: &str, client: &MissionControlClient) -> Resul
             }
         }
 
-        // Print a status line for any in-progress tasks.
         if let Some(arr) = tasks.as_array() {
             let in_progress: Vec<_> = arr
                 .iter()
@@ -1284,51 +1337,11 @@ async fn handle_msg(cmd: MeshMsgCommand, client: &MissionControlClient) -> Resul
 
 async fn handle_watch(args: MeshWatchArgs, client: &MissionControlClient) -> Result<()> {
     if let Some(kluster_id) = &args.kluster {
-        watch_kluster(kluster_id, client).await
+        println!("Watching kluster {kluster_id} (Ctrl-C to stop)…\n");
+        watch_ws_stream(&format!("/work/klusters/{kluster_id}/stream"), client).await
     } else if let Some(mission_id) = &args.mission {
-        // For mission-level watch, list all klusters and poll each.
         println!("Watching mission {mission_id} (Ctrl-C to stop)…\n");
-        let klusters = client
-            .get_json(&format!("/missions/{mission_id}/k"))
-            .await?;
-        let ids: Vec<String> = klusters
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .filter_map(|k| k["id"].as_str().map(String::from))
-            .collect();
-
-        if ids.is_empty() {
-            println!("No klusters in mission {mission_id}.");
-            return Ok(());
-        }
-
-        let mut last_msg_ids: std::collections::HashMap<String, i64> =
-            ids.iter().map(|id| (id.clone(), 0i64)).collect();
-
-        loop {
-            for kluster_id in &ids {
-                let last_id = *last_msg_ids.get(kluster_id).unwrap_or(&0);
-                let msgs = client
-                    .get_json(&format!(
-                        "/work/klusters/{kluster_id}/messages?since_id={last_id}"
-                    ))
-                    .await
-                    .unwrap_or(json!([]));
-
-                if let Some(arr) = msgs.as_array() {
-                    for m in arr {
-                        let id = m["id"].as_i64().unwrap_or(0);
-                        let from = m["from_agent_id"].as_str().unwrap_or("?");
-                        let channel = m["channel"].as_str().unwrap_or("?");
-                        let body = &m["body_json"];
-                        println!("[kluster/{kluster_id}][{channel}] {from}: {body}");
-                        last_msg_ids.insert(kluster_id.clone(), last_id.max(id));
-                    }
-                }
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
+        watch_ws_stream(&format!("/work/missions/{mission_id}/stream"), client).await
     } else {
         anyhow::bail!("--mission or --kluster is required for `mc mesh watch`")
     }
