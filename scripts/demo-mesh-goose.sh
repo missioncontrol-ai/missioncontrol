@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# demo-mesh-goose.sh — end-to-end mc mesh work loop demo using Goose as the runtime.
+#
+# Creates a 3-task A → B → C dependency chain, starts 3 Goose workers via
+# `mc run goose --mission`, then polls until all tasks reach "finished".
+#
+# Requirements:
+#   - Backend running (MC_BASE_URL, default http://localhost:8008)
+#   - `mc` and `goose` binaries on PATH
+#   - Goose reachable LiteLLM at MC_LITELLM_HOST (default http://litellm:4000)
+#   - MC_TOKEN set or backend accepts unauthenticated requests
+#
+# Usage:
+#   MC_BASE_URL=http://localhost:8008 MC_TOKEN=<token> ./scripts/demo-mesh-goose.sh
+
+set -euo pipefail
+
+BASE_URL="${MC_BASE_URL:-http://localhost:8008}"
+TIMEOUT="${DEMO_TIMEOUT:-120}"
+TOKEN="${MC_TOKEN:-}"
+PROFILE="${MC_PROFILE:-default}"
+
+cleanup_pids=()
+
+cleanup() {
+    for pid in "${cleanup_pids[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+}
+trap cleanup EXIT INT TERM
+
+log() { echo "[demo-goose] $*"; }
+
+# ---- REST helper ----
+mc_api() {
+    local method="$1" path="$2" body="${3:-}"
+    if [[ "$method" == "GET" ]]; then
+        curl -sf \
+            ${TOKEN:+-H "Authorization: Bearer $TOKEN"} \
+            "${BASE_URL}${path}"
+    else
+        curl -sf -X POST \
+            -H "Content-Type: application/json" \
+            ${TOKEN:+-H "Authorization: Bearer $TOKEN"} \
+            ${body:+-d "$body"} \
+            "${BASE_URL}${path}"
+    fi
+}
+
+task_status() {
+    mc_api GET "/work/tasks/${1}" \
+      | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))"
+}
+
+# ---- Preflight ----
+command -v mc >/dev/null || { echo "mc binary not found on PATH"; exit 1; }
+command -v goose >/dev/null || { echo "goose binary not found on PATH"; exit 1; }
+
+# ---- 1. Create mission ----
+log "Creating mission…"
+MISSION=$(mc_api POST "/missions" \
+    "{\"name\":\"demo-mesh-goose-$(date +%s)\",\"owners\":\"demo@example.com\"}")
+MISSION_ID=$(echo "$MISSION" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+log "Mission: $MISSION_ID"
+
+# ---- 2. Create kluster ----
+log "Creating kluster…"
+KLUSTER=$(mc_api POST "/missions/${MISSION_ID}/k" \
+    "{\"name\":\"demo-k\",\"owners\":\"demo@example.com\"}")
+KLUSTER_ID=$(echo "$KLUSTER" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+log "Kluster: $KLUSTER_ID"
+
+# ---- 3. Seed tasks A → B → C ----
+log "Creating task A (no deps)…"
+A_ID=$(mc_api POST "/work/klusters/${KLUSTER_ID}/tasks" \
+    "{\"title\":\"A - foundation\",\"description\":\"First task — write a haiku about distributed systems.\"}" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+log "Task A: $A_ID"
+
+log "Creating task B (depends on A)…"
+B_ID=$(mc_api POST "/work/klusters/${KLUSTER_ID}/tasks" \
+    "{\"title\":\"B - middle\",\"description\":\"Second task — write a limerick about message queues.\",\"depends_on\":[\"${A_ID}\"]}" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+log "Task B: $B_ID"
+
+log "Creating task C (depends on B)…"
+C_ID=$(mc_api POST "/work/klusters/${KLUSTER_ID}/tasks" \
+    "{\"title\":\"C - final\",\"description\":\"Third task — write one sentence summarising distributed systems in plain English.\",\"depends_on\":[\"${B_ID}\"]}" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+log "Task C: $C_ID"
+
+log "Initial state: A=$(task_status $A_ID)  B=$(task_status $B_ID)  C=$(task_status $C_ID)"
+
+# ---- 4. Start 3 Goose workers ----
+log "Starting 3 Goose workers (mc run goose --mission ${MISSION_ID})…"
+for i in 1 2 3; do
+    MC_BASE_URL="$BASE_URL" \
+    MC_TOKEN="$TOKEN" \
+    mc run goose --mission "$MISSION_ID" -p "$PROFILE" \
+        > "/tmp/demo-goose-worker-${i}.log" 2>&1 &
+    cleanup_pids+=($!)
+    log "Worker $i PID ${cleanup_pids[-1]}"
+done
+
+# ---- 5. Poll until all finished ----
+log "Watching for completion (timeout ${TIMEOUT}s)…"
+START=$SECONDS
+DONE=0
+
+while (( SECONDS - START < TIMEOUT )); do
+    A_S=$(task_status "$A_ID" 2>/dev/null || echo "?")
+    B_S=$(task_status "$B_ID" 2>/dev/null || echo "?")
+    C_S=$(task_status "$C_ID" 2>/dev/null || echo "?")
+    log "  A=$A_S  B=$B_S  C=$C_S  ($(( SECONDS - START ))s elapsed)"
+
+    if [[ "$A_S" == "finished" && "$B_S" == "finished" && "$C_S" == "finished" ]]; then
+        DONE=1
+        break
+    fi
+    sleep 5
+done
+
+# ---- 6. Print worker logs ----
+log "--- worker logs ---"
+for i in 1 2 3; do
+    f="/tmp/demo-goose-worker-${i}.log"
+    [[ -f "$f" ]] && sed "s/^/  [w$i] /" "$f"
+done
+
+if [[ $DONE -eq 1 ]]; then
+    log "SUCCESS: A → B → C all finished in $(( SECONDS - START ))s"
+    exit 0
+else
+    log "TIMEOUT after ${TIMEOUT}s — A=$A_S  B=$B_S  C=$C_S"
+    exit 1
+fi

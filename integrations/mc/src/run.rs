@@ -1,4 +1,4 @@
-use crate::{claude, codex, config::McConfig, gemini};
+use crate::{claude, codex, config::McConfig, gemini, goose};
 use crate::client::MissionControlClient;
 use anyhow::{Result, bail};
 use clap::{Args, ValueEnum};
@@ -29,7 +29,7 @@ pub enum RunMode {
 
 #[derive(Args, Debug)]
 pub struct RunArgs {
-    /// Runtime to launch: claude, codex, gemini.
+    /// Runtime to launch: claude, codex, gemini, goose.
     #[arg(value_name = "RUNTIME")]
     pub runtime: String,
 
@@ -181,8 +181,30 @@ async fn dispatch_launch(
                 )
                 .await?;
             }
+            "goose" => {
+                let paths = goose::goose_paths(&profile);
+                crate::solo_supervisor::run_solo_work_loop(
+                    client,
+                    &mission_id,
+                    "goose",
+                    &profile,
+                    move |agent_id: &str, task_id: &str, task_md_path: &std::path::Path| {
+                        goose::launch_goose_blocking(
+                            &passthrough_clone,
+                            &paths.runtime_home,
+                            &config_clone,
+                            &profile_clone,
+                            agent_id,
+                            None,
+                            Some(task_id),
+                            Some(task_md_path),
+                        )
+                    },
+                )
+                .await?;
+            }
             other => bail!(
-                "--mode solo is not yet supported for runtime '{}'; try claude or codex",
+                "--mode solo is not yet supported for runtime '{}'; try claude, codex, or goose",
                 other
             ),
         }
@@ -194,8 +216,9 @@ async fn dispatch_launch(
         "claude" => claude::run_launch(profile, new, headless, passthrough, config).await,
         "codex" => codex::run_launch(profile, new, headless, passthrough, config).await,
         "gemini" => gemini::run_gemini_compat(Some(profile), passthrough, client, config).await,
+        "goose" => goose::run_launch(profile, new, headless, passthrough, config).await,
         other => {
-            eprintln!("mc: unknown runtime '{}'. Known: claude, codex, gemini", other);
+            eprintln!("mc: unknown runtime '{}'. Known: claude, codex, gemini, goose", other);
             std::process::exit(1);
         }
     }
@@ -227,6 +250,7 @@ async fn dispatch_exec(
         "claude" => claude::run_exec(profile, passthrough, config).await,
         "codex" => codex::run_exec(profile, passthrough, config).await,
         "gemini" => bail!("gemini does not have an exec command"),
+        "goose" => goose::run_exec(profile, passthrough, config).await,
         other => bail!("unknown runtime '{}'", other),
     }
 }

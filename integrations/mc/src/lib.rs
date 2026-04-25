@@ -12,6 +12,7 @@ pub mod daemon;
 pub mod drift;
 pub mod evolve;
 pub mod gemini;
+pub mod goose;
 pub mod governance;
 pub mod launch;
 pub mod maintenance;

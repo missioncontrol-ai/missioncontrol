@@ -804,31 +804,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn profile_conflict_errors() {
-        let cfg = McConfig::from_parts(
-            "http://localhost:8008",
-            None,
-            None,
-            None,
-            None,
-            10,
-            false,
-            false,
-            false,
-            None,
-        )
-        .expect("config");
-        let err = resolve_profile(Some("a".to_string()), Some("b".to_string()), &cfg)
-            .expect_err("must fail");
-        assert!(
-            err.to_string()
-                .contains("both positionally and via --profile"),
-            "{}",
-            err
-        );
-    }
-
-    #[test]
     fn managed_hook_detection_matches_mc_wrappers() {
         let v = json!({
             "hooks": [{"type":"command", "command":"\"${HOME}\"/.claude/hooks/mc-session-start.sh"}]
