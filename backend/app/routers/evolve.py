@@ -10,6 +10,7 @@ import asyncio
 import datetime
 import json
 import logging
+import os
 import uuid
 from typing import Any, Optional
 
@@ -25,6 +26,8 @@ from app.services.authz import actor_subject_from_request
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/evolve", tags=["evolve"])
+
+_GOOSE_EVOLVE_RUN_DIR = os.getenv("MC_GOOSE_EVOLVE_DIR", "/tmp/mc-evolve")
 
 # Service principal used for agent-driven evolve sessions
 EVOLVE_BOT_SUBJECT = "missioncontrol-bot"
@@ -107,6 +110,53 @@ async def _run_evolve_turn(
             pass
 
 
+async def _run_goose_evolve_turn(
+    run_id: str,
+    mission_id: str,
+    owner_subject: str,
+    spec_json: str,
+) -> None:
+    """Background task: run Goose against an evolve spec and persist score."""
+    from app.services.evolve_runner import run_goose_evolve
+
+    run_dir = os.path.join(_GOOSE_EVOLVE_RUN_DIR, mission_id, run_id)
+    spec = json.loads(spec_json or "{}")
+
+    try:
+        recipe_path, score = await run_goose_evolve(mission_id, spec, run_dir)
+
+        with get_session() as db:
+            run = db.exec(select(EvolveRun).where(EvolveRun.run_id == run_id)).first()
+            if run is not None:
+                run.status = "completed"
+                run.score = score
+                run.recipe_path = recipe_path
+                db.add(run)
+
+            mission = db.exec(
+                select(EvolveMission).where(EvolveMission.mission_id == mission_id)
+            ).first()
+            if mission is not None:
+                mission.status = "completed"
+                mission.updated_at = datetime.datetime.utcnow()
+                db.add(mission)
+
+            db.commit()
+        logger.info("goose_evolve_run_complete run_id=%s score=%s", run_id, score)
+
+    except Exception as exc:
+        logger.error("goose_evolve_run_error run_id=%s error=%s", run_id, exc)
+        try:
+            with get_session() as db:
+                run = db.exec(select(EvolveRun).where(EvolveRun.run_id == run_id)).first()
+                if run is not None:
+                    run.status = "failed"
+                    db.add(run)
+                    db.commit()
+        except Exception:
+            pass
+
+
 @router.post("/missions")
 async def seed_evolve_mission(body: EvolveSpec, request: Request) -> dict[str, Any]:
     """Seed an evolve mission from a spec dict.
@@ -160,13 +210,53 @@ async def run_evolve_mission(
             raise HTTPException(status_code=404, detail=f"evolve mission {mission_id} not found")
         spec_json = mission.spec_json
 
+    run_id = f"run-{uuid.uuid4().hex[:8]}"
+    now = datetime.datetime.utcnow()
+
+    if runtime_kind == "goose":
+        # Goose path: no AiSession needed — Goose is an external subprocess
+        with get_session() as db:
+            run_record = EvolveRun(
+                run_id=run_id,
+                mission_id=mission_id,
+                owner_subject=owner_subject,
+                agent="goose",
+                status="running",
+                started_at=now,
+                ai_session_id=None,
+            )
+            db.add(run_record)
+
+            mission_row = db.exec(
+                select(EvolveMission).where(EvolveMission.mission_id == mission_id)
+            ).first()
+            if mission_row:
+                mission_row.status = "running"
+                mission_row.updated_at = now
+                db.add(mission_row)
+
+            db.commit()
+
+        asyncio.create_task(
+            _run_goose_evolve_turn(run_id, mission_id, owner_subject, spec_json or "{}")
+        )
+
+        return {
+            "mission_id": mission_id,
+            "run_id": run_id,
+            "agent": "goose",
+            "runtime_kind": "goose",
+            "status": "running",
+            "started_at": now.isoformat() + "Z",
+            "ai_session_id": None,
+        }
+
+    # Default path: AI Console gateway (claude, opencode, etc.)
     from app.ai_console.gateway import get_gateway
     from app.services.ids import new_hash_id
 
     gateway = get_gateway()
     session_id = new_hash_id()
-    run_id = f"run-{uuid.uuid4().hex[:8]}"
-    now = datetime.datetime.utcnow()
 
     # Create AiSession + EvolveRun in one db block
     with get_session() as db:
@@ -242,6 +332,8 @@ async def get_evolve_status(mission_id: str, request: Request) -> dict[str, Any]
                 "started_at": run.started_at.isoformat() + "Z",
                 "status": run.status,
                 "ai_session_id": run.ai_session_id,
+                "score": run.score,
+                "recipe_path": run.recipe_path,
             }
             for run in runs
         ]

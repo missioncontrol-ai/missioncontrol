@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 from sqlmodel import SQLModel
@@ -124,6 +125,37 @@ class EvolveRouterTests(unittest.TestCase):
                 )
             )
         self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_goose_runtime_skips_ai_session(self):
+        """Goose path creates an EvolveRun without an AiSession."""
+        owner = _request("owner@example.com")
+        seeded = asyncio.run(
+            evolve_router.seed_evolve_mission(
+                evolve_router.EvolveSpec(spec={"name": "goose-test", "tasks": []}),
+                owner,
+            )
+        )
+        mission_id = seeded["mission_id"]
+
+        # Patch the background worker so the test doesn't actually run Goose
+        _noop = AsyncMock(return_value=None)
+        with patch.object(evolve_router, "_run_goose_evolve_turn", _noop):
+            run = asyncio.run(
+                evolve_router.run_evolve_mission(
+                    mission_id,
+                    evolve_router.EvolveRunRequest(runtime_kind="goose"),
+                    owner,
+                )
+            )
+        self.assertEqual(run["agent"], "goose")
+        self.assertEqual(run["runtime_kind"], "goose")
+        self.assertEqual(run["status"], "running")
+        self.assertIsNone(run["ai_session_id"])
+
+        status = asyncio.run(evolve_router.get_evolve_status(mission_id, owner))
+        self.assertEqual(status["run_count"], 1)
+        self.assertIsNone(status["runs"][0]["ai_session_id"])
+        self.assertIn("score", status["runs"][0])
 
 
 if __name__ == "__main__":

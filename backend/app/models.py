@@ -500,6 +500,8 @@ class EvolveRun(SQLModel, table=True):
     status: str = Field(default="launched", index=True)
     started_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     ai_session_id: Optional[str] = Field(default=None, index=True)
+    score: Optional[float] = Field(default=None)
+    recipe_path: Optional[str] = Field(default=None)
 
 
 class AiSession(SQLModel, table=True):

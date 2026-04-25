@@ -12,6 +12,7 @@ _ALIASES = {
     "claude_code": RuntimeKind.claude_code,
     "codex": RuntimeKind.codex,
     "opencode": RuntimeKind.opencode,
+    "goose": RuntimeKind.goose,
 }
 
 

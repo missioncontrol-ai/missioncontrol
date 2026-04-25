@@ -17,6 +17,7 @@ class RuntimeKind(str, Enum):
     opencode = "opencode"
     claude_code = "claude_code"
     codex = "codex"
+    goose = "goose"
     native = "native"  # legacy fallback only
 
 
