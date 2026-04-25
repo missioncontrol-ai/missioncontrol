@@ -1,4 +1,5 @@
 pub mod agent_context;
+pub mod dispatch;
 pub mod auth;
 pub mod booster;
 pub mod channel;
