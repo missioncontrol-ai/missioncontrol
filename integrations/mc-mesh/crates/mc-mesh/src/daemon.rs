@@ -1,6 +1,8 @@
 /// mc-mesh daemon — wires config, supervisor, runtimes, and task loops together.
 use anyhow::Result;
+use mc_mesh_core::capability_dispatcher::CapabilityDispatcher;
 use mc_mesh_core::client::BackendClient;
+use mc_mesh_packs::{PackRegistry, PolicyBundle};
 use mc_mesh_runtimes::{
     claude_code::ClaudeCodeRuntime,
     codex::CodexRuntime,
@@ -15,6 +17,7 @@ use tokio::sync::Mutex;
 
 use crate::attach_gateway;
 use crate::config::DaemonConfig;
+use crate::mgmt_gateway::MgmtGateway;
 use crate::supervisor::Supervisor;
 use crate::task_loop;
 
@@ -156,6 +159,28 @@ pub async fn run(cli: CliOverrides) -> Result<()> {
             tracing::warn!("attach gateway exited: {e}");
         }
     });
+
+    // Start the management gateway (Unix socket + TCP, JSON-RPC 2.0).
+    {
+        let registry = Arc::new(match PackRegistry::load_builtin() {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("failed to load builtin pack registry: {e}");
+                return Err(anyhow::anyhow!("pack registry load failed: {e}"));
+            }
+        });
+        let dispatcher = Arc::new(CapabilityDispatcher::new(
+            Arc::clone(&registry),
+            PolicyBundle::allow_all(),
+            None,
+        ));
+        let mgmt_gw = MgmtGateway::new(dispatcher, registry);
+        tokio::spawn(async move {
+            if let Err(e) = mgmt_gw.run().await {
+                tracing::error!("mgmt gateway error: {e}");
+            }
+        });
+    }
 
     // Wait for ctrl-c or all loops to exit.
     tokio::select! {
