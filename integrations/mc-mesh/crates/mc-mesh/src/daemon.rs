@@ -5,6 +5,7 @@ use mc_mesh_runtimes::{
     claude_code::ClaudeCodeRuntime,
     codex::CodexRuntime,
     gemini::GeminiRuntime,
+    goose::GooseRuntime,
 };
 use mc_mesh_work::watchdog::{OfflinePolicy, Watchdog};
 use std::collections::HashMap;
@@ -77,6 +78,7 @@ pub async fn run(cli: CliOverrides) -> Result<()> {
                     "claude_code" => Arc::new(Box::new(ClaudeCodeRuntime::new())),
                     "codex" => Arc::new(Box::new(CodexRuntime::new())),
                     "gemini" => Arc::new(Box::new(GeminiRuntime::new())),
+                    "goose" => Arc::new(Box::new(GooseRuntime::new())),
                     other => {
                         tracing::warn!("Unknown runtime kind '{other}', skipping agent {}", agent_entry.agent_id);
                         continue;
