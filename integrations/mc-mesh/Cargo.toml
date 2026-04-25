@@ -4,6 +4,7 @@ members = [
     "crates/mc-mesh-core",
     "crates/mc-mesh-work",
     "crates/mc-mesh-runtimes",
+    "crates/mc-mesh-sandbox",
 ]
 resolver = "2"
 
