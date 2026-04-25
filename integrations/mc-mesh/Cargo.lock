@@ -1327,6 +1327,7 @@ dependencies = [
  "futures",
  "mc-mesh-core",
  "mc-mesh-packs",
+ "mc-mesh-receipts",
  "mc-mesh-runtimes",
  "mc-mesh-work",
  "serde",

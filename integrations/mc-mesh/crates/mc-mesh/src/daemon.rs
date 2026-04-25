@@ -9,6 +9,7 @@ use mc_mesh_runtimes::{
     gemini::GeminiRuntime,
     goose::GooseRuntime,
 };
+use mc_mesh_receipts::ReceiptStore;
 use mc_mesh_work::watchdog::{OfflinePolicy, Watchdog};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -169,11 +170,16 @@ pub async fn run(cli: CliOverrides) -> Result<()> {
                 return Err(anyhow::anyhow!("pack registry load failed: {e}"));
             }
         });
-        let dispatcher = Arc::new(CapabilityDispatcher::new(
-            Arc::clone(&registry),
-            PolicyBundle::allow_all(),
-            None,
-        ));
+        let receipts_path = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".missioncontrol")
+            .join("receipts.db");
+        let receipt_store = ReceiptStore::open(&receipts_path)
+            .map_err(|e| anyhow::anyhow!("failed to open receipt store at {}: {e}", receipts_path.display()))?;
+        let dispatcher = Arc::new(
+            CapabilityDispatcher::new(Arc::clone(&registry), PolicyBundle::allow_all(), None)
+                .with_receipt_store(Arc::new(receipt_store)),
+        );
         let mgmt_gw = MgmtGateway::new(dispatcher, registry);
         tokio::spawn(async move {
             if let Err(e) = mgmt_gw.run().await {

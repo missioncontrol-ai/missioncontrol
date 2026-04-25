@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 mc-mesh-core = { path = "../mc-mesh-core" }
 mc-mesh-packs = { path = "../mc-mesh-packs" }
+mc-mesh-receipts = { path = "../mc-mesh-receipts" }
 mc-mesh-work = { path = "../mc-mesh-work" }
 mc-mesh-runtimes = { path = "../mc-mesh-runtimes" }
 anyhow = { workspace = true }

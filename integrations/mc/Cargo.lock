@@ -2246,6 +2246,7 @@ dependencies = [
  "libc",
  "mc-mesh-packs",
  "mc-mesh-receipts",
+ "mc-mesh-secrets",
  "mc-mesh-sync",
  "open",
  "portable-pty",
