@@ -197,6 +197,10 @@ services:
       MC_OPENCODE_URL: ${MC_OPENCODE_URL:-http://opencode:4096}
       MC_OPENCODE_TIMEOUT_SECONDS: ${MC_OPENCODE_TIMEOUT_SECONDS:-120}
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:-}
+      # Goose runtime
+      MC_LITELLM_HOST: ${MC_LITELLM_HOST:-http://litellm:4000}
+      MC_LITELLM_API_KEY: ${MC_LITELLM_API_KEY:-}
+      MC_GOOSE_MODEL: ${MC_GOOSE_MODEL:-litellm/local-agent}
     ports:
       - "8008:8008"
     volumes:

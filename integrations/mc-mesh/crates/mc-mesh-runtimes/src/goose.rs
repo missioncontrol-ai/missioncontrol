@@ -266,6 +266,7 @@ impl AgentRuntime for GooseRuntime {
             .env("XDG_CONFIG_HOME", &work_dir)
             .env("GOOSE_PROVIDER", "litellm")
             .env("LITELLM_HOST", &litellm_host)
+            .env("GOOSE_MODEL", std::env::var("MC_GOOSE_MODEL").unwrap_or_else(|_| "litellm/local-agent".into()))
             .env("GOOSE_MODE", "Auto")
             .env("MC_MESH_AGENT_ID", &agent_id)
             .env("MC_MESH_TASK_ID", &task_id)

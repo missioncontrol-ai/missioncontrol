@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 _LITELLM_HOST = os.getenv("MC_LITELLM_HOST", "http://litellm:4000")
 _GOOSE_BIN = os.getenv("GOOSE_BIN", "goose")
 _MAX_TURNS = int(os.getenv("GOOSE_EVOLVE_MAX_TURNS", "50"))
+_GOOSE_MODEL = os.getenv("MC_GOOSE_MODEL", "litellm/local-agent")
 
 
 def build_goose_recipe(spec: dict) -> dict:
@@ -82,6 +83,7 @@ async def run_goose_evolve(
         "GOOSE_PROVIDER": "litellm",
         "LITELLM_HOST": _LITELLM_HOST,
         "LITELLM_API_KEY": api_key,
+        "GOOSE_MODEL": _GOOSE_MODEL,
         "GOOSE_MODE": "Auto",
         "XDG_CONFIG_HOME": run_dir,
         "HOME": run_dir,

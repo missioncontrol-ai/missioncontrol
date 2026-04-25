@@ -122,6 +122,11 @@ fn litellm_host() -> String {
         .unwrap_or_else(|_| "http://litellm:4000".to_string())
 }
 
+fn goose_model() -> String {
+    std::env::var("MC_GOOSE_MODEL")
+        .unwrap_or_else(|_| "litellm/local-agent".to_string())
+}
+
 fn apply_env(
     cmd: &mut std::process::Command,
     runtime_home: &Path,
@@ -135,6 +140,7 @@ fn apply_env(
     cmd.env("XDG_CONFIG_HOME", runtime_home);
     cmd.env("GOOSE_PROVIDER", "litellm");
     cmd.env("LITELLM_HOST", litellm_host());
+    cmd.env("GOOSE_MODEL", goose_model());
     cmd.env("GOOSE_MODE", "Auto");
 
     if let Ok(api_key) = std::env::var("MC_LITELLM_API_KEY") {

@@ -990,6 +990,13 @@ fn build_goose_command(
         .get("LITELLM_API_KEY")
         .and_then(Value::as_str)
         .unwrap_or("sk-goose");
+    let goose_model = env_map
+        .get("GOOSE_MODEL")
+        .and_then(Value::as_str)
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| {
+            std::env::var("MC_GOOSE_MODEL").unwrap_or_else(|_| "litellm/local-agent".to_owned())
+        });
 
     let trimmed = command.trim();
 
@@ -1018,6 +1025,7 @@ fn build_goose_command(
     cmd.env("GOOSE_PROVIDER", "litellm")
         .env("LITELLM_HOST", litellm_host)
         .env("LITELLM_API_KEY", litellm_api_key)
+        .env("GOOSE_MODEL", goose_model)
         .env("GOOSE_MODE", "Auto");
 
     for (key, value) in env_map {
