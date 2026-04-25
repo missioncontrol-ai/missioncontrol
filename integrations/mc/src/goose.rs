@@ -114,7 +114,14 @@ fn run_goose_process(
 }
 
 fn which_goose() -> Result<PathBuf> {
-    which::which("goose").context("goose not found on PATH")
+    // MC_GOOSE_BIN overrides PATH lookup (useful when goose lives in ~/.local/bin)
+    if let Ok(p) = std::env::var("MC_GOOSE_BIN") {
+        let path = PathBuf::from(&p);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    which::which("goose").context("goose not found on PATH; set MC_GOOSE_BIN to override")
 }
 
 fn litellm_host() -> String {

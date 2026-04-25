@@ -25,6 +25,7 @@ DEFAULT_SCHEMA_PACK = {
             "required": ["kluster_id", "title"],
             "optional": [
                 "description",
+                "epic_id",
                 "status",
                 "owner",
                 "contributors",

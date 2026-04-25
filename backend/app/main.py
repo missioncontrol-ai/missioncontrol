@@ -248,6 +248,12 @@ app.add_middleware(
 
 
 @app.on_event("startup")
+async def _capture_event_loop():
+    from app.services.mesh_events import capture_event_loop
+    capture_event_loop()
+
+
+@app.on_event("startup")
 def on_startup():
     init_db()
     with get_session() as session:

@@ -1,173 +1,151 @@
-Yes. It is feasible, but only if you treat RKE2 as an operational design template, not as the literal substrate.
+# mc-mesh — Agent Work Loop
 
-RKE2’s reusable ideas are the ones around packaging and lifecycle: a single binary, installed as a long-running system service; a clear server vs agent split; config-file-first operation; secure node join tokens; a fixed registration address for joining nodes; and HA built around an odd number of control-plane servers. Its daemon supervises child processes and runs indefinitely until terminated. Those are the parts worth copying.
+mc-mesh is the work-first agent coordination daemon. Think Temporal, not RKE2:
+- **Mission** = namespace / long-lived workspace
+- **Kluster** = objective owning a task DAG
+- **MeshTask** = unit of work (claimed, executed, finished)
+- **AgentRuntime** = worker (Goose, Claude, Codex, Gemini)
 
-Your current Mission Control repo already has the beginnings of this model. The project describes mc as a Rust-native compiled gateway, says Mission Control can bootstrap resident mc node daemons using join tokens and install bundles, persists node config locally, and already exposes lease/heartbeat-style operations such as mc ops mission --action start|heartbeat|commit|release. The current mc integration is also already doing SSE/matrix feed work and MQTT-based inbox updates.
+The daemon (`mc-mesh`) runs a headless attach gateway. The work loop (`mc run <runtime>`) connects to a mission, claims tasks, and supervises agent child processes.
 
-So the honest answer is: you are not starting from zero. You are closer to an RKE2-style agent fabric than it may feel.
+---
 
-The part I would not do is fork RKE2 and try to hollow it out. RKE2’s internals are heavily optimized around Kubernetes bootstrapping: extracting runtime assets, starting containerd, supervising kubelet, writing static pod manifests, launching etcd, and then letting the kubelet start the control-plane stack. That is excellent for Kubernetes, but it is the wrong center of gravity for an agent mesh. You want the RKE2 shape, not the Kubernetes payload.
+## Install on a node
 
-The right product shape is:
+### Prerequisites
 
-mc-mesh server
-mc-mesh agent
-mc-mesh token
-mc-mesh snapshot
-mc-mesh upgrade
-mc-mesh node
+- Rust toolchain (if building from source) or prebuilt binary
+- Agent runtime installed (e.g. `~/.local/bin/goose`)
+- Tailscale (or direct network access to the MC backend)
+- `~/.missioncontrol/session.json` with a valid token
 
-That gives you the RKE2 mental model without importing RKE2’s control-plane complexity.
+### Build from source
 
-My recommendation is to make mc-mesh the fleet/runtime substrate and keep Mission Control as the organizational brain. In other words:
+```bash
+# On the target machine (avoids glibc version mismatch)
+git clone <repo> && cd missioncontrol/integrations/mc
+cargo build --release
+cp target/release/mc ~/bin/mc
+```
 
-Mission Control = missions, policies, approvals, artifact ledger, organizational state.
-mc-mesh = node membership, desired state, work distribution, service-agent runtime, local execution, heartbeats, recovery, upgrades.
+### Authenticate
 
-That separation matches your repo’s current direction, where Mission Control is already the orchestration/control plane and mc is the local/runtime gateway.
+```bash
+# OIDC browser flow
+curl -s http://<mc-host>/auth/oidc/cli-initiate
+# open authorize_url in browser, copy grant_id from success page
+curl -s -X POST http://<mc-host>/auth/oidc/exchange \
+  -H "Content-Type: application/json" \
+  -d '{"grant_id":"olg_…"}' > /tmp/tok.json
 
-For the control plane, I would borrow RKE2’s HA pattern almost verbatim: one stable registration endpoint in front of an odd number of servers, usually 3. RKE2 explicitly recommends a fixed registration address plus three server nodes so the cluster can maintain quorum. That exact idea maps well to mc-mesh: one VIP/L4 load balancer, three mc-mesh server nodes, and all agents registering against that stable address.
+# Write session file
+MC_HOST=http://<mc-host>
+TOKEN=$(jq -r .token /tmp/tok.json)
+cat > ~/.missioncontrol/session.json <<EOF
+{"token":"$TOKEN","subject":"$(jq -r .subject /tmp/tok.json)",
+ "email":"$(jq -r .email /tmp/tok.json)",
+ "expires_at":"$(jq -r .expires_at /tmp/tok.json)",
+ "base_url":"$MC_HOST","session_id":$(jq -r .session_id /tmp/tok.json)}
+EOF
+chmod 600 ~/.missioncontrol/session.json
+```
 
-For node bootstrap, copy RKE2’s secure-token approach. RKE2 documents secure tokens that include the cluster CA hash so a joining node can validate the server identity before sending credentials, and it supports expiring bootstrap tokens as well. For mc-mesh, do the same thing: short-lived join tokens plus mTLS enrollment on first join, then rotate into a long-lived node identity cert.
+---
 
-For the database, I would not replace Postgres as your main durable brain.
+## Run the work loop
 
-RKE2 uses embedded etcd because it needs a consensus store for Kubernetes cluster state, and its docs say embedded etcd is the only embedded datastore option that supports HA; embedded SQLite is explicitly not HA. That does not mean etcd is the right primary database for agent orchestration. Your domain wants rich querying, policies, history, audit trails, search, leases, artifacts, and human-facing operational views. Postgres is much better aligned to that.
+### Enroll an agent
 
-So the best forward-looking architecture is:
+```bash
+MC_BASE_URL=http://<mc-host> mc mesh agent enroll \
+  --mission <mission-id> \
+  --runtime goose
+```
 
-Postgres HA for durable system-of-record state
-NATS JetStream for eventing, work distribution, fanout, and edge/offline-friendly messaging
-Local embedded store on each node for offline spool and last-known desired state
+### Start the loop
 
-NATS JetStream is built into nats-server, supports replication for HA, supports work-queue retention, and its leaf-node model is explicitly meant to support local networks that can keep working when the hub/cloud connection is down. That last point is unusually well aligned with your “remote nodes may not always be connected” requirement.
+```bash
+PATH="$HOME/.local/bin:$PATH" \
+MC_BASE_URL=http://<mc-host> \
+MC_LITELLM_HOST=http://<litellm-host>:4000 \
+MC_LITELLM_API_KEY=<key> \
+mc run goose --mission <mission-id>
+```
 
-If your control plane runs on Kubernetes, CloudNativePG is a strong fit for the Postgres side. Its current docs say it is Kubernetes-native, declarative, self-healing, and does not require an external failover management tool.
+Run as a systemd user service for persistence:
 
-So my recommendation is:
+```ini
+# ~/.config/systemd/user/mc-goose.service
+[Unit]
+Description=MissionControl Goose work loop
+After=network-online.target
 
-v1 simplest path: Postgres only, with TTL leases and SKIP LOCKED-style work claiming
-v1.5 / real mesh path: Postgres + NATS JetStream
-avoid: etcd as your only primary application database
+[Service]
+Environment=PATH=/home/%u/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=MC_BASE_URL=http://<mc-host>
+Environment=MC_LITELLM_HOST=http://<litellm-host>:4000
+Environment=MC_LITELLM_API_KEY=<key>
+ExecStart=/home/%u/bin/mc run goose --mission <mission-id>
+Restart=on-failure
+RestartSec=10
 
-For heartbeat and stopping remote action, do not model this as a passive heartbeat check. Model it as a lease system.
+[Install]
+WantedBy=default.target
+```
 
-Each node should hold:
+```bash
+systemctl --user enable --now mc-goose
+```
 
-a node session lease
-one or more work leases
-optionally a service-agent runtime lease
+---
 
-The agent renews those leases every few seconds. If lease renewal fails beyond grace, the node transitions locally into a policy-defined state:
+## Create and dispatch work
 
-strict: stop all mutable work immediately
-safe-readonly: allow reads/monitoring, stop writes and external actions
-autonomous: continue only whitelisted service agents with local policy + max autonomy TTL
+### Create a MeshTask (via work API)
 
-That solves your remote/offline problem much better than a binary “connected/disconnected” flag, because you can explicitly define what an edge node is allowed to keep doing when it loses contact.
+```bash
+TOKEN=mcs_…
+KLUSTER_ID=<id>
 
-The crucial part is that the local watchdog must enforce lease expiry even if the control plane is unreachable. Otherwise a disconnected node can keep acting indefinitely, which is exactly what you said you do not want.
+curl -X POST http://<mc-host>/work/klusters/$KLUSTER_ID/tasks \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "task title",
+    "description": "what to do",
+    "claim_policy": "first_claim",
+    "priority": 5
+  }'
+```
 
-The minimum agent runtime I would build is:
+`claim_policy` options: `first_claim` (any available agent), `assigned` (specific agent), `broadcast` (all agents).
 
-persistent daemon under systemd
-reverse control stream to the server
-local runner supervisor
-local spool/journal
-capability inventory
-lease renewer
-kill/freeze hooks when leases expire
-resumable state sync when connectivity returns
+Tasks are auto-set to `ready` when created with no `depends_on`. The work loop picks them up on startup poll or via WebSocket `task_ready` events.
 
-That gives you the RKE2 daemon feel, but for agents.
+### Retry a failed task
 
-The best RKE2 features to borrow directly into mc-mesh are these:
+```bash
+curl -X POST http://<mc-host>/work/tasks/<task-id>/retry \
+  -H "Authorization: Bearer $TOKEN"
+```
 
-Single binary + service install
-server / agent split
-Config file at a fixed OS path
-Stable registration endpoint
-Secure bootstrap token flow
-Odd-number control plane for quorum
-Snapshot / restore as a first-class command
-Deterministic on-disk layout
-Rolling upgrade channel model
-Air-gap/offline install bundles
+---
 
-Those are the pieces that make RKE2 operationally good.
+## Environment variables
 
-A good mc-mesh command surface would be:
+| Variable | Default | Purpose |
+|---|---|---|
+| `MC_BASE_URL` | `http://localhost:8008` | Backend URL |
+| `MC_LITELLM_HOST` | `http://litellm:4000` | LiteLLM proxy URL |
+| `MC_LITELLM_API_KEY` | _(none)_ | LiteLLM master key → sets `LITELLM_API_KEY` for Goose |
+| `MC_GOOSE_BIN` | _(PATH lookup)_ | Override path to goose binary (e.g. `~/.local/bin/goose`) |
+| `MC_GOOSE_MODEL` | `local-agent` | Model name passed to Goose |
 
-mc-mesh server
-mc-mesh agent
+---
 
-mc-mesh token create
-mc-mesh token list
-mc-mesh token revoke
+## Known limitations
 
-mc-mesh node join
-mc-mesh node status
-mc-mesh node cordon
-mc-mesh node drain
-mc-mesh node uncordon
-
-mc-mesh service-agent deploy
-mc-mesh service-agent status
-mc-mesh service-agent restart
-
-mc-mesh snapshot save
-mc-mesh snapshot restore
-
-mc-mesh upgrade plan
-mc-mesh upgrade apply
-
-What it would take to build, realistically:
-
-Prototype: feasible in 6–8 weeks if you stay disciplined and do not chase every feature.
-That prototype would include:
-
-1 binary
-server/agent modes
-secure join
-node inventory
-lease/heartbeat system
-local watchdog
-simple job/service-agent scheduling
-Postgres-backed state
-basic notifications
-
-Production-grade v1: more like 4–6 months with a small focused team.
-The hard parts are not the daemon itself. The hard parts are:
-
-cert bootstrapping and rotation
-idempotent upgrades
-rollback safety
-lease correctness under partitions
-durable local replay
-observability
-policy enforcement
-draining / maintenance workflows
-operator experience
-
-That is where “world-class” lives.
-
-My strongest opinion here: do not build “agent Kubernetes.” Build “RKE2 for managed service-agents.” Keep the model narrow:
-
-long-running resident daemons
-known node inventory
-service-agent placement
-lease-based safety
-offline-tolerant edge behavior
-human-governed control plane
-
-That is much more likely to become excellent.
-
-The shortest strategic version is:
-
-Keep Mission Control as the durable organizational control plane.
-Build mc-mesh as a Rust single-binary fleet runtime.
-Use 3 control-plane servers behind one registration endpoint.
-Keep Postgres as the system of record.
-Add NATS JetStream for the actual mesh/event/work layer.
-Enforce lease expiry locally so disconnected nodes stop acting.
-Copy RKE2’s ops model, not its Kubernetes internals.
+- **Event bus threading**: `task_ready` WebSocket events from sync API handlers may not wake the work loop reliably in single-worker deployments. The startup poll (`/work/klusters/{id}/tasks?status=ready`) is the reliable dispatch path — restart the loop after creating tasks if events don't fire.
+- **sudo in tasks**: Goose runs without a TTY; `sudo` will fail unless the node has passwordless sudo configured for the user (`NOPASSWD: ALL` or specific commands in `/etc/sudoers.d/`).
+- **GLIBC mismatch**: Build `mc` natively on the target node if it runs an older glibc than the build machine.
+- **Tasks vs MeshTasks**: The regular `/missions/{id}/k/{id}/t` task API is the Kanban-style tracker. The work loop only operates on `MeshTask` objects at `/work/klusters/{id}/tasks`. Always use the `/work/` API when creating tasks for agent dispatch.

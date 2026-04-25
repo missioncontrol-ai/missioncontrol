@@ -17,6 +17,19 @@ logger = logging.getLogger(__name__)
 # channel_key -> list of queues
 _subscribers: Dict[str, List[asyncio.Queue]] = {}
 
+# Reference to the running asyncio event loop, captured at startup.
+# Used to safely schedule puts from sync (threadpool) handlers.
+_event_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def capture_event_loop() -> None:
+    """Store a reference to the current event loop. Call once from async startup."""
+    global _event_loop
+    try:
+        _event_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+
 
 def subscribe(channel_key: str) -> asyncio.Queue:
     """Subscribe to a channel. Returns a queue that will receive event dicts."""
@@ -37,12 +50,33 @@ def unsubscribe(channel_key: str, q: asyncio.Queue):
 
 
 def _publish_local(channel_key: str, event: dict):
-    """Fan out an event to all local subscribers for this channel."""
+    """Fan out an event to all local subscribers for this channel.
+
+    Safe to call from both async contexts and sync handlers running in a
+    threadpool. When called from a thread, uses call_soon_threadsafe so the
+    asyncio event loop wakes up waiters correctly.
+    """
+    in_async_context = True
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        in_async_context = False
+
     for q in list(_subscribers.get(channel_key, [])):
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            logger.warning("Event queue full for channel %s, dropping event", channel_key)
+        if in_async_context:
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.warning("Event queue full for channel %s, dropping event", channel_key)
+        else:
+            loop = _event_loop
+            if loop and not loop.is_closed():
+                loop.call_soon_threadsafe(q.put_nowait, event)
+            else:
+                try:
+                    q.put_nowait(event)
+                except asyncio.QueueFull:
+                    logger.warning("Event queue full for channel %s, dropping event", channel_key)
 
 
 # ---- Publish interface (called from write paths) ----

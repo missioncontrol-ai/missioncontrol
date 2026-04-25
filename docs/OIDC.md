@@ -24,6 +24,53 @@ MC_ADMIN_EMAILS=<comma-separated-emails>
 # OIDC_JWKS_URL=https://<authentik-host>/application/o/<provider-slug>/jwks/
 ```
 
+### Split internal/public issuer (dev/cluster)
+
+When the API container can only reach the IdP via a private address (e.g. a
+Kubernetes ClusterIP) but browsers must redirect to a public hostname, set two
+extra vars:
+
+```env
+# Server-side: used for token discovery + JWKS fetch + iss validation
+OIDC_ISSUER_URL=http://<cluster-ip>/application/o/<slug>/
+OIDC_INTERNAL_ISSUER_URL=http://<cluster-ip>/application/o/<slug>/
+
+# Browser-side: authorize_url in CLI initiate / web login is rewritten to this origin
+OIDC_PUBLIC_ISSUER_URL=https://<public-authentik-host>/application/o/<slug>/
+```
+
+Rule: `OIDC_ISSUER_URL` must match the `iss` claim in issued JWTs (set to the
+ClusterIP URL when Authentik is inside the cluster). `OIDC_PUBLIC_ISSUER_URL`
+is only used to rewrite the `authorize_url` returned to browsers/CLI — it is
+never validated against JWT claims.
+
+## CLI login flow
+
+```bash
+# 1. Initiate — get a browser URL and a cli_nonce
+curl -s http://<mc-host>/auth/oidc/cli-initiate
+# → {"authorize_url": "https://...", "cli_nonce": "...", "expires_at": "..."}
+
+# 2. Open authorize_url in your browser and complete login.
+#    The success page shows a grant_id (olg_…).
+
+# 3. Exchange the grant_id for a session token
+curl -s -X POST http://<mc-host>/auth/oidc/exchange \
+  -H "Content-Type: application/json" \
+  -d '{"grant_id": "olg_…"}'
+# → {"token": "mcs_…", "subject": "…", "expires_at": "…"}
+
+# 4. Write token to ~/.missioncontrol/session.json (mc reads this automatically)
+# session.json format:
+# {"token":"mcs_…","subject":"…","email":"…","expires_at":"…","base_url":"http://<mc-host>","session_id":1}
+```
+
+Alternatively, poll instead of copy-paste:
+```bash
+curl -s http://<mc-host>/auth/oidc/cli-poll/<cli_nonce>
+# → {"status":"ready","grant_id":"olg_…"}  (404 until login completes)
+```
+
 ## Browser login flow (production)
 
 MissionControl web login uses backend PKCE flow:

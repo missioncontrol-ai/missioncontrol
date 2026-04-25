@@ -75,9 +75,33 @@ def _oauth_error_response(error: str, description: str, status_code: int = 400) 
     )
 
 
+def _public_issuer_base() -> str:
+    """Public-facing issuer base URL used to rewrite browser-redirect endpoints.
+    Falls back to OIDC_ISSUER_URL if OIDC_PUBLIC_ISSUER_URL is not set."""
+    return (os.getenv("OIDC_PUBLIC_ISSUER_URL") or _auth_settings().oidc_issuer_url or "").rstrip("/")
+
+
+def _rewrite_to_public(url: str) -> str:
+    """Replace internal ClusterIP scheme+host with the public issuer scheme+host in browser-facing endpoints."""
+    internal_base = (os.getenv("OIDC_INTERNAL_ISSUER_URL") or "").rstrip("/")
+    public_base = _public_issuer_base()
+    if not (internal_base and public_base):
+        return url
+    parsed_internal = urllib_parse.urlparse(internal_base)
+    internal_origin = f"{parsed_internal.scheme}://{parsed_internal.netloc}"
+    parsed_public = urllib_parse.urlparse(public_base)
+    public_origin = f"{parsed_public.scheme}://{parsed_public.netloc}"
+    if url.startswith(internal_origin):
+        return public_origin + url[len(internal_origin):]
+    return url
+
+
 def _fetch_openid_config() -> dict:
     settings = _auth_settings()
-    issuer = (settings.oidc_issuer_url or "").rstrip("/")
+    # OIDC_INTERNAL_ISSUER_URL allows server-side HTTP calls to use a private/ClusterIP
+    # endpoint (e.g. when the public OIDC URL is not reachable from the backend container)
+    # while OIDC_ISSUER_URL is still used for JWT iss validation.
+    issuer = (os.getenv("OIDC_INTERNAL_ISSUER_URL") or settings.oidc_issuer_url or "").rstrip("/")
     if not issuer:
         raise HTTPException(status_code=503, detail="OIDC issuer is not configured")
     url = urllib_parse.urljoin(f"{issuer}/", ".well-known/openid-configuration")
@@ -237,7 +261,7 @@ def device_verify(request: Request, user_code: str = Query(default="")):
         "code_challenge": _b64url(hashlib.sha256(match.code_verifier.encode("utf-8")).digest()),
         "code_challenge_method": "S256",
     }
-    return RedirectResponse(url=f"{authorize_endpoint}?{urllib_parse.urlencode(params)}", status_code=302)
+    return RedirectResponse(url=f"{_rewrite_to_public(authorize_endpoint)}?{urllib_parse.urlencode(params)}", status_code=302)
 
 
 @router.post("/device/token")
@@ -349,7 +373,7 @@ def cli_initiate_login(request: Request):
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     }
-    authorize_url = f"{authorize_endpoint}?{urllib_parse.urlencode(params)}"
+    authorize_url = f"{_rewrite_to_public(authorize_endpoint)}?{urllib_parse.urlencode(params)}"
     return {"authorize_url": authorize_url, "cli_nonce": cli_nonce, "expires_at": expires.isoformat() + "Z"}
 
 
@@ -413,7 +437,7 @@ def start_oidc_login(request: Request, redirect: str = Query(default="/ui/")):
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     }
-    return RedirectResponse(url=f"{authorize_endpoint}?{urllib_parse.urlencode(params)}", status_code=302)
+    return RedirectResponse(url=f"{_rewrite_to_public(authorize_endpoint)}?{urllib_parse.urlencode(params)}", status_code=302)
 
 
 @router.get("/callback", name="oidc_callback")
