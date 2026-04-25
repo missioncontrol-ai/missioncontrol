@@ -85,15 +85,42 @@ impl SyncClient {
                 &self.cache_dir.to_string_lossy(),
             ])?;
         } else {
+            // Record HEAD before fetch so we can count new commits
+            let pre_fetch_head = self.git_in_cache(&["rev-parse", "HEAD"])
+                .unwrap_or_default();
+            let pre_fetch_head = pre_fetch_head.trim().to_string();
+
             // Fetch + merge
             self.git_in_cache(&["fetch", "--all"])?;
             // Try ff-only; if it fails (e.g., no origin/main yet), tolerate
             let _ = self.git_in_cache(&["merge", "origin/main", "--ff-only"]);
+
+            let commits_fetched = if pre_fetch_head.is_empty() {
+                0
+            } else {
+                let count_str = self
+                    .git_in_cache(&[
+                        "rev-list",
+                        &format!("{pre_fetch_head}..HEAD"),
+                        "--count",
+                    ])
+                    .unwrap_or_default();
+                count_str.trim().parse::<u32>().unwrap_or(0)
+            };
+
+            let mut state = self.read_state()?;
+            state.last_pulled_at = Some(now.to_rfc3339());
+            state.commits_fetched = commits_fetched;
+            self.write_state(&state)?;
+
+            return Ok(SyncResult {
+                pulled_at: now,
+                commits_fetched,
+            });
         }
 
         let mut state = self.read_state()?;
         state.last_pulled_at = Some(now.to_rfc3339());
-        // commits_fetched: count commits since previous pull; approximate as 0 for now
         state.commits_fetched = 0;
         self.write_state(&state)?;
 

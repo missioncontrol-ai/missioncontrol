@@ -1345,11 +1345,13 @@ dependencies = [
  "chrono",
  "futures",
  "mc-mesh-packs",
+ "mc-mesh-receipts",
  "mc-mesh-secrets",
  "portable-pty",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-tungstenite",
@@ -1432,6 +1434,19 @@ dependencies = [
  "tokio",
  "tracing",
  "urlencoding",
+]
+
+[[package]]
+name = "mc-mesh-sync"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
