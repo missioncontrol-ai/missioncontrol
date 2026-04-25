@@ -1,4 +1,4 @@
-/// `mc dispatch` — execute a capability through the mc-mesh routing layer.
+/// `mc exec` — execute a capability through the mc-mesh routing layer.
 use crate::dispatch::McDispatch;
 use anyhow::Result;
 use std::io::IsTerminal;
@@ -8,7 +8,7 @@ use std::io::IsTerminal;
 // ---------------------------------------------------------------------------
 
 #[derive(clap::Args, Debug)]
-pub struct RunArgs {
+pub struct ExecArgs {
     /// Capability name in pack.capability format (e.g. kubectl-observe.kubectl-get-pods)
     pub name: String,
 
@@ -72,7 +72,7 @@ fn parse_args(args: &[String]) -> Result<serde_json::Value> {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub async fn run(args: RunArgs, host: Option<String>) -> Result<()> {
+pub async fn run(args: ExecArgs, host: Option<String>) -> Result<()> {
     let parsed_args = parse_args(&args.args)?;
 
     let dispatch = McDispatch::from_env(host, args.route);
@@ -109,7 +109,7 @@ pub async fn run(args: RunArgs, host: Option<String>) -> Result<()> {
                     "ok": false,
                     "error": e.to_string(),
                     "hint": "Use 'mc capabilities describe <cap>' to see the expected args",
-                    "example": format!("mc dispatch {} --json", args.name),
+                    "example": format!("mc exec {} --json", args.name),
                 });
                 eprintln!("{}", serde_json::to_string(&err_json)?);
             } else {

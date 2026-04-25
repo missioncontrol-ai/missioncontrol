@@ -110,8 +110,8 @@ pub enum McCommand {
     #[command(subcommand)]
     Capabilities(cmd::capabilities::CapabilitiesCmd),
     /// Execute a capability through the mc-mesh routing layer.
-    #[command(name = "dispatch", about = "Execute a capability")]
-    Dispatch(cmd::run::RunArgs),
+    #[command(name = "exec", about = "Execute a capability")]
+    Exec(cmd::run::ExecArgs),
     /// Inspect capability execution receipts stored in the local SQLite audit log.
     #[command(subcommand)]
     Receipts(cmd::receipts::ReceiptsCmd),
@@ -725,7 +725,7 @@ pub async fn run(
             // TODO: wire top-level --host and --route global flags through here
             cmd::capabilities::run(sub, None, None).await
         }
-        McCommand::Dispatch(args) => {
+        McCommand::Exec(args) => {
             // TODO: wire top-level --host global flag here when global flags are added
             cmd::run::run(args, None).await
         }
