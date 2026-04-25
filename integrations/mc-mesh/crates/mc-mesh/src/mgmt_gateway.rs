@@ -92,7 +92,7 @@ impl MgmtGateway {
                     let gw = Arc::clone(self);
                     tokio::spawn(async move {
                         // Unix connections are always considered authenticated.
-                        if let Err(e) = gw.handle_connection(stream, true).await {
+                        if let Err(e) = gw.handle_connection(stream).await {
                             tracing::debug!("mgmt unix session ended: {e}");
                         }
                     });
@@ -162,17 +162,17 @@ impl MgmtGateway {
 
         // Rejoin halves into a unified async stream for handle_connection.
         // We use a wrapper that chains our already-buffered reader with the write half.
-        handle_jsonrpc_loop(&self.dispatcher, &self.registry, reader, write_half, authenticated).await
+        handle_jsonrpc_loop(&self.dispatcher, &self.registry, reader, write_half).await
     }
 
     /// Handle a Unix socket connection — always authenticated.
-    async fn handle_connection<S>(&self, stream: S, authenticated: bool) -> Result<()>
+    async fn handle_connection<S>(&self, stream: S) -> Result<()>
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     {
         let (read_half, write_half) = tokio::io::split(stream);
         let reader = BufReader::new(read_half);
-        handle_jsonrpc_loop(&self.dispatcher, &self.registry, reader, write_half, authenticated).await
+        handle_jsonrpc_loop(&self.dispatcher, &self.registry, reader, write_half).await
     }
 }
 
@@ -183,7 +183,6 @@ async fn handle_jsonrpc_loop<R, W>(
     registry: &PackRegistry,
     mut reader: BufReader<R>,
     mut writer: W,
-    _authenticated: bool,
 ) -> Result<()>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -252,11 +251,20 @@ async fn handle_dispatch(dispatcher: &CapabilityDispatcher, id: Value, params: &
     let mission_id = params.get("mission_id").and_then(|v| v.as_str()).map(String::from);
     let agent_id = params.get("agent_id").and_then(|v| v.as_str()).map(String::from);
 
+    let profile = params.get("profile")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let env_str = params.get("env")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
     let req = DispatchRequest {
         full_name,
         args,
-        profile: String::new(),
-        env: String::new(),
+        profile,
+        env: env_str,
         dry_run,
         timeout_secs,
         mission_id,
