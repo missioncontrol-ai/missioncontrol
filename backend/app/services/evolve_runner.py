@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _LITELLM_HOST = os.getenv("MC_LITELLM_HOST", "http://litellm:4000")
 _GOOSE_BIN = os.getenv("GOOSE_BIN", "goose")
 _MAX_TURNS = int(os.getenv("GOOSE_EVOLVE_MAX_TURNS", "50"))
-_GOOSE_MODEL = os.getenv("MC_GOOSE_MODEL", "litellm/local-agent")
+_GOOSE_MODEL = os.getenv("MC_GOOSE_MODEL", "local-agent")
 
 
 def build_goose_recipe(spec: dict) -> dict:
@@ -76,7 +76,7 @@ async def run_goose_evolve(
     with open(recipe_path, "w") as fh:
         json.dump(recipe, fh, indent=2)
 
-    api_key = os.getenv("LITELLM_API_KEY", "sk-evolve")
+    api_key = os.getenv("MC_LITELLM_API_KEY") or os.getenv("LITELLM_API_KEY", "sk-evolve")
 
     env = {
         **os.environ,

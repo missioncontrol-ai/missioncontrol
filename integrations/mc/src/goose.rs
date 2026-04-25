@@ -124,7 +124,7 @@ fn litellm_host() -> String {
 
 fn goose_model() -> String {
     std::env::var("MC_GOOSE_MODEL")
-        .unwrap_or_else(|_| "litellm/local-agent".to_string())
+        .unwrap_or_else(|_| "local-agent".to_string())
 }
 
 fn apply_env(

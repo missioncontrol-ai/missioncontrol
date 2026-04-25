@@ -995,7 +995,7 @@ fn build_goose_command(
         .and_then(Value::as_str)
         .map(|s| s.to_owned())
         .unwrap_or_else(|| {
-            std::env::var("MC_GOOSE_MODEL").unwrap_or_else(|_| "litellm/local-agent".to_owned())
+            std::env::var("MC_GOOSE_MODEL").unwrap_or_else(|_| "local-agent".to_owned())
         });
 
     let trimmed = command.trim();
