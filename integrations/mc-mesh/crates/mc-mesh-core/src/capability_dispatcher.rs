@@ -5,6 +5,7 @@ use mc_mesh_packs::{
     evaluate_policy, Backend, Decision, ExecutionContext, PackRegistry,
     PolicyBundle,
 };
+use mc_mesh_receipts::{Receipt, ReceiptStore};
 use mc_mesh_secrets::{resolve_credentials, InfisicalConfig};
 use serde_json::Value;
 use uuid::Uuid;
@@ -26,6 +27,10 @@ pub struct DispatchRequest {
     pub dry_run: bool,
     /// Agent-specified deadline in seconds. Defaults to 30 s.
     pub timeout_secs: Option<u64>,
+    /// Optional mission ID for receipt tracking.
+    pub mission_id: Option<String>,
+    /// Optional agent ID for receipt tracking.
+    pub agent_id: Option<String>,
 }
 
 /// Structured result returned by the dispatcher.
@@ -64,6 +69,7 @@ pub struct CapabilityDispatcher {
     registry: Arc<PackRegistry>,
     infisical_config: Option<InfisicalConfig>,
     policy: PolicyBundle,
+    receipt_store: Option<Arc<ReceiptStore>>,
 }
 
 impl CapabilityDispatcher {
@@ -76,11 +82,43 @@ impl CapabilityDispatcher {
             registry,
             infisical_config,
             policy,
+            receipt_store: None,
         }
+    }
+
+    /// Attach a receipt store; receipts will be written after every dispatch.
+    pub fn with_receipt_store(mut self, store: Arc<ReceiptStore>) -> Self {
+        self.receipt_store = Some(store);
+        self
     }
 
     /// Execute a capability by full name, applying policy, credentials, and subprocess execution.
     pub async fn dispatch(&self, req: DispatchRequest) -> DispatchResult {
+        let result = self.dispatch_inner(&req).await;
+
+        // Write receipt on every execution (success or failure) — never block the caller.
+        if let Some(store) = &self.receipt_store {
+            let receipt = Receipt {
+                id: result.receipt_id.clone(),
+                capability: req.full_name.clone(),
+                args_json: serde_json::to_string(&req.args).unwrap_or_default(),
+                result_json: serde_json::to_string(&result.data).unwrap_or_default(),
+                exit_code: result.exit_code,
+                execution_time_ms: result.execution_time_ms,
+                mission_id: req.mission_id.clone(),
+                agent_id: req.agent_id.clone(),
+                created_at: chrono::Utc::now(),
+            };
+            if let Err(e) = store.insert(&receipt) {
+                tracing::warn!("failed to write receipt: {e}");
+            }
+        }
+
+        result
+    }
+
+    /// Inner dispatch logic — returns a `DispatchResult` without touching the receipt store.
+    async fn dispatch_inner(&self, req: &DispatchRequest) -> DispatchResult {
         let receipt_id = Uuid::new_v4().to_string();
 
         // ── 1. Look up capability ───────────────────────────────────────────
@@ -184,13 +222,13 @@ impl CapabilityDispatcher {
 
         match run_result {
             Ok((stdout, exit_code)) => {
-                let data = if exit_code != 0 {
+                if exit_code != 0 {
                     tracing::warn!(
                         capability = %req.full_name,
                         exit_code,
                         "subprocess exited with non-zero code"
                     );
-                    return DispatchResult {
+                    DispatchResult {
                         ok: false,
                         data: Value::Null,
                         receipt_id,
@@ -198,24 +236,23 @@ impl CapabilityDispatcher {
                         exit_code,
                         hint: Some(stdout.clone()),
                         example: None,
-                    };
+                    }
                 } else {
-                    parse_output(&stdout)
-                };
-
-                tracing::info!(
-                    capability = %req.full_name,
-                    execution_time_ms = elapsed_ms,
-                    "capability dispatched successfully"
-                );
-                DispatchResult {
-                    ok: true,
-                    data,
-                    receipt_id,
-                    execution_time_ms: elapsed_ms,
-                    exit_code: 0,
-                    hint: None,
-                    example: None,
+                    let data = parse_output(&stdout);
+                    tracing::info!(
+                        capability = %req.full_name,
+                        execution_time_ms = elapsed_ms,
+                        "capability dispatched successfully"
+                    );
+                    DispatchResult {
+                        ok: true,
+                        data,
+                        receipt_id,
+                        execution_time_ms: elapsed_ms,
+                        exit_code: 0,
+                        hint: None,
+                        example: None,
+                    }
                 }
             }
             Err(e) => {
@@ -323,6 +360,8 @@ mod tests {
             env: "default".to_string(),
             dry_run: false,
             timeout_secs: Some(5),
+            mission_id: None,
+            agent_id: None,
         }
     }
 
@@ -409,5 +448,40 @@ mod tests {
 
         assert!(!result.ok);
         assert!(result.hint.as_deref().unwrap_or("").contains("denied"));
+    }
+
+    /// with_receipt_store() wires up the store and dispatching a builtin writes a receipt.
+    #[tokio::test]
+    async fn with_receipt_store_builds_and_records() {
+        use mc_mesh_receipts::ReceiptStore;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("receipts.db");
+        let store = Arc::new(ReceiptStore::open(&db_path).unwrap());
+
+        let registry = Arc::new(PackRegistry::load_builtin().expect("builtin registry"));
+        let dispatcher = CapabilityDispatcher::new(registry, PolicyBundle::allow_all(), None)
+            .with_receipt_store(Arc::clone(&store));
+
+        // Verify store is wired.
+        assert!(dispatcher.receipt_store.is_some());
+
+        // Dispatch a real builtin to verify a receipt is written.
+        let mut req = base_request("base.system.echo");
+        req.args = serde_json::json!({"message": "receipt-test"});
+        req.mission_id = Some("m-test".to_string());
+        req.agent_id = Some("a-test".to_string());
+
+        let result = dispatcher.dispatch(req).await;
+        assert!(result.ok, "echo builtin should succeed: {:?}", result.hint);
+
+        // Check the receipt was persisted.
+        let receipts = store.last(5).unwrap();
+        assert_eq!(receipts.len(), 1, "exactly one receipt expected");
+        assert_eq!(receipts[0].id, result.receipt_id);
+        assert_eq!(receipts[0].capability, "base.system.echo");
+        assert_eq!(receipts[0].mission_id.as_deref(), Some("m-test"));
+        assert_eq!(receipts[0].agent_id.as_deref(), Some("a-test"));
     }
 }
