@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use uuid::Uuid;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -436,12 +437,19 @@ fn default_node_config(args: &NodeAgentRunArgs) -> NodeRuntimeConfig {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(args.heartbeat_seconds),
-        capabilities: args
-            .capabilities
-            .split(',')
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .collect(),
+        capabilities: {
+            let mut caps: Vec<String> = args
+                .capabilities
+                .split(',')
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect();
+            // Auto-detect installed runtimes
+            if which_binary("goose").is_some() && !caps.contains(&"goose".to_string()) {
+                caps.push("goose".to_string());
+            }
+            caps
+        },
         labels: parse_kv_pairs(&args.labels)
             .as_object()
             .cloned()
@@ -753,6 +761,8 @@ async fn execute_job(
     }
     let mut cmd = if runtime_class == "container" {
         build_container_command(command, args, &env_map, cwd)?
+    } else if runtime_class == "goose" {
+        build_goose_command(command, &env_map, cwd)?
     } else {
         build_host_command(command, args, &env_map, cwd)
     };
@@ -803,17 +813,11 @@ async fn execute_job(
         });
     }
     let status = child.wait().await.context("runtime job wait failed")?;
-    if runtime_class == "host_process" {
-        info!(
-            exit_code = status.code().unwrap_or(1),
-            "host_process job complete"
-        );
-    } else {
-        info!(
-            exit_code = status.code().unwrap_or(1),
-            "container job complete"
-        );
-    }
+    info!(
+        exit_code = status.code().unwrap_or(1),
+        runtime_class,
+        "job complete"
+    );
     Ok(status.code().unwrap_or(1))
 }
 
@@ -951,6 +955,81 @@ async fn attach_session(
 
     writer.abort();
     Ok(())
+}
+
+/// Returns the absolute path of `name` if found on PATH, otherwise None.
+fn which_binary(name: &str) -> Option<std::path::PathBuf> {
+    std::env::var("PATH").ok().and_then(|path_env| {
+        path_env.split(':').find_map(|dir| {
+            let candidate = std::path::Path::new(dir).join(name);
+            if candidate.is_file() { Some(candidate) } else { None }
+        })
+    })
+}
+
+/// Build a Goose subprocess command from a `RuntimeJob` with `runtime_class="goose"`.
+///
+/// The `command` field of the job carries one of:
+/// - An absolute path or a `.yaml`/`.json` suffix → passed directly as `--recipe`
+/// - A JSON object or YAML header (`version:`) → written to a temp file, passed as `--recipe`
+/// - Anything else → passed as `--text` (headless prompt)
+///
+/// `LITELLM_HOST` and `LITELLM_API_KEY` are read from the job `env`; GOOSE_PROVIDER is
+/// forced to `litellm`.  All other env entries are forwarded as-is.
+fn build_goose_command(
+    command: &str,
+    env_map: &serde_json::Map<String, Value>,
+    cwd: &str,
+) -> Result<Command> {
+    let goose_bin = std::env::var("GOOSE_BIN").unwrap_or_else(|_| "goose".into());
+    let litellm_host = env_map
+        .get("LITELLM_HOST")
+        .and_then(Value::as_str)
+        .unwrap_or("http://litellm:4000");
+    let litellm_api_key = env_map
+        .get("LITELLM_API_KEY")
+        .and_then(Value::as_str)
+        .unwrap_or("sk-goose");
+
+    let trimmed = command.trim();
+
+    let mut cmd = Command::new(&goose_bin);
+    cmd.arg("run");
+
+    if trimmed.starts_with('/') || trimmed.ends_with(".yaml") || trimmed.ends_with(".json") {
+        // Explicit recipe file path
+        cmd.arg("--recipe").arg(trimmed);
+    } else if trimmed.starts_with('{') || trimmed.starts_with("version:") {
+        // Inline recipe content — write to a temp file
+        let tmp = std::env::temp_dir().join(format!("mc-goose-{}.json", Uuid::new_v4()));
+        fs::write(&tmp, trimmed.as_bytes()).context("failed to write inline goose recipe")?;
+        cmd.arg("--recipe").arg(tmp);
+    } else if !trimmed.is_empty() {
+        cmd.arg("--text").arg(trimmed);
+    }
+
+    cmd.arg("--quiet")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--no-session")
+        .arg("--max-turns")
+        .arg("50");
+
+    cmd.env("GOOSE_PROVIDER", "litellm")
+        .env("LITELLM_HOST", litellm_host)
+        .env("LITELLM_API_KEY", litellm_api_key);
+
+    for (key, value) in env_map {
+        if let Some(v) = value.as_str() {
+            cmd.env(key, v);
+        }
+    }
+
+    if !cwd.trim().is_empty() {
+        cmd.current_dir(cwd);
+    }
+
+    Ok(cmd)
 }
 
 fn build_host_command(
