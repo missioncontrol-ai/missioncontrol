@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Row};
 use tracing::debug;
 
@@ -9,7 +10,7 @@ use crate::{
 };
 
 pub struct ReceiptStore {
-    conn: Connection,
+    conn: std::sync::Mutex<Connection>,
 }
 
 impl ReceiptStore {
@@ -43,15 +44,16 @@ impl ReceiptStore {
         )?;
 
         debug!(path = %path.display(), "ReceiptStore opened");
-        Ok(Self { conn })
+        Ok(Self { conn: std::sync::Mutex::new(conn) })
     }
 
-    /// Insert a receipt record.
+    /// Insert a receipt record. Duplicate IDs are silently ignored (audit integrity).
     pub fn insert(&self, r: &Receipt) -> Result<(), ReceiptsError> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO receipts
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO receipts
              (id, capability, args_json, result_json, exit_code, execution_time_ms, mission_id, agent_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(id) DO NOTHING",
             rusqlite::params![
                 r.id,
                 r.capability,
@@ -70,7 +72,8 @@ impl ReceiptStore {
     /// Return the most recent `limit` receipts, newest first.
     pub fn last(&self, limit: usize) -> Result<Vec<Receipt>, ReceiptsError> {
         let limit = if limit == 0 { 50 } else { limit };
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, capability, args_json, result_json, exit_code, execution_time_ms,
                     mission_id, agent_id, created_at
              FROM receipts
@@ -83,7 +86,8 @@ impl ReceiptStore {
 
     /// Fetch a single receipt by id; returns `None` if not found.
     pub fn get(&self, id: &str) -> Result<Option<Receipt>, ReceiptsError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, capability, args_json, result_json, exit_code, execution_time_ms,
                     mission_id, agent_id, created_at
              FROM receipts
@@ -97,91 +101,60 @@ impl ReceiptStore {
     }
 
     /// List receipts with optional filters, newest first.
-    pub fn list(&self, f: ReceiptFilter) -> Result<Vec<Receipt>, ReceiptsError> {
+    pub fn list(&self, filter: ReceiptFilter) -> Result<Vec<Receipt>, ReceiptsError> {
+        let f = filter;
         let limit = if f.limit == 0 { 50 } else { f.limit };
 
-        let mut sql = String::from(
+        let mut conditions: Vec<&str> = Vec::new();
+        let mut mission_id_val: Option<String> = None;
+        let mut agent_id_val: Option<String> = None;
+        let mut capability_val: Option<String> = None;
+        let mut since_val: Option<String> = None;
+
+        if f.mission_id.is_some() { conditions.push("mission_id = ?1"); mission_id_val = f.mission_id; }
+        if f.agent_id.is_some() { conditions.push("agent_id = ?2"); agent_id_val = f.agent_id; }
+        if f.capability.is_some() { conditions.push("capability = ?3"); capability_val = f.capability; }
+        if f.since.is_some() { conditions.push("created_at >= ?4"); since_val = f.since.map(|dt| dt.to_rfc3339()); }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", conditions.join(" AND "))
+        };
+
+        let sql = format!(
             "SELECT id, capability, args_json, result_json, exit_code, execution_time_ms, \
-             mission_id, agent_id, created_at FROM receipts",
+             mission_id, agent_id, created_at FROM receipts{} ORDER BY created_at DESC LIMIT ?5",
+            where_clause
         );
 
-        let mut conditions: Vec<String> = vec![];
-        let mut param_idx = 1usize;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&sql)?;
 
-        if f.mission_id.is_some() {
-            conditions.push(format!("mission_id=?{param_idx}"));
-            param_idx += 1;
-        }
-        if f.agent_id.is_some() {
-            conditions.push(format!("agent_id=?{param_idx}"));
-            param_idx += 1;
-        }
-        if f.capability.is_some() {
-            conditions.push(format!("capability=?{param_idx}"));
-            param_idx += 1;
-        }
-        if f.since.is_some() {
-            conditions.push(format!("created_at>=?{param_idx}"));
-        }
+        let rows = stmt.query_map(
+            rusqlite::params![
+                mission_id_val.as_deref(),
+                agent_id_val.as_deref(),
+                capability_val.as_deref(),
+                since_val.as_deref(),
+                limit as i64,
+            ],
+            row_to_receipt,
+        )?;
 
-        if !conditions.is_empty() {
-            sql.push_str(" WHERE ");
-            sql.push_str(&conditions.join(" AND "));
-        }
-        sql.push_str(&format!(" ORDER BY created_at DESC LIMIT {limit}"));
-
-        let mut stmt = self.conn.prepare(&sql)?;
-
-        let mut idx = 1usize;
-        if let Some(ref v) = f.mission_id {
-            stmt.raw_bind_parameter(idx, v.as_str())?;
-            idx += 1;
-        }
-        if let Some(ref v) = f.agent_id {
-            stmt.raw_bind_parameter(idx, v.as_str())?;
-            idx += 1;
-        }
-        if let Some(ref v) = f.capability {
-            stmt.raw_bind_parameter(idx, v.as_str())?;
-            idx += 1;
-        }
-        if let Some(ref v) = f.since {
-            stmt.raw_bind_parameter(idx, v.to_rfc3339().as_str())?;
-        }
-
-        let mut rows = stmt.raw_query();
-        let mut out = vec![];
-        while let Some(row) = rows.next()? {
-            out.push(row_to_receipt_raw(row)?);
-        }
-        Ok(out)
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
     }
 }
 
 fn row_to_receipt(row: &Row<'_>) -> rusqlite::Result<Receipt> {
-    let created_at_str: String = row.get(8)?;
-    let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
-        .map(|dt| dt.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|_| chrono::Utc::now());
-    let execution_time_ms: i64 = row.get(5)?;
-    Ok(Receipt {
-        id: row.get(0)?,
-        capability: row.get(1)?,
-        args_json: row.get(2)?,
-        result_json: row.get(3)?,
-        exit_code: row.get(4)?,
-        execution_time_ms: execution_time_ms as u64,
-        mission_id: row.get(6)?,
-        agent_id: row.get(7)?,
-        created_at,
-    })
-}
-
-fn row_to_receipt_raw(row: &rusqlite::Row<'_>) -> Result<Receipt, ReceiptsError> {
-    let created_at_str: String = row.get(8)?;
-    let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
-        .map(|dt| dt.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|_| chrono::Utc::now());
+    let s: String = row.get(8)?;
+    let created_at = DateTime::parse_from_rfc3339(&s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+            8,
+            rusqlite::types::Type::Text,
+            Box::new(e),
+        ))?;
     let execution_time_ms: i64 = row.get(5)?;
     Ok(Receipt {
         id: row.get(0)?,
