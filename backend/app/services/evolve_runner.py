@@ -36,20 +36,24 @@ def build_goose_recipe(spec: dict) -> dict:
         json.dumps(scoring, indent=2) if scoring else "Not specified."
     )
 
-    instructions = (
+    # `instructions` becomes the additional system prompt; `prompt` is the
+    # headless user message that actually starts the session (required for
+    # headless/no-session mode — recipes without `prompt` abort immediately).
+    prompt = (
+        f"You are an evolve-loop agent for mission '{name}'.\n\n"
         f"{description}\n\n"
         f"## Tasks\n{task_lines or 'No tasks specified.'}\n\n"
         f"## Scoring Criteria\n{scoring_block}\n\n"
         "Work through each task systematically. When you have finished, "
         "output a JSON object on its own line exactly like: "
-        '{\"score\": <float 0.0-1.0>}'
+        '{"score": <float 0.0-1.0>}'
     )
 
     return {
         "version": "1.0.0",
         "title": name,
         "description": description,
-        "instructions": instructions,
+        "prompt": prompt,
     }
 
 
