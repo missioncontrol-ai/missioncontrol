@@ -12,10 +12,7 @@ use clap::Subcommand;
 pub enum SyncCmd {
     /// Pull latest config from sync repo (default action).
     #[command(about = "Pull latest config from sync repo (default action)")]
-    Pull {
-        #[arg(long, help = "Pull even if recently synced")]
-        force: bool,
-    },
+    Pull,
     /// Show sync status.
     #[command(about = "Show sync status")]
     Status,
@@ -58,7 +55,7 @@ fn resolve_hostname() -> String {
 
 /// `cmd` is `None` when the user runs `mc sync` with no subcommand; default to Pull.
 pub fn run(cmd: Option<SyncCmd>) -> Result<()> {
-    use mc_mesh_sync::{SyncClient, default_cache_dir};
+    use mc_mesh_sync::SyncClient;
 
     let repo_url = std::env::var("MC_SYNC_REPO")
         .ok()
@@ -69,13 +66,13 @@ pub fn run(cmd: Option<SyncCmd>) -> Result<()> {
             )
         })?;
 
-    let cache_dir = default_cache_dir();
+    let cache_dir = crate::config::mc_home_dir().join("sync");
     let hostname = resolve_hostname();
 
     let client = SyncClient::new(&repo_url, &cache_dir, &hostname)?;
 
-    match cmd.unwrap_or(SyncCmd::Pull { force: false }) {
-        SyncCmd::Pull { .. } => {
+    match cmd.unwrap_or(SyncCmd::Pull) {
+        SyncCmd::Pull => {
             println!("syncing from {}...", repo_url);
             let result = client.pull()?;
             println!("synced — {} new commits", result.commits_fetched);

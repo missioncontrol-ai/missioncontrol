@@ -725,7 +725,10 @@ pub async fn run(
             // TODO: wire top-level --host and --route global flags through here
             cmd::capabilities::run(sub, None, None).await
         }
-        McCommand::Dispatch(args) => cmd::run::run(args, None).await,
+        McCommand::Dispatch(args) => {
+            // TODO: wire top-level --host global flag here when global flags are added
+            cmd::run::run(args, None).await
+        }
         McCommand::Receipts(sub) => cmd::receipts::run(sub).map_err(Into::into),
         McCommand::MeshSync(sub) => cmd::sync::run(Some(sub)).map_err(Into::into),
     }

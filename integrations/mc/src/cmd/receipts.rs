@@ -44,9 +44,9 @@ pub enum ReceiptsCmd {
 // ---------------------------------------------------------------------------
 
 pub fn run(cmd: ReceiptsCmd) -> Result<()> {
-    use mc_mesh_receipts::{ReceiptFilter, ReceiptStore, default_db_path};
+    use mc_mesh_receipts::{ReceiptFilter, ReceiptStore};
 
-    let db_path = default_db_path();
+    let db_path = crate::config::mc_home_dir().join("receipts.db");
     let store = ReceiptStore::open(&db_path)?;
 
     match cmd {
