@@ -24,26 +24,25 @@ injects secrets, sandboxes execution, and writes receipts.
 │  humans: mc tui / mc packs / mc receipts / mc init  │
 │  agents: mc run <cap> --json / mc capabilities      │
 │          mc receipts last                           │
-└──────────┬──────────────────────────┬───────────────┘
-           │ dispatch (write)         │ browse (read)
-           │ mc-mesh-mgmt.sock        │ direct SQLite
-           ▼                          ▼
-┌──────────────────────┐   ┌──────────────────────────┐
-│  mc-mesh daemon      │   │  ~/.missioncontrol/      │
-│                      │   │  ├── receipts.db          │
-│  JSON-RPC listener   │──▶│  ├── sync/               │
-│  policy enforcement  │   │  └── mc-mesh-mgmt.sock   │
-│  secrets injection   │   └──────────────────────────┘
-│  sandbox exec        │
-│  receipt write       │
-└──────────────────────┘
-           │ fallback
-           ▼
-┌──────────────────────┐
-│  MissionControl      │
-│  backend (REST)      │
-│  (remote route)      │
-└──────────────────────┘
+└──────────┬──────────────┬──────────┬────────────────┘
+           │ local socket │ remote   │ fallback
+           │ (on-node)    │ TCP/TLS  │ (REST proxy)
+           ▼              ▼          ▼
+     Unix socket     TCP :7731   MC backend
+     mc-mesh-        (Tailscale  REST API
+     mgmt.sock       reachable)
+           │              │
+           └──────┬───────┘
+                  ▼
+        ┌──────────────────────┐   ┌──────────────────────────┐
+        │  mc-mesh daemon      │   │  ~/.missioncontrol/      │
+        │                      │   │  ├── receipts.db          │
+        │  JSON-RPC listener   │──▶│  ├── sync/               │
+        │  policy enforcement  │   │  └── mc-mesh-mgmt.sock   │
+        │  secrets injection   │   └──────────────────────────┘
+        │  sandbox exec        │
+        │  receipt write       │
+        └──────────────────────┘
 ```
 
 **Design principle:** `mc` = kubectl. `mc-mesh` = kubelet. Agents never call `mc-mesh` directly.
@@ -52,24 +51,66 @@ injects secrets, sandboxes execution, and writes receipts.
 
 ## Routing Model
 
-Capability commands (`mc run`, `mc capabilities`, `mc capabilities describe`) support three
+Capability commands (`mc run`, `mc capabilities`, `mc capabilities describe`) support four
 routing modes:
 
 | Mode | Behavior |
 |------|----------|
-| `auto` (default) | Prefers local socket if daemon is reachable; falls back to backend |
-| `local` | Always use `mc-mesh-mgmt.sock`; error if daemon not running |
-| `backend` | Always route through MissionControl REST API |
+| `auto` (default) | Local socket → remote TCP (if host registered with MC) → backend proxy |
+| `local` | Unix socket on this machine; error if daemon not running |
+| `remote` | Direct TCP to named `mc-mesh` host (Tailscale-reachable); `mc --host <node>` |
+| `backend` | Route through MissionControl REST API |
 
-**Local route** gives the daemon's full policy view (sync'd packs + mission scope + local overrides).
-**Backend route** gives the control plane's mission-scope view of any node — useful when the
-operator is working remotely without a local daemon.
+**Local route** gives the daemon's full policy view of this node — used by on-node agents and
+operators working directly on a node.
+
+**Remote route** connects directly to `mc-mesh` on another node over Tailscale TCP port `7731`.
+`mc` resolves the node's address from the MC backend (registered at daemon startup), then speaks
+the same JSON-RPC protocol over an authenticated TCP connection. This is the primary route for
+operators managing a remote node — faster and more direct than the backend proxy.
+
+**Backend route** routes through the MissionControl REST API. Useful when the target node is
+offline or not Tailscale-reachable, or when the operator wants the control plane's view of
+mission-scoped capabilities rather than the node's local policy.
+
+**`auto` resolution order:**
+1. If `MC_MESH_SOCKET` is set and the socket file exists → `local`
+2. Else if MC backend reports a reachable address for this host → `remote`
+3. Else → `backend`
+
+### Remote TCP authentication
+
+`mc-mesh` binds TCP port `7731` (configurable via `MC_MESH_MGMT_PORT`) in addition to the Unix
+socket. Each TCP connection must present the node's bearer token (same `MC_TOKEN` used for
+backend auth) in a one-line handshake before any JSON-RPC exchange:
+
+```
+Client → Server:  AUTH <token>\n
+Server → Client:  OK\n   (or ERR <reason>\n)
+```
+
+After `OK`, the connection proceeds with normal newline-delimited JSON-RPC. The Unix socket
+requires no auth (same-user Unix permissions enforce access). The TCP port binds on all
+interfaces by default so Tailscale can reach it; a firewall rule or Tailscale ACL restricts
+access to the operator's devices.
+
+### `mc --host` flag
+
+```
+mc --host optiplex capabilities
+mc --host optiplex run kubectl-observe.kubectl-get-pods --json
+```
+
+`--host` sets `remote` mode with an explicit address. Value: `<hostname>` (resolved from MC
+backend node registry) or `<hostname>:<port>` (direct override, e.g. `optiplex:7731`). Stored
+in `~/.missioncontrol/config.json` as `default_host` for session-level default.
 
 Configuration priority (highest to lowest):
-1. `mc --route <mode>` CLI flag
-2. `MC_ROUTE` environment variable
-3. `capability_route` field in `~/.missioncontrol/config.json`
-4. Default: `auto`
+1. `mc --host <node>` CLI flag → implies `remote` mode
+2. `mc --route <mode>` CLI flag
+3. `MC_ROUTE` / `MC_MESH_HOST` environment variables
+4. `capability_route` / `default_host` fields in `~/.missioncontrol/config.json`
+5. Default: `auto`
 
 Agents spawned by `mc-mesh` always get `local` in practice — `MC_MESH_SOCKET` is set in their
 env and the daemon is always running when they are.
@@ -177,16 +218,30 @@ is out of scope for this crate — surfaced in the TUI (Phase 2b).
 
 ---
 
-## Management Socket
+## Management Gateway
 
-`mc-mesh` daemon gains a second Unix socket at `~/.missioncontrol/mc-mesh-mgmt.sock`
-(separate from the existing PTY attach socket at `mc-mesh.sock`).
+`mc-mesh` daemon exposes the management interface on two transports simultaneously:
 
-`MC_MESH_SOCKET` env var (already injected by Phase 1 runtimes) points to this socket.
+### Unix socket (local access)
 
-**Protocol:** newline-delimited JSON-RPC 2.0 over the Unix socket.
+Path: `~/.missioncontrol/mc-mesh-mgmt.sock`, permissions `0600`.
+`MC_MESH_SOCKET` env var (injected by Phase 1 runtimes) points here.
+No auth — Unix file permissions enforce same-user access.
 
-**Methods:**
+### TCP listener (remote access)
+
+Binds `0.0.0.0:7731` (configurable: `MC_MESH_MGMT_PORT` env or `mgmt_port` in config).
+Reachable over Tailscale from the operator's machine.
+
+One-line auth handshake before any RPC:
+```
+Client → Server:  AUTH <MC_TOKEN>\n
+Server → Client:  OK\n   (or ERR unauthorized\n → connection closed)
+```
+
+After `OK`, identical newline-delimited JSON-RPC 2.0 protocol as the Unix socket.
+
+### Protocol (both transports)
 
 ```jsonc
 // Dispatch a capability
@@ -194,7 +249,9 @@ is out of scope for this crate — surfaced in the TUI (Phase 2b).
   "full_name": "kubectl-observe.kubectl-get-pods",
   "args": {"namespace": "default"},
   "dry_run": false,
-  "timeout_secs": 30
+  "timeout_secs": 30,
+  "mission_id": "m1",
+  "agent_id": "a1"
 }}
 
 // List capabilities (policy-scoped)
@@ -206,8 +263,11 @@ is out of scope for this crate — surfaced in the TUI (Phase 2b).
 }}
 ```
 
-Auth: Unix socket file ownership — same-user only, no token needed. The daemon creates the
-socket with `0600` permissions.
+### Node address registration
+
+At daemon startup, `mc-mesh` registers its Tailscale/external address with the MC backend
+(new field on the node record: `mgmt_addr: "optiplex:7731"`). `mc` resolves this address when
+`--host optiplex` is used and no explicit port is given.
 
 ---
 
@@ -314,10 +374,12 @@ Four lines. No MCP tool dump. No capability schema preloaded. Progressive discov
 - Wire `mc-mesh-receipts` into capability dispatcher (`capability_dispatcher.rs`) — insert
   receipt after every `dispatch()` call
 
-### Phase 2a-2: Management socket in mc-mesh daemon
-- Add `mc-mesh-mgmt.sock` listener to `crates/mc-mesh/src/main.rs`
+### Phase 2a-2: Management gateway in mc-mesh daemon
+- Add `mc-mesh-mgmt.sock` Unix listener to `crates/mc-mesh/src/mgmt_gateway.rs`
+- Add TCP listener on `0.0.0.0:7731` with one-line AUTH handshake before JSON-RPC
 - JSON-RPC 2.0 handler for `dispatch`, `capabilities.list`, `capabilities.describe`
-- Socket created with `0600` permissions, path exported as `MC_MESH_SOCKET`
+- Unix socket `0600` permissions, path exported as `MC_MESH_SOCKET`
+- Register `mgmt_addr` (hostname:port) with MC backend at daemon startup
 - Existing attach socket (`mc-mesh.sock`) unchanged
 
 ### Phase 2a-3: `mc` CLI extensions
