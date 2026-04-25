@@ -1291,6 +1291,8 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "mc-mesh-packs",
+ "mc-mesh-secrets",
  "portable-pty",
  "reqwest",
  "serde",

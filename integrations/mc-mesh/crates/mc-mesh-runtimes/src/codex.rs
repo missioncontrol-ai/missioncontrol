@@ -178,15 +178,21 @@ impl AgentRuntime for CodexRuntime {
 
         // `codex --approval-mode full-auto` runs non-interactively.
         // `--quiet` suppresses the spinner/ANSI chrome so we get clean lines.
-        let mut child = Command::new("codex")
-            .arg("--approval-mode")
+        let mut cmd = Command::new("codex");
+        cmd.arg("--approval-mode")
             .arg("full-auto")
             .arg("--quiet")
             .arg(&prompt)
             .current_dir(&work_dir)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
+            .stderr(std::process::Stdio::piped());
+
+        // Propagate the mc-mesh capability socket path so agents can reach `mc-mesh run`.
+        if let Ok(socket) = std::env::var("MC_MESH_SOCKET") {
+            cmd.env("MC_MESH_SOCKET", socket);
+        }
+
+        let mut child = cmd.spawn()?;
 
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
         let stderr = child.stderr.take().ok_or_else(|| anyhow!("no stderr"))?;
@@ -327,5 +333,27 @@ impl AgentRuntime for CodexRuntime {
     async fn shutdown(&self, handle: AgentHandle) -> Result<()> {
         tracing::info!("Shutting down codex agent {}", handle.agent_id);
         Ok(())
+    }
+
+    async fn ensure_installed(&self) -> Result<()> {
+        tokio::process::Command::new("codex")
+            .arg("--version")
+            .output()
+            .await
+            .map_err(|_| anyhow!(
+                "codex CLI not found. Install from https://github.com/openai/codex or via npm install -g @openai/codex"
+            ))?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ensure_installed_does_not_panic() {
+        let runtime = CodexRuntime::new();
+        let _ = runtime.ensure_installed().await; // Ok or Err, but no panic
     }
 }

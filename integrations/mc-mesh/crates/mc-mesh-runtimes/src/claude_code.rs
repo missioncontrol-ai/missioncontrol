@@ -219,16 +219,22 @@ impl AgentRuntime for ClaudeCodeRuntime {
 
         tracing::info!("claude-code injecting task {task_id}: {}", &prompt[..prompt.len().min(80)]);
 
-        let mut child = Command::new("claude")
-            .arg("-p")
+        let mut cmd = Command::new("claude");
+        cmd.arg("-p")
             .arg(&prompt)
             .arg("--output-format")
             .arg("stream-json")
             .arg("--no-session-persistence")
             .current_dir(&work_dir)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
+            .stderr(std::process::Stdio::piped());
+
+        // Propagate the mc-mesh capability socket path so agents can reach `mc-mesh run`.
+        if let Ok(socket) = std::env::var("MC_MESH_SOCKET") {
+            cmd.env("MC_MESH_SOCKET", socket);
+        }
+
+        let mut child = cmd.spawn()?;
 
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
         let stderr = child.stderr.take().ok_or_else(|| anyhow!("no stderr"))?;
@@ -369,6 +375,17 @@ impl AgentRuntime for ClaudeCodeRuntime {
         tracing::info!("Shutting down claude-code agent {}", handle.agent_id);
         Ok(())
     }
+
+    async fn ensure_installed(&self) -> Result<()> {
+        tokio::process::Command::new("claude")
+            .arg("--version")
+            .output()
+            .await
+            .map_err(|_| anyhow!(
+                "claude CLI not found. Install from https://claude.ai/download or via npm install -g @anthropic-ai/claude-code"
+            ))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -444,6 +461,12 @@ mod tests {
     fn blank_line_emits_nothing() {
         assert!(parse_stream_line("").is_empty());
         assert!(parse_stream_line("   ").is_empty());
+    }
+
+    #[tokio::test]
+    async fn ensure_installed_does_not_panic() {
+        let runtime = ClaudeCodeRuntime::new();
+        let _ = runtime.ensure_installed().await; // Ok or Err, but no panic
     }
 
     #[test]

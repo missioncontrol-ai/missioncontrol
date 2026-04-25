@@ -203,14 +203,20 @@ impl AgentRuntime for GeminiRuntime {
         // `gemini -p "<prompt>"` runs a single non-interactive prompt.
         // `--yolo` (or `--no-interactive`) suppresses confirmations in full-auto mode.
         // The flag name differs across versions; we try both patterns via the process args.
-        let mut child = Command::new("gemini")
-            .arg("-p")
+        let mut cmd = Command::new("gemini");
+        cmd.arg("-p")
             .arg(&prompt)
             .arg("--yolo")
             .current_dir(&work_dir)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
+            .stderr(std::process::Stdio::piped());
+
+        // Propagate the mc-mesh capability socket path so agents can reach `mc-mesh run`.
+        if let Ok(socket) = std::env::var("MC_MESH_SOCKET") {
+            cmd.env("MC_MESH_SOCKET", socket);
+        }
+
+        let mut child = cmd.spawn()?;
 
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
         let stderr = child.stderr.take().ok_or_else(|| anyhow!("no stderr"))?;
@@ -351,5 +357,27 @@ impl AgentRuntime for GeminiRuntime {
     async fn shutdown(&self, handle: AgentHandle) -> Result<()> {
         tracing::info!("Shutting down gemini agent {}", handle.agent_id);
         Ok(())
+    }
+
+    async fn ensure_installed(&self) -> Result<()> {
+        tokio::process::Command::new("gemini")
+            .arg("--version")
+            .output()
+            .await
+            .map_err(|_| anyhow!(
+                "gemini CLI not found. Install from https://ai.google.dev/gemini-api/docs/gemini-cli"
+            ))?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ensure_installed_does_not_panic() {
+        let runtime = GeminiRuntime::new();
+        let _ = runtime.ensure_installed().await; // Ok or Err, but no panic
     }
 }

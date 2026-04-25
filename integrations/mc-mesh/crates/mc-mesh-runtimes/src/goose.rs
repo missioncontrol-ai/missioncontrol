@@ -281,6 +281,11 @@ impl AgentRuntime for GooseRuntime {
             }
         }
 
+        // Propagate the mc-mesh capability socket path so agents can reach `mc-mesh run`.
+        if let Ok(socket) = std::env::var("MC_MESH_SOCKET") {
+            cmd.env("MC_MESH_SOCKET", socket);
+        }
+
         let mut child = cmd.spawn()?;
 
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
@@ -425,6 +430,17 @@ impl AgentRuntime for GooseRuntime {
         tracing::info!("Shutting down goose agent {}", handle.agent_id);
         Ok(())
     }
+
+    async fn ensure_installed(&self) -> Result<()> {
+        tokio::process::Command::new("goose")
+            .arg("--version")
+            .output()
+            .await
+            .map_err(|_| anyhow!(
+                "goose CLI not found. Install from https://github.com/block/goose"
+            ))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -537,5 +553,11 @@ mod tests {
         let result = truncate("abcdefghij", 5);
         assert!(result.starts_with("abcde"));
         assert!(result.contains('…'));
+    }
+
+    #[tokio::test]
+    async fn ensure_installed_does_not_panic() {
+        let runtime = GooseRuntime::new();
+        let _ = runtime.ensure_installed().await; // Ok or Err, but no panic
     }
 }
