@@ -8,6 +8,7 @@ members = [
     "crates/mc-mesh-secrets",
     "crates/mc-mesh-packs",
     "crates/mc-mesh-receipts",
+    "crates/mc-mesh-sync",
 ]
 resolver = "2"
 
