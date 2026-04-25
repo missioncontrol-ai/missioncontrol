@@ -253,6 +253,9 @@ pub struct InitArgs {
     /// Initial profile name to create when none exists.
     #[arg(long, default_value = "default")]
     profile: String,
+    /// Bootstrap this node from a sync repo URL (clones repo, stores INFISICAL_TOKEN, writes config).
+    #[arg(long)]
+    from_repo: Option<String>,
 }
 
 #[derive(Args, Debug, Default)]
@@ -1727,6 +1730,11 @@ async fn handle_init(
     config: &McConfig,
     output_mode: OutputMode,
 ) -> Result<()> {
+    // --from-repo bootstrap flow — runs independently of the MC backend.
+    if let Some(repo_url) = args.from_repo.as_deref() {
+        return cmd::init::run_from_repo(repo_url, Some(args.profile.as_str())).await;
+    }
+
     let json_output = output_mode.is_machine();
     let profile_name = args.profile.trim();
     if profile_name.is_empty() {
