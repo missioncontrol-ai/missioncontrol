@@ -141,6 +141,40 @@ impl McDispatch {
         }
     }
 
+    /// List capabilities from the daemon, optionally filtered by tag.
+    pub async fn list_capabilities(
+        &self,
+        tag: Option<&str>,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let params = serde_json::json!({ "tag": tag });
+
+        let effective_mode = match &self.mode {
+            RouteMode::Auto => self.resolve_auto(),
+            other => other.clone(),
+        };
+
+        let result = match &effective_mode {
+            RouteMode::Local => {
+                let socket_path = std::env::var("MC_MESH_SOCKET")
+                    .context("MC_MESH_SOCKET not set for Local route")?;
+                send_jsonrpc_unix(&socket_path, "capabilities.list", params).await?
+            }
+            RouteMode::Remote { host, port } => {
+                send_jsonrpc_tcp(host, *port, self.mc_token.as_deref(), "capabilities.list", params).await?
+            }
+            RouteMode::Backend | RouteMode::Auto => {
+                anyhow::bail!("daemon not reachable: no socket or remote host configured")
+            }
+        };
+
+        // Result should be an array of capability objects.
+        result
+            .as_array()
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(|| anyhow::bail!("capabilities.list returned non-array"))
+    }
+
     /// Dispatch a capability call and return the JSON result.
     pub async fn dispatch(
         &self,

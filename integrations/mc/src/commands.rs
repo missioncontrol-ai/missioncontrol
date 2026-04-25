@@ -4,6 +4,7 @@ use crate::{
     booster::AgentBooster,
     channel,
     client::MissionControlClient,
+    cmd,
     compat,
     config::McConfig,
     daemon::{self, DaemonArgs},
@@ -105,6 +106,9 @@ pub enum McCommand {
     /// Launch an agent runtime with a unified interface.
     #[command(name = "run")]
     Run(run::RunArgs),
+    /// List and describe capability packs available through mc-mesh.
+    #[command(subcommand)]
+    Capabilities(cmd::capabilities::CapabilitiesCmd),
 }
 
 #[derive(Subcommand, Debug)]
@@ -708,6 +712,9 @@ pub async fn run(
         McCommand::Secrets(cmd) => handle_secrets(cmd, client, output_mode).await,
         McCommand::Mesh(cmd) => mesh::handle(cmd, &client, &config).await,
         McCommand::Run(args) => run::run(args, &client, &config).await,
+        McCommand::Capabilities(sub) => {
+            cmd::capabilities::run(sub, None, None).await
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+pub mod cmd;
 pub mod agent_context;
 pub mod dispatch;
 pub mod auth;
