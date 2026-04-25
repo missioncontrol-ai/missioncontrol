@@ -1,0 +1,16 @@
+name: argocd.app-diff
+version: 1
+description: Show diff between live and desired state of an ArgoCD application
+backend:
+  type: subprocess
+  command: argocd
+  args: ["app", "diff", "{{inputs.name}}"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  required: [name]
+  properties:
+    name:
+      type: string
+      description: Application name

@@ -1,0 +1,25 @@
+name: gcloud.aiplatform.jobs.list
+version: 1
+description: "List Vertex AI custom training jobs in a GCP project"
+backend:
+  type: subprocess
+  command: gcloud
+  args:
+    - ai
+    - custom-jobs
+    - list
+    - "--project={{ input.project }}"
+    - "--region={{ input.region }}"
+    - "--format=json"
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  required: [project, region]
+  properties:
+    project:
+      type: string
+      description: "GCP project ID"
+    region:
+      type: string
+      description: "GCP region (e.g. us-central1)"

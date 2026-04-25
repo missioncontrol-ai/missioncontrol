@@ -1,0 +1,16 @@
+name: incus.info
+version: 1
+description: Show detailed information about an Incus instance
+backend:
+  type: subprocess
+  command: incus
+  args: ["info", "{{inputs.name}}"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  required: [name]
+  properties:
+    name:
+      type: string
+      description: Instance name

@@ -1,0 +1,8 @@
+name: incus-readonly
+version: 1
+description: Read-only Incus container and VM inspection
+capabilities:
+  - incus.list
+  - incus.info
+  - incus.snapshot-list
+  - incus.image-list

@@ -1,0 +1,12 @@
+name: az.acr-list
+version: 1
+description: List Azure Container Registry instances
+backend:
+  type: subprocess
+  command: az
+  args: ["acr", "list", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

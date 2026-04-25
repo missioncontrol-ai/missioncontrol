@@ -1,0 +1,25 @@
+name: kubectl.logs
+version: 1
+description: Fetch logs from a pod (last 100 lines)
+backend:
+  type: subprocess
+  command: kubectl
+  args: ["logs", "{{ input.pod }}", "--namespace", "{{ input.namespace }}", "--tail", "{{ input.tail | default: \"100\" }}"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    pod:
+      type: string
+      description: Pod name
+    namespace:
+      type: string
+      description: Namespace
+    tail:
+      type: string
+      description: Number of lines from end (default 100)
+    container:
+      type: string
+      description: Container name (for multi-container pods)
+  required: [pod, namespace]

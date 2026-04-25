@@ -1,0 +1,14 @@
+name: kubectl-observe
+version: 1
+description: Read-only kubectl inspection
+capabilities:
+  - kubectl.get-pods
+  - kubectl.get-nodes
+  - kubectl.get-namespaces
+  - kubectl.get-services
+  - kubectl.get-deployments
+  - kubectl.logs
+  - kubectl.get-events
+  - kubectl.describe-pod
+workflows:
+  - kubectl.cluster-health

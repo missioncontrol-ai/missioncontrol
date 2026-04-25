@@ -1,0 +1,5 @@
+name: gcloud-readonly
+version: 1
+description: Read-only gcloud planning capabilities
+profiles:
+  - gcloud-readonly

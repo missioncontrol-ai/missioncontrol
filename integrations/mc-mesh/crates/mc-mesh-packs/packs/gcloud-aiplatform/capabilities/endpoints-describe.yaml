@@ -1,0 +1,29 @@
+name: gcloud.aiplatform.endpoints.describe
+version: 1
+description: "Describe a Vertex AI endpoint"
+backend:
+  type: subprocess
+  command: gcloud
+  args:
+    - ai
+    - endpoints
+    - describe
+    - "{{ input.endpoint_id }}"
+    - "--project={{ input.project }}"
+    - "--region={{ input.region }}"
+    - "--format=json"
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  required: [project, region, endpoint_id]
+  properties:
+    project:
+      type: string
+      description: "GCP project ID"
+    region:
+      type: string
+      description: "GCP region (e.g. us-central1)"
+    endpoint_id:
+      type: string
+      description: "Vertex AI endpoint ID"

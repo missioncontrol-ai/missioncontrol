@@ -1,0 +1,16 @@
+name: argocd.app-history
+version: 1
+description: Show deployment history of an ArgoCD application
+backend:
+  type: subprocess
+  command: argocd
+  args: ["app", "history", "{{inputs.name}}"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  required: [name]
+  properties:
+    name:
+      type: string
+      description: Application name

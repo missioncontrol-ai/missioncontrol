@@ -1,0 +1,18 @@
+name: terraform.plan
+version: 1
+description: Generate a Terraform execution plan without applying changes
+backend:
+  type: subprocess
+  command: terraform
+  args: ["plan", "-json", "-input=false"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    target:
+      type: string
+      description: Limit plan to a specific resource address (e.g. aws_instance.web)
+    var_file:
+      type: string
+      description: Path to a .tfvars variables file

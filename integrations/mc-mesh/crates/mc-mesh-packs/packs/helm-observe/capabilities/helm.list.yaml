@@ -1,0 +1,12 @@
+name: helm.list
+version: 1
+description: List Helm releases across all namespaces
+backend:
+  type: subprocess
+  command: helm
+  args: ["list", "--all-namespaces", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

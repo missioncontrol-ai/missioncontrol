@@ -1,0 +1,14 @@
+name: system.echo
+version: 1
+description: Echo a message back
+backend:
+  type: builtin
+  name: echo
+risk: low
+sideEffectClass: none
+inputSchema:
+  type: object
+  properties:
+    message:
+      type: string
+  required: [message]

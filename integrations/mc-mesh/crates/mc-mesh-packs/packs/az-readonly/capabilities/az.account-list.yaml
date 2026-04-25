@@ -1,0 +1,12 @@
+name: az.account-list
+version: 1
+description: List Azure subscriptions accessible to the current identity
+backend:
+  type: subprocess
+  command: az
+  args: ["account", "list", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

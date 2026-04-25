@@ -1,0 +1,12 @@
+name: kubectl.get-deployments
+version: 1
+description: List deployments across all namespaces
+backend:
+  type: subprocess
+  command: kubectl
+  args: ["get", "deployments", "--all-namespaces", "--output=json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

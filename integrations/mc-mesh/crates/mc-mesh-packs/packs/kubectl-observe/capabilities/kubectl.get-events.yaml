@@ -1,0 +1,15 @@
+name: kubectl.get-events
+version: 1
+description: List cluster events sorted by time (useful for debugging)
+backend:
+  type: subprocess
+  command: kubectl
+  args: ["get", "events", "--all-namespaces", "--sort-by=.lastTimestamp", "--output=json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    namespace:
+      type: string
+      description: Limit to this namespace (omit for all namespaces)

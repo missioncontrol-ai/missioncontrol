@@ -1,0 +1,17 @@
+name: git.log
+version: 1
+description: Show recent commit history
+backend:
+  type: subprocess
+  command: git
+  args: ["log", "--oneline", "-{{ input.limit }}"]
+risk: low
+sideEffectClass: readOnly
+argv_pattern: "git log *"
+inputSchema:
+  type: object
+  properties:
+    limit:
+      type: integer
+      default: 20
+      description: Number of commits to show

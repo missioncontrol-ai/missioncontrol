@@ -1,0 +1,19 @@
+name: gh.pr-view
+version: 1
+description: Show details of a specific pull request including comments and reviews
+backend:
+  type: subprocess
+  command: gh
+  args: ["pr", "view", "{{ input.number }}", "--json", "number,title,body,state,author,reviews,comments,files"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    number:
+      type: string
+      description: PR number
+    repo:
+      type: string
+      description: Repository (owner/name). Uses current repo if omitted.
+  required: [number]

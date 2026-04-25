@@ -1,0 +1,12 @@
+name: gh.list-repos
+version: 1
+description: List GitHub repositories
+backend:
+  type: subprocess
+  command: gh
+  args: ["repo", "list", "--json", "name,description,url", "--limit", "30"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

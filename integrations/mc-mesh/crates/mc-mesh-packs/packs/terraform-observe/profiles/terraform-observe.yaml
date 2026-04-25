@@ -1,0 +1,9 @@
+name: terraform-observe
+version: 1
+description: Read-only Terraform inspection
+capabilities:
+  - terraform.validate
+  - terraform.plan
+  - terraform.show
+  - terraform.state-list
+  - terraform.output

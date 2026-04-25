@@ -1,0 +1,19 @@
+name: docker.logs
+version: 1
+description: Fetch logs from a container (last 100 lines)
+backend:
+  type: subprocess
+  command: docker
+  args: ["logs", "--tail", "{{ input.tail | default: \"100\" }}", "{{ input.container }}"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    container:
+      type: string
+      description: Container name or ID
+    tail:
+      type: string
+      description: Number of lines from end (default 100)
+  required: [container]

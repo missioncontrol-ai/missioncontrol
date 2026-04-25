@@ -1,0 +1,13 @@
+name: terraform-observe
+version: 1
+description: Read-only Terraform state inspection and planning (dry-run only)
+author: clix
+license: Apache-2.0
+capabilities:
+  - terraform.validate
+  - terraform.plan
+  - terraform.show
+  - terraform.state-list
+  - terraform.output
+profiles:
+  - terraform-observe

@@ -1,0 +1,15 @@
+name: terraform.show
+version: 1
+description: Show current Terraform state or a saved plan file in JSON format
+backend:
+  type: subprocess
+  command: terraform
+  args: ["show", "-json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    path:
+      type: string
+      description: Path to a saved plan file (omit to show current state)

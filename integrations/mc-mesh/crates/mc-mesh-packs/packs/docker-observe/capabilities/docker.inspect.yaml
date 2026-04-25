@@ -1,0 +1,16 @@
+name: docker.inspect
+version: 1
+description: Inspect a container or image (returns JSON)
+backend:
+  type: subprocess
+  command: docker
+  args: ["inspect", "{{ input.target }}"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    target:
+      type: string
+      description: Container name, image name, or ID
+  required: [target]

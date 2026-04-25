@@ -6,6 +6,7 @@ members = [
     "crates/mc-mesh-runtimes",
     "crates/mc-mesh-sandbox",
     "crates/mc-mesh-secrets",
+    "crates/mc-mesh-packs",
 ]
 resolver = "2"
 

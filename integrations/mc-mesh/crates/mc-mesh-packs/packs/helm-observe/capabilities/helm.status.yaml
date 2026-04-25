@@ -1,0 +1,19 @@
+name: helm.status
+version: 1
+description: Show status of a Helm release
+backend:
+  type: subprocess
+  command: helm
+  args: ["status", "{{ input.release }}", "--namespace", "{{ input.namespace }}", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    release:
+      type: string
+      description: Release name
+    namespace:
+      type: string
+      description: Kubernetes namespace
+  required: [release, namespace]

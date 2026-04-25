@@ -1,0 +1,5 @@
+name: base
+version: 1
+description: Shared safe defaults — builtins only
+profiles:
+  - base

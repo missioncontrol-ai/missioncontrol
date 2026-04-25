@@ -1,0 +1,15 @@
+name: terraform.state-list
+version: 1
+description: List all resources tracked in Terraform state
+backend:
+  type: subprocess
+  command: terraform
+  args: ["state", "list"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    filter:
+      type: string
+      description: Resource address prefix filter

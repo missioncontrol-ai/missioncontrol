@@ -1,0 +1,12 @@
+name: docker.stats
+version: 1
+description: Show resource usage stats for all running containers (one snapshot)
+backend:
+  type: subprocess
+  command: docker
+  args: ["stats", "--no-stream", "--format", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

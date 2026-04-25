@@ -1,0 +1,12 @@
+name: aws.ecr-repos
+version: 1
+description: List ECR repositories
+backend:
+  type: subprocess
+  command: aws
+  args: ["ecr", "describe-repositories", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

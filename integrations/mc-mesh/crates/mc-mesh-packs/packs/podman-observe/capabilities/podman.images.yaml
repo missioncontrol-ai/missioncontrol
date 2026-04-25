@@ -1,0 +1,12 @@
+name: podman.images
+version: 1
+description: List local Podman images
+backend:
+  type: subprocess
+  command: podman
+  args: ["images", "--format", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

@@ -1,0 +1,12 @@
+name: git.diff
+version: 1
+description: Show unstaged changes
+backend:
+  type: subprocess
+  command: git
+  args: ["diff"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

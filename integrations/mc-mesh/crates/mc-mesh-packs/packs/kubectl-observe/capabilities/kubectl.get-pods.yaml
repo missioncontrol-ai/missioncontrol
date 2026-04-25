@@ -1,0 +1,15 @@
+name: kubectl.get-pods
+version: 1
+description: List pods in a namespace
+backend:
+  type: subprocess
+  command: kubectl
+  args: ["get", "pods", "-n", "{{ input.namespace }}", "--output=json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    namespace:
+      type: string
+  required: [namespace]

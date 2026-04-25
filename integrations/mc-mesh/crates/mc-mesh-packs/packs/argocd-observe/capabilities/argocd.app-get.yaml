@@ -1,0 +1,16 @@
+name: argocd.app-get
+version: 1
+description: Get details of an ArgoCD application
+backend:
+  type: subprocess
+  command: argocd
+  args: ["app", "get", "{{inputs.name}}", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  required: [name]
+  properties:
+    name:
+      type: string
+      description: Application name

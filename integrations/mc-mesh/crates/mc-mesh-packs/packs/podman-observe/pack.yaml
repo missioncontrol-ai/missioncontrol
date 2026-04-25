@@ -1,0 +1,5 @@
+name: podman-observe
+version: 1
+description: Read-only Podman inspection — containers, images, logs, pods
+profiles:
+  - podman-observe

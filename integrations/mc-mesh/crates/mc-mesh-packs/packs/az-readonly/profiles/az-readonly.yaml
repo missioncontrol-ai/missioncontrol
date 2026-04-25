@@ -1,0 +1,10 @@
+name: az-readonly
+version: 1
+description: Read-only Azure inspection
+capabilities:
+  - az.account-list
+  - az.group-list
+  - az.vm-list
+  - az.aks-list
+  - az.storage-accounts
+  - az.acr-list

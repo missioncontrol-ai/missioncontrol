@@ -1,0 +1,15 @@
+name: docker.ps
+version: 1
+description: List running containers
+backend:
+  type: subprocess
+  command: docker
+  args: ["ps", "--format", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    all:
+      type: boolean
+      description: Include stopped containers

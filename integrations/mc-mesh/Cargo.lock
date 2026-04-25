@@ -1303,6 +1303,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-mesh-packs"
+version = "0.1.0"
+dependencies = [
+ "mc-mesh-sandbox",
+ "mc-mesh-secrets",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "mc-mesh-runtimes"
 version = "0.1.0"
 dependencies = [

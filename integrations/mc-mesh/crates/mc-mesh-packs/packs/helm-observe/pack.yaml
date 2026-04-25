@@ -1,0 +1,5 @@
+name: helm-observe
+version: 1
+description: Read-only Helm inspection — releases, values, status across all namespaces
+profiles:
+  - helm-observe

@@ -1,0 +1,12 @@
+name: az.aks-list
+version: 1
+description: List AKS clusters across all resource groups
+backend:
+  type: subprocess
+  command: az
+  args: ["aks", "list", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

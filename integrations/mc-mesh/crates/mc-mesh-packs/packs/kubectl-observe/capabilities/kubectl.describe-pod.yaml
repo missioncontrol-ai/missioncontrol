@@ -1,0 +1,19 @@
+name: kubectl.describe-pod
+version: 1
+description: Show detailed information about a pod including events and conditions
+backend:
+  type: subprocess
+  command: kubectl
+  args: ["describe", "pod", "{{ input.pod }}", "--namespace", "{{ input.namespace }}"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    pod:
+      type: string
+      description: Pod name
+    namespace:
+      type: string
+      description: Namespace
+  required: [pod, namespace]
