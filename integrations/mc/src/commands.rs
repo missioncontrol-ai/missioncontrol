@@ -109,6 +109,15 @@ pub enum McCommand {
     /// List and describe capability packs available through mc-mesh.
     #[command(subcommand)]
     Capabilities(cmd::capabilities::CapabilitiesCmd),
+    /// Execute a capability through the mc-mesh routing layer.
+    #[command(name = "dispatch", about = "Execute a capability")]
+    Dispatch(cmd::run::RunArgs),
+    /// Inspect capability execution receipts stored in the local SQLite audit log.
+    #[command(subcommand)]
+    Receipts(cmd::receipts::ReceiptsCmd),
+    /// Bidirectional git-backed config sync for this node.
+    #[command(name = "mesh-sync", subcommand)]
+    MeshSync(cmd::sync::SyncCmd),
 }
 
 #[derive(Subcommand, Debug)]
@@ -716,6 +725,9 @@ pub async fn run(
             // TODO: wire top-level --host and --route global flags through here
             cmd::capabilities::run(sub, None, None).await
         }
+        McCommand::Dispatch(args) => cmd::run::run(args, None).await,
+        McCommand::Receipts(sub) => cmd::receipts::run(sub).map_err(Into::into),
+        McCommand::MeshSync(sub) => cmd::sync::run(Some(sub)).map_err(Into::into),
     }
 }
 
