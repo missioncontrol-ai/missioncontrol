@@ -146,7 +146,11 @@ async def run_goose_evolve(
 
 
 def _extract_score(line: str) -> Optional[float]:
-    """Parse a stream-json line for a score value emitted by the agent."""
+    """Parse a stream-json line for a score value emitted by the agent.
+
+    Actual stream-json format from goose:
+      {"type": "message", "message": {"content": [{"type": "text", "text": "..."}], ...}}
+    """
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
@@ -155,7 +159,8 @@ def _extract_score(line: str) -> Optional[float]:
     if event.get("type") != "message":
         return None
 
-    for block in event.get("content", []):
+    # Content is nested inside event["message"]["content"]
+    for block in event.get("message", {}).get("content", []):
         if isinstance(block, dict) and block.get("type") == "text":
             found = _find_score_in_text(block.get("text", ""))
             if found is not None:
