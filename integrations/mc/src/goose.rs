@@ -135,6 +135,7 @@ fn apply_env(
     cmd.env("XDG_CONFIG_HOME", runtime_home);
     cmd.env("GOOSE_PROVIDER", "litellm");
     cmd.env("LITELLM_HOST", litellm_host());
+    cmd.env("GOOSE_MODE", "Auto");
 
     if let Ok(api_key) = std::env::var("MC_LITELLM_API_KEY") {
         if !api_key.is_empty() {

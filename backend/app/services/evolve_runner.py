@@ -82,6 +82,7 @@ async def run_goose_evolve(
         "GOOSE_PROVIDER": "litellm",
         "LITELLM_HOST": _LITELLM_HOST,
         "LITELLM_API_KEY": api_key,
+        "GOOSE_MODE": "Auto",
         "XDG_CONFIG_HOME": run_dir,
         "HOME": run_dir,
     }

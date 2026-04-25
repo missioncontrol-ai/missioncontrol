@@ -1017,7 +1017,8 @@ fn build_goose_command(
 
     cmd.env("GOOSE_PROVIDER", "litellm")
         .env("LITELLM_HOST", litellm_host)
-        .env("LITELLM_API_KEY", litellm_api_key);
+        .env("LITELLM_API_KEY", litellm_api_key)
+        .env("GOOSE_MODE", "Auto");
 
     for (key, value) in env_map {
         if let Some(v) = value.as_str() {
