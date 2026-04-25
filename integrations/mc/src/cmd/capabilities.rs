@@ -80,7 +80,7 @@ async fn run_list(
         }
         Err(_) => {
             // Daemon offline — fall back to embedded registry.
-            eprintln!("warning: daemon offline — showing all built-ins, policy not applied");
+            eprintln!("⚠ daemon offline — showing all built-ins, policy not applied");
 
             let registry = PackRegistry::load_builtin()
                 .map_err(|e| anyhow::anyhow!("failed to load built-in packs: {e}"))?;
@@ -126,10 +126,7 @@ fn run_describe(name: &str) -> Result<()> {
             println!("{json}");
             Ok(())
         }
-        None => {
-            eprintln!("error: capability '{name}' not found");
-            std::process::exit(1);
-        }
+        None => anyhow::bail!("capability '{}' not found", name),
     }
 }
 

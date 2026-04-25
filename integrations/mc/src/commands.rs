@@ -713,6 +713,7 @@ pub async fn run(
         McCommand::Mesh(cmd) => mesh::handle(cmd, &client, &config).await,
         McCommand::Run(args) => run::run(args, &client, &config).await,
         McCommand::Capabilities(sub) => {
+            // TODO: wire top-level --host and --route global flags through here
             cmd::capabilities::run(sub, None, None).await
         }
     }
