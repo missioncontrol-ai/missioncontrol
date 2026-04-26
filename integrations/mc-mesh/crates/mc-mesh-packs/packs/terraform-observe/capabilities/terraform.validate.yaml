@@ -1,0 +1,12 @@
+name: terraform.validate
+version: 1
+description: Validate Terraform configuration files in the current directory
+backend:
+  type: subprocess
+  command: terraform
+  args: ["validate", "-json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

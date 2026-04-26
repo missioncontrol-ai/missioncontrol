@@ -2,7 +2,7 @@
 ///
 /// Uses `--output-format stream-json` for structured real-time output.
 /// Each JSONL line is parsed into a typed `ProgressEvent`.
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use mc_mesh_core::agent_runtime::AgentRuntime;
@@ -12,12 +12,14 @@ use mc_mesh_core::types::{
     TaskSpec,
 };
 use std::io::{Read, Write};
+use std::sync::OnceLock;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub struct ClaudeCodeRuntime {
     capabilities: Vec<Capability>,
     version: String,
+    install_done: OnceLock<()>,
 }
 
 impl ClaudeCodeRuntime {
@@ -31,7 +33,18 @@ impl ClaudeCodeRuntime {
                 Capability::new("test.run"),
             ],
             version: detect_version(),
+            install_done: OnceLock::new(),
         }
+    }
+
+    fn render_harness(&self) -> Result<()> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| anyhow!("cannot determine HOME directory"))?;
+        let target = home.join(".claude").join("CLAUDE.md");
+        crate::harness::write_capabilities_block(&target)
+            .with_context(|| format!("rendering claude harness to {}", target.display()))?;
+        tracing::info!("claude harness rendered to {}", target.display());
+        Ok(())
     }
 }
 
@@ -151,10 +164,11 @@ fn parse_stream_line(line: &str) -> Vec<ProgressEvent> {
 
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max])
+        return s.to_string();
     }
+    // Slice at a codepoint boundary to avoid panicking on multi-byte chars.
+    let boundary = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
+    format!("{}…", &s[..boundary])
 }
 
 #[async_trait]
@@ -219,16 +233,28 @@ impl AgentRuntime for ClaudeCodeRuntime {
 
         tracing::info!("claude-code injecting task {task_id}: {}", &prompt[..prompt.len().min(80)]);
 
-        let mut child = Command::new("claude")
-            .arg("-p")
+        let mut cmd = Command::new("claude");
+        cmd.arg("-p")
             .arg(&prompt)
             .arg("--output-format")
             .arg("stream-json")
             .arg("--no-session-persistence")
             .current_dir(&work_dir)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
+            .stderr(std::process::Stdio::piped());
+
+        // Propagate the mc-mesh capability socket path so agents can reach `mc-mesh run`.
+        if let Ok(socket) = std::env::var("MC_MESH_SOCKET") {
+            cmd.env("MC_MESH_SOCKET", socket);
+        }
+
+        // Inject mc binary dir so agents can invoke `mc` without an absolute path.
+        let mc_dir = crate::shared::mc_bin_dir();
+        if !mc_dir.is_empty() {
+            cmd.env("PATH", crate::shared::prepend_to_path(&mc_dir, &std::env::var("PATH").unwrap_or_default()));
+        }
+
+        let mut child = cmd.spawn()?;
 
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
         let stderr = child.stderr.take().ok_or_else(|| anyhow!("no stderr"))?;
@@ -369,6 +395,56 @@ impl AgentRuntime for ClaudeCodeRuntime {
         tracing::info!("Shutting down claude-code agent {}", handle.agent_id);
         Ok(())
     }
+
+    async fn ensure_installed(&self) -> Result<()> {
+        // Return immediately if already verified during this daemon lifetime.
+        if self.install_done.get().is_some() {
+            return Ok(());
+        }
+
+        // Step 1: check if claude is already on PATH.
+        let already_present = tokio::process::Command::new("claude")
+            .arg("--version")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !already_present {
+            // Step 2: ensure npm is available before attempting install.
+            tokio::process::Command::new("npm")
+                .arg("--version")
+                .output()
+                .await
+                .map_err(|e| anyhow!(
+                    "claude CLI not found and npm check failed ({e}). \
+                     Install Node.js (https://nodejs.org) then re-run the daemon."
+                ))?;
+
+            tracing::info!("claude not found — installing via npm…");
+            let out = tokio::process::Command::new("npm")
+                .args(["install", "-g", "@anthropic-ai/claude-code"])
+                .output()
+                .await
+                .map_err(|e| anyhow!("npm install failed to launch: {e}"))?;
+
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(anyhow!(
+                    "npm install -g @anthropic-ai/claude-code failed (exit {}): {stderr}",
+                    out.status
+                ));
+            }
+            tracing::info!("claude-code installed successfully");
+        }
+
+        // Step 3: render harness config.
+        tokio::task::block_in_place(|| self.render_harness())?;
+
+        // Mark done so subsequent calls are no-ops.
+        let _ = self.install_done.set(());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -446,6 +522,12 @@ mod tests {
         assert!(parse_stream_line("   ").is_empty());
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ensure_installed_does_not_panic() {
+        let runtime = ClaudeCodeRuntime::new();
+        let _ = runtime.ensure_installed().await; // Ok or Err, but no panic
+    }
+
     #[test]
     fn truncate_short_string_unchanged() {
         assert_eq!(truncate("hello", 10), "hello");
@@ -457,4 +539,5 @@ mod tests {
         assert!(result.starts_with("abcde"));
         assert!(result.contains('…'));
     }
+
 }

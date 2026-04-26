@@ -1,0 +1,12 @@
+name: incus-readonly
+version: 1
+description: Read-only Incus (LXD successor) container and VM inspection
+author: clix
+license: Apache-2.0
+capabilities:
+  - incus.list
+  - incus.info
+  - incus.snapshot-list
+  - incus.image-list
+profiles:
+  - incus-readonly

@@ -1,0 +1,12 @@
+name: aws.ecs-clusters
+version: 1
+description: List ECS clusters
+backend:
+  type: subprocess
+  command: aws
+  args: ["ecs", "list-clusters", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

@@ -1,0 +1,12 @@
+name: gcloud.list-projects
+version: 1
+description: List GCP projects
+backend:
+  type: subprocess
+  command: gcloud
+  args: ["projects", "list", "--format=json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

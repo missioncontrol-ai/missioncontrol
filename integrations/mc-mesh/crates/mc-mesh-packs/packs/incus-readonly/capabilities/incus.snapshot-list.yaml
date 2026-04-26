@@ -1,0 +1,16 @@
+name: incus.snapshot-list
+version: 1
+description: List snapshots for an Incus instance
+backend:
+  type: subprocess
+  command: incus
+  args: ["snapshot", "list", "{{inputs.name}}", "--format", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  required: [name]
+  properties:
+    name:
+      type: string
+      description: Instance name

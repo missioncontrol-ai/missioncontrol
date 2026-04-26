@@ -1,0 +1,9 @@
+name: podman-observe
+version: 1
+description: Read-only Podman inspection
+capabilities:
+  - podman.ps
+  - podman.images
+  - podman.logs
+  - podman.inspect
+  - podman.pod-list

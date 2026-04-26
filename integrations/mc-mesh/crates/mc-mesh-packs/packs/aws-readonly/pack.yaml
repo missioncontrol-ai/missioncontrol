@@ -1,0 +1,5 @@
+name: aws-readonly
+version: 1
+description: Read-only AWS inspection — EC2, S3, ECS, Lambda, ECR, IAM identity
+profiles:
+  - aws-readonly

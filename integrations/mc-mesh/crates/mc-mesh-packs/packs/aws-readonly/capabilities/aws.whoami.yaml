@@ -1,0 +1,12 @@
+name: aws.whoami
+version: 1
+description: Show the current IAM identity (account, user/role, ARN)
+backend:
+  type: subprocess
+  command: aws
+  args: ["sts", "get-caller-identity", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

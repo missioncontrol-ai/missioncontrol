@@ -1,0 +1,12 @@
+name: az.group-list
+version: 1
+description: List Azure resource groups
+backend:
+  type: subprocess
+  command: az
+  args: ["group", "list", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

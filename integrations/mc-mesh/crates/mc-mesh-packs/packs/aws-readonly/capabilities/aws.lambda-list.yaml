@@ -1,0 +1,12 @@
+name: aws.lambda-list
+version: 1
+description: List Lambda functions
+backend:
+  type: subprocess
+  command: aws
+  args: ["lambda", "list-functions", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

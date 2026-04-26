@@ -1,0 +1,12 @@
+name: az.storage-accounts
+version: 1
+description: List Azure storage accounts
+backend:
+  type: subprocess
+  command: az
+  args: ["storage", "account", "list", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

@@ -1,0 +1,5 @@
+name: az-readonly
+version: 1
+description: Read-only Azure inspection — subscriptions, VMs, AKS, storage, ACR, resource groups
+profiles:
+  - az-readonly

@@ -1,0 +1,10 @@
+name: aws-readonly
+version: 1
+description: Read-only AWS inspection
+capabilities:
+  - aws.whoami
+  - aws.ec2-instances
+  - aws.s3-buckets
+  - aws.ecs-clusters
+  - aws.lambda-list
+  - aws.ecr-repos

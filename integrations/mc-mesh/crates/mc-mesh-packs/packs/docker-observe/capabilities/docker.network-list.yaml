@@ -1,0 +1,12 @@
+name: docker.network-list
+version: 1
+description: List Docker networks
+backend:
+  type: subprocess
+  command: docker
+  args: ["network", "ls", "--format", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

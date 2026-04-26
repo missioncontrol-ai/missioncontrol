@@ -4,6 +4,11 @@ members = [
     "crates/mc-mesh-core",
     "crates/mc-mesh-work",
     "crates/mc-mesh-runtimes",
+    "crates/mc-mesh-sandbox",
+    "crates/mc-mesh-secrets",
+    "crates/mc-mesh-packs",
+    "crates/mc-mesh-receipts",
+    "crates/mc-mesh-sync",
 ]
 resolver = "2"
 
@@ -25,3 +30,5 @@ uuid = { version = "1", features = ["v4"] }
 portable-pty = "0.8"
 dirs = "4"
 serde_yaml = "0.9"
+keyring = { version = "3", features = ["async-secret-service", "async-io", "crypto-rust"] }
+rusqlite = { version = "0.31", features = ["bundled"] }

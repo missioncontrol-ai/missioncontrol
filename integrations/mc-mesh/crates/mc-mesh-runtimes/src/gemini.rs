@@ -6,7 +6,7 @@
 /// The Gemini CLI runs non-interactively via `gemini -p "<prompt>"`.
 /// Output is plain text streamed to stdout. We classify lines heuristically
 /// into typed ProgressEvents; exit code determines success/failure.
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use mc_mesh_core::agent_runtime::AgentRuntime;
@@ -16,12 +16,14 @@ use mc_mesh_core::types::{
     TaskSpec,
 };
 use std::io::{Read, Write};
+use std::sync::OnceLock;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub struct GeminiRuntime {
     capabilities: Vec<Capability>,
     version: String,
+    install_done: OnceLock<()>,
 }
 
 impl GeminiRuntime {
@@ -36,7 +38,18 @@ impl GeminiRuntime {
                 Capability::new("search"),
             ],
             version: detect_version(),
+            install_done: OnceLock::new(),
         }
+    }
+
+    fn render_harness(&self) -> Result<()> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| anyhow!("cannot determine HOME directory"))?;
+        let target = home.join(".gemini").join("GEMINI.md");
+        crate::harness::write_capabilities_block(&target)
+            .with_context(|| format!("rendering gemini harness to {}", target.display()))?;
+        tracing::info!("gemini harness rendered to {}", target.display());
+        Ok(())
     }
 }
 
@@ -127,10 +140,11 @@ fn classify_line(line: &str) -> Option<ProgressEvent> {
 
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max])
+        return s.to_string();
     }
+    // Slice at a codepoint boundary to avoid panicking on multi-byte chars.
+    let boundary = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
+    format!("{}…", &s[..boundary])
 }
 
 #[async_trait]
@@ -203,14 +217,26 @@ impl AgentRuntime for GeminiRuntime {
         // `gemini -p "<prompt>"` runs a single non-interactive prompt.
         // `--yolo` (or `--no-interactive`) suppresses confirmations in full-auto mode.
         // The flag name differs across versions; we try both patterns via the process args.
-        let mut child = Command::new("gemini")
-            .arg("-p")
+        let mut cmd = Command::new("gemini");
+        cmd.arg("-p")
             .arg(&prompt)
             .arg("--yolo")
             .current_dir(&work_dir)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
+            .stderr(std::process::Stdio::piped());
+
+        // Propagate the mc-mesh capability socket path so agents can reach `mc-mesh run`.
+        if let Ok(socket) = std::env::var("MC_MESH_SOCKET") {
+            cmd.env("MC_MESH_SOCKET", socket);
+        }
+
+        // Inject mc binary dir so agents can invoke `mc` without an absolute path.
+        let mc_dir = crate::shared::mc_bin_dir();
+        if !mc_dir.is_empty() {
+            cmd.env("PATH", crate::shared::prepend_to_path(&mc_dir, &std::env::var("PATH").unwrap_or_default()));
+        }
+
+        let mut child = cmd.spawn()?;
 
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
         let stderr = child.stderr.take().ok_or_else(|| anyhow!("no stderr"))?;
@@ -351,5 +377,67 @@ impl AgentRuntime for GeminiRuntime {
     async fn shutdown(&self, handle: AgentHandle) -> Result<()> {
         tracing::info!("Shutting down gemini agent {}", handle.agent_id);
         Ok(())
+    }
+
+    async fn ensure_installed(&self) -> Result<()> {
+        if self.install_done.get().is_some() {
+            return Ok(());
+        }
+
+        // Check `gemini --version` then `gemini version` (different CLI versions differ).
+        let already_present = tokio::process::Command::new("gemini")
+            .arg("--version")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+            || tokio::process::Command::new("gemini")
+                .arg("version")
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+        if !already_present {
+            tokio::process::Command::new("npm")
+                .arg("--version")
+                .output()
+                .await
+                .map_err(|e| anyhow!(
+                    "gemini CLI not found and npm check failed ({e}). \
+                     Install Node.js (https://nodejs.org) first."
+                ))?;
+
+            tracing::info!("gemini not found — installing via npm…");
+            let out = tokio::process::Command::new("npm")
+                .args(["install", "-g", "@google/gemini-cli"])
+                .output()
+                .await
+                .map_err(|e| anyhow!("npm install failed to launch: {e}"))?;
+
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(anyhow!(
+                    "npm install -g @google/gemini-cli failed (exit {}): {stderr}",
+                    out.status
+                ));
+            }
+            tracing::info!("gemini CLI installed successfully");
+        }
+
+        tokio::task::block_in_place(|| self.render_harness())?;
+        let _ = self.install_done.set(());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ensure_installed_does_not_panic() {
+        let runtime = GeminiRuntime::new();
+        let _ = runtime.ensure_installed().await; // Ok or Err, but no panic
     }
 }

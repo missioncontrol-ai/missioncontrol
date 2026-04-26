@@ -9,7 +9,7 @@
 ///   {"type":"notification","extension_id":"...","progress":{"progress":0.5,"total":1.0,"message":"..."}}
 ///   {"type":"error","error":"..."}
 ///   {"type":"complete","total_tokens":1234}
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use mc_mesh_core::agent_runtime::AgentRuntime;
@@ -19,12 +19,14 @@ use mc_mesh_core::types::{
     TaskSpec,
 };
 use std::io::{Read, Write};
+use std::sync::OnceLock;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub struct GooseRuntime {
     capabilities: Vec<Capability>,
     version: String,
+    install_done: OnceLock<()>,
 }
 
 impl GooseRuntime {
@@ -37,7 +39,18 @@ impl GooseRuntime {
                 Capability::new("recipe"),
             ],
             version: detect_version(),
+            install_done: OnceLock::new(),
         }
+    }
+
+    fn render_harness(&self) -> Result<()> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| anyhow!("cannot determine HOME directory"))?;
+        let target = home.join(".config").join("goose").join("CAPABILITIES.md");
+        crate::harness::write_capabilities_block(&target)
+            .with_context(|| format!("rendering goose harness to {}", target.display()))?;
+        tracing::info!("goose harness rendered to {}", target.display());
+        Ok(())
     }
 }
 
@@ -281,6 +294,17 @@ impl AgentRuntime for GooseRuntime {
             }
         }
 
+        // Propagate the mc-mesh capability socket path so agents can reach `mc-mesh run`.
+        if let Ok(socket) = std::env::var("MC_MESH_SOCKET") {
+            cmd.env("MC_MESH_SOCKET", socket);
+        }
+
+        // Inject mc binary dir so agents can invoke `mc` without an absolute path.
+        let mc_dir = crate::shared::mc_bin_dir();
+        if !mc_dir.is_empty() {
+            cmd.env("PATH", crate::shared::prepend_to_path(&mc_dir, &std::env::var("PATH").unwrap_or_default()));
+        }
+
         let mut child = cmd.spawn()?;
 
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
@@ -425,6 +449,32 @@ impl AgentRuntime for GooseRuntime {
         tracing::info!("Shutting down goose agent {}", handle.agent_id);
         Ok(())
     }
+
+    async fn ensure_installed(&self) -> Result<()> {
+        if self.install_done.get().is_some() {
+            return Ok(());
+        }
+
+        // Goose is pre-installed at bootstrap; verify presence only.
+        let ok = tokio::process::Command::new("goose")
+            .arg("--version")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            return Err(anyhow!(
+                "goose CLI not found or returned non-zero exit. \
+                 Install from https://github.com/block/goose — \
+                 run: curl -fsSL https://github.com/block/goose/releases/latest/download/download.sh | sh"
+            ));
+        }
+
+        tokio::task::block_in_place(|| self.render_harness())?;
+
+        let _ = self.install_done.set(());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -537,5 +587,11 @@ mod tests {
         let result = truncate("abcdefghij", 5);
         assert!(result.starts_with("abcde"));
         assert!(result.contains('…'));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ensure_installed_does_not_panic() {
+        let runtime = GooseRuntime::new();
+        let _ = runtime.ensure_installed().await; // Ok or Err, but no panic
     }
 }

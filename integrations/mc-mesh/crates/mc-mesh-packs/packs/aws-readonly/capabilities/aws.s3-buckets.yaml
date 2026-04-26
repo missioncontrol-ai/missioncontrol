@@ -1,0 +1,12 @@
+name: aws.s3-buckets
+version: 1
+description: List S3 buckets in the account
+backend:
+  type: subprocess
+  command: aws
+  args: ["s3api", "list-buckets", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

@@ -1,0 +1,14 @@
+name: gcloud-aiplatform
+version: 1
+description: "Google Cloud AI Platform (Vertex AI) read-only capabilities"
+author: "clix"
+license: "Apache-2.0"
+capabilities:
+  - gcloud.aiplatform.datasets.list
+  - gcloud.aiplatform.endpoints.describe
+  - gcloud.aiplatform.endpoints.list
+  - gcloud.aiplatform.jobs.list
+  - gcloud.aiplatform.models.describe
+  - gcloud.aiplatform.models.list
+profiles:
+  - gcloud-aiplatform

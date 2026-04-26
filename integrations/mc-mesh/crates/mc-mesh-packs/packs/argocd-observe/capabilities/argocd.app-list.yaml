@@ -1,0 +1,15 @@
+name: argocd.app-list
+version: 1
+description: List all ArgoCD applications
+backend:
+  type: subprocess
+  command: argocd
+  args: ["app", "list", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    project:
+      type: string
+      description: Filter by project name

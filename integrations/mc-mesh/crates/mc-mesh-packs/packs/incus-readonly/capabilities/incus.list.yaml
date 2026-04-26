@@ -1,0 +1,15 @@
+name: incus.list
+version: 1
+description: List Incus containers and VMs with their status
+backend:
+  type: subprocess
+  command: incus
+  args: ["list", "--format", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    filter:
+      type: string
+      description: Filter expression (e.g. status=running)

@@ -1,0 +1,12 @@
+name: kubectl.get-services
+version: 1
+description: List services across all namespaces
+backend:
+  type: subprocess
+  command: kubectl
+  args: ["get", "services", "--all-namespaces", "--output=json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

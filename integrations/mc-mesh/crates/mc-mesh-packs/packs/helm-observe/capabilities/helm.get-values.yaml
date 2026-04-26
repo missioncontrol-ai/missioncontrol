@@ -1,0 +1,19 @@
+name: helm.get-values
+version: 1
+description: Get values for a Helm release (user-supplied values only)
+backend:
+  type: subprocess
+  command: helm
+  args: ["get", "values", "{{ input.release }}", "--namespace", "{{ input.namespace }}", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    release:
+      type: string
+      description: Release name
+    namespace:
+      type: string
+      description: Kubernetes namespace
+  required: [release, namespace]

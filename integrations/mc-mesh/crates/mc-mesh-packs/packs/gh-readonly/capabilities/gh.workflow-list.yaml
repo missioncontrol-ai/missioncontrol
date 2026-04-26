@@ -1,0 +1,15 @@
+name: gh.workflow-list
+version: 1
+description: List GitHub Actions workflows and their last run status
+backend:
+  type: subprocess
+  command: gh
+  args: ["workflow", "list", "--json", "id,name,state"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    repo:
+      type: string
+      description: Repository (owner/name). Uses current repo if omitted.

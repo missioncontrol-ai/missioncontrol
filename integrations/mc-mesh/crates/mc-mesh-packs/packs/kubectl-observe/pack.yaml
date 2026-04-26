@@ -1,0 +1,5 @@
+name: kubectl-observe
+version: 1
+description: Read-only kubectl inspection
+profiles:
+  - kubectl-observe

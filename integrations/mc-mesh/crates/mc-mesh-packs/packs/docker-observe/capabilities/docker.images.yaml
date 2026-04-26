@@ -1,0 +1,12 @@
+name: docker.images
+version: 1
+description: List local Docker images
+backend:
+  type: subprocess
+  command: docker
+  args: ["images", "--format", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

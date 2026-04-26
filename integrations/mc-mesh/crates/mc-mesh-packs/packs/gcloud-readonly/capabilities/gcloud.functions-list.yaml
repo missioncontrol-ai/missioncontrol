@@ -1,0 +1,12 @@
+name: gcloud.functions-list
+version: 1
+description: List Cloud Functions (gen 2) in the active project
+backend:
+  type: subprocess
+  command: gcloud
+  args: ["functions", "list", "--format=json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

@@ -1,0 +1,12 @@
+name: git.branch-list
+version: 1
+description: List all branches
+backend:
+  type: subprocess
+  command: git
+  args: ["branch", "-a"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

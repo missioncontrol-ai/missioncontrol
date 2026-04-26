@@ -1,0 +1,15 @@
+name: gcloud.compute-instances-list
+version: 1
+description: List Compute Engine instances across all zones
+backend:
+  type: subprocess
+  command: gcloud
+  args: ["compute", "instances", "list", "--format=json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    project:
+      type: string
+      description: GCP project ID (uses active project if omitted)

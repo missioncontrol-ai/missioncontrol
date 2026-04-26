@@ -50,6 +50,15 @@ pub trait AgentRuntime: Send + Sync {
 
     /// Graceful shutdown of the child process.
     async fn shutdown(&self, handle: AgentHandle) -> Result<()>;
+
+    /// Check that the agent CLI is available on PATH and install it if needed.
+    ///
+    /// Called by the daemon before `launch()`. Returns an error if the CLI
+    /// cannot be found or installed.  Default no-op is fine for runtimes
+    /// that manage their own availability externally.
+    async fn ensure_installed(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Dynamic dispatch alias for convenience.

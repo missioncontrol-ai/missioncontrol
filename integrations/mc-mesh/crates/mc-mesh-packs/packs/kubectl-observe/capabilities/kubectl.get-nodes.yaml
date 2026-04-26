@@ -1,0 +1,12 @@
+name: kubectl.get-nodes
+version: 1
+description: List cluster nodes
+backend:
+  type: subprocess
+  command: kubectl
+  args: ["get", "nodes", "--output=json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

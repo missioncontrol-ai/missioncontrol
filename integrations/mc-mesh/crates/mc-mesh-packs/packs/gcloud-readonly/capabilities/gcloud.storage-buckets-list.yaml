@@ -1,0 +1,12 @@
+name: gcloud.storage-buckets-list
+version: 1
+description: List Cloud Storage buckets in the active project
+backend:
+  type: subprocess
+  command: gcloud
+  args: ["storage", "buckets", "list", "--format=json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

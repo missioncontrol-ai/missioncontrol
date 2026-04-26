@@ -1,0 +1,18 @@
+name: gh.pr-list
+version: 1
+description: List pull requests in the current or specified repository
+backend:
+  type: subprocess
+  command: gh
+  args: ["pr", "list", "--json", "number,title,state,author,createdAt,headRefName", "--limit", "30"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    repo:
+      type: string
+      description: Repository (owner/name). Uses current repo if omitted.
+    state:
+      type: string
+      description: "Filter by state: open (default), closed, merged, all"

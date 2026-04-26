@@ -1,0 +1,12 @@
+name: kubectl.get-namespaces
+version: 1
+description: List all namespaces
+backend:
+  type: subprocess
+  command: kubectl
+  args: ["get", "namespaces", "--output=json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

@@ -3,7 +3,7 @@
 /// Codex CLI does not emit structured JSON; it streams plain text to stdout.
 /// We run `codex --approval-mode full-auto --quiet "<prompt>"` and map each
 /// stdout line to a typed ProgressEvent. Exit code determines success/failure.
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use mc_mesh_core::agent_runtime::AgentRuntime;
@@ -13,12 +13,14 @@ use mc_mesh_core::types::{
     TaskSpec,
 };
 use std::io::{Read, Write};
+use std::sync::OnceLock;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub struct CodexRuntime {
     capabilities: Vec<Capability>,
     version: String,
+    install_done: OnceLock<()>,
 }
 
 impl CodexRuntime {
@@ -32,7 +34,18 @@ impl CodexRuntime {
                 Capability::new("test.write"),
             ],
             version: detect_version(),
+            install_done: OnceLock::new(),
         }
+    }
+
+    fn render_harness(&self) -> Result<()> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| anyhow!("cannot determine HOME directory"))?;
+        let target = home.join(".codex").join("instructions.md");
+        crate::harness::write_capabilities_block(&target)
+            .with_context(|| format!("rendering codex harness to {}", target.display()))?;
+        tracing::info!("codex harness rendered to {}", target.display());
+        Ok(())
     }
 }
 
@@ -108,10 +121,11 @@ fn classify_line(line: &str) -> Option<ProgressEvent> {
 
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max])
+        return s.to_string();
     }
+    // Slice at a codepoint boundary to avoid panicking on multi-byte chars.
+    let boundary = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
+    format!("{}…", &s[..boundary])
 }
 
 #[async_trait]
@@ -178,15 +192,27 @@ impl AgentRuntime for CodexRuntime {
 
         // `codex --approval-mode full-auto` runs non-interactively.
         // `--quiet` suppresses the spinner/ANSI chrome so we get clean lines.
-        let mut child = Command::new("codex")
-            .arg("--approval-mode")
+        let mut cmd = Command::new("codex");
+        cmd.arg("--approval-mode")
             .arg("full-auto")
             .arg("--quiet")
             .arg(&prompt)
             .current_dir(&work_dir)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
+            .stderr(std::process::Stdio::piped());
+
+        // Propagate the mc-mesh capability socket path so agents can reach `mc-mesh run`.
+        if let Ok(socket) = std::env::var("MC_MESH_SOCKET") {
+            cmd.env("MC_MESH_SOCKET", socket);
+        }
+
+        // Inject mc binary dir so agents can invoke `mc` without an absolute path.
+        let mc_dir = crate::shared::mc_bin_dir();
+        if !mc_dir.is_empty() {
+            cmd.env("PATH", crate::shared::prepend_to_path(&mc_dir, &std::env::var("PATH").unwrap_or_default()));
+        }
+
+        let mut child = cmd.spawn()?;
 
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
         let stderr = child.stderr.take().ok_or_else(|| anyhow!("no stderr"))?;
@@ -327,5 +353,60 @@ impl AgentRuntime for CodexRuntime {
     async fn shutdown(&self, handle: AgentHandle) -> Result<()> {
         tracing::info!("Shutting down codex agent {}", handle.agent_id);
         Ok(())
+    }
+
+    async fn ensure_installed(&self) -> Result<()> {
+        if self.install_done.get().is_some() {
+            return Ok(());
+        }
+
+        let already_present = tokio::process::Command::new("codex")
+            .arg("--version")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !already_present {
+            tokio::process::Command::new("npm")
+                .arg("--version")
+                .output()
+                .await
+                .map_err(|e| anyhow!(
+                    "codex CLI not found and npm check failed ({e}). \
+                     Install Node.js (https://nodejs.org) first."
+                ))?;
+
+            tracing::info!("codex not found — installing via npm…");
+            let out = tokio::process::Command::new("npm")
+                .args(["install", "-g", "@openai/codex"])
+                .output()
+                .await
+                .map_err(|e| anyhow!("npm install failed to launch: {e}"))?;
+
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(anyhow!(
+                    "npm install -g @openai/codex failed (exit {}): {stderr}",
+                    out.status
+                ));
+            }
+            tracing::info!("codex installed successfully");
+        }
+
+        tokio::task::block_in_place(|| self.render_harness())?;
+        let _ = self.install_done.set(());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ensure_installed_does_not_panic() {
+        let runtime = CodexRuntime::new();
+        let _ = runtime.ensure_installed().await; // Ok or Err, but no panic
     }
 }

@@ -1,0 +1,8 @@
+name: argocd-observe
+version: 1
+description: Read-only ArgoCD application inspection
+capabilities:
+  - argocd.app-list
+  - argocd.app-get
+  - argocd.app-diff
+  - argocd.app-history

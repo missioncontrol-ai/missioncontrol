@@ -1,12 +1,15 @@
 /// mc-mesh daemon — wires config, supervisor, runtimes, and task loops together.
 use anyhow::Result;
+use mc_mesh_core::capability_dispatcher::CapabilityDispatcher;
 use mc_mesh_core::client::BackendClient;
+use mc_mesh_packs::{PackRegistry, PolicyBundle};
 use mc_mesh_runtimes::{
     claude_code::ClaudeCodeRuntime,
     codex::CodexRuntime,
     gemini::GeminiRuntime,
     goose::GooseRuntime,
 };
+use mc_mesh_receipts::ReceiptStore;
 use mc_mesh_work::watchdog::{OfflinePolicy, Watchdog};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -15,6 +18,7 @@ use tokio::sync::Mutex;
 
 use crate::attach_gateway;
 use crate::config::DaemonConfig;
+use crate::mgmt_gateway::MgmtGateway;
 use crate::supervisor::Supervisor;
 use crate::task_loop;
 
@@ -84,6 +88,16 @@ pub async fn run(cli: CliOverrides) -> Result<()> {
                         continue;
                     }
                 };
+
+            // Ensure the agent CLI is installed and harness is rendered before spawning.
+            if let Err(e) = rt.ensure_installed().await {
+                tracing::error!(
+                    "ensure_installed failed for agent {} (runtime {}): {e:#}. Skipping.",
+                    agent_entry.agent_id,
+                    agent_entry.runtime_kind
+                );
+                continue;
+            }
 
             // Register in runtime map for attach gateway.
             {
@@ -156,6 +170,33 @@ pub async fn run(cli: CliOverrides) -> Result<()> {
             tracing::warn!("attach gateway exited: {e}");
         }
     });
+
+    // Start the management gateway (Unix socket + TCP, JSON-RPC 2.0).
+    {
+        let registry = Arc::new(match PackRegistry::load_builtin() {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("failed to load builtin pack registry: {e}");
+                return Err(anyhow::anyhow!("pack registry load failed: {e}"));
+            }
+        });
+        let receipts_path = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".missioncontrol")
+            .join("receipts.db");
+        let receipt_store = ReceiptStore::open(&receipts_path)
+            .map_err(|e| anyhow::anyhow!("failed to open receipt store at {}: {e}", receipts_path.display()))?;
+        let dispatcher = Arc::new(
+            CapabilityDispatcher::new(Arc::clone(&registry), PolicyBundle::allow_all(), None)
+                .with_receipt_store(Arc::new(receipt_store)),
+        );
+        let mgmt_gw = MgmtGateway::new(dispatcher, registry);
+        tokio::spawn(async move {
+            if let Err(e) = mgmt_gw.run().await {
+                tracing::error!("mgmt gateway error: {e}");
+            }
+        });
+    }
 
     // Wait for ctrl-c or all loops to exit.
     tokio::select! {

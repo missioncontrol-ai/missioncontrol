@@ -1,0 +1,16 @@
+name: podman.inspect
+version: 1
+description: Inspect a Podman container or image (returns JSON)
+backend:
+  type: subprocess
+  command: podman
+  args: ["inspect", "{{ input.target }}"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    target:
+      type: string
+      description: Container name, image name, or ID
+  required: [target]

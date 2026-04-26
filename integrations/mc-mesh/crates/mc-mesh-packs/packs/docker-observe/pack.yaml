@@ -1,0 +1,5 @@
+name: docker-observe
+version: 1
+description: Read-only Docker inspection — containers, images, logs, networks
+profiles:
+  - docker-observe

@@ -1,0 +1,15 @@
+name: aws.ec2-instances
+version: 1
+description: List EC2 instances (all regions if no region specified)
+backend:
+  type: subprocess
+  command: aws
+  args: ["ec2", "describe-instances", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    region:
+      type: string
+      description: AWS region (uses profile default if omitted)

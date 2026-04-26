@@ -1,0 +1,29 @@
+name: gcloud.aiplatform.models.describe
+version: 1
+description: "Describe a Vertex AI model"
+backend:
+  type: subprocess
+  command: gcloud
+  args:
+    - ai
+    - models
+    - describe
+    - "{{ input.model_id }}"
+    - "--project={{ input.project }}"
+    - "--region={{ input.region }}"
+    - "--format=json"
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  required: [project, region, model_id]
+  properties:
+    project:
+      type: string
+      description: "GCP project ID"
+    region:
+      type: string
+      description: "GCP region (e.g. us-central1)"
+    model_id:
+      type: string
+      description: "Vertex AI model ID"

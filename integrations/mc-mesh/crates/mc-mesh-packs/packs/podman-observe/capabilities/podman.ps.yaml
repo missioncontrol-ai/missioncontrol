@@ -1,0 +1,15 @@
+name: podman.ps
+version: 1
+description: List running Podman containers
+backend:
+  type: subprocess
+  command: podman
+  args: ["ps", "--format", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    all:
+      type: boolean
+      description: Include stopped containers

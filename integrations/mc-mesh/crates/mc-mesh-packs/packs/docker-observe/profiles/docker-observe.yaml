@@ -1,0 +1,10 @@
+name: docker-observe
+version: 1
+description: Read-only Docker inspection
+capabilities:
+  - docker.ps
+  - docker.images
+  - docker.logs
+  - docker.inspect
+  - docker.stats
+  - docker.network-list

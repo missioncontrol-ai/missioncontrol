@@ -1,0 +1,10 @@
+name: kubectl.cluster-health
+version: 1
+description: Check cluster health
+steps:
+  - capability: kubectl.get-nodes
+    input: {}
+  - capability: kubectl.get-pods
+    input:
+      namespace: kube-system
+    onFailure: continue

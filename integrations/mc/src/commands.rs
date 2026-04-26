@@ -4,6 +4,7 @@ use crate::{
     booster::AgentBooster,
     channel,
     client::MissionControlClient,
+    cmd,
     compat,
     config::McConfig,
     daemon::{self, DaemonArgs},
@@ -105,6 +106,18 @@ pub enum McCommand {
     /// Launch an agent runtime with a unified interface.
     #[command(name = "run")]
     Run(run::RunArgs),
+    /// List and describe capability packs available through mc-mesh.
+    #[command(subcommand)]
+    Capabilities(cmd::capabilities::CapabilitiesCmd),
+    /// Execute a capability through the mc-mesh routing layer.
+    #[command(name = "exec", about = "Execute a capability")]
+    Exec(cmd::run::ExecArgs),
+    /// Inspect capability execution receipts stored in the local SQLite audit log.
+    #[command(subcommand)]
+    Receipts(cmd::receipts::ReceiptsCmd),
+    /// Bidirectional git-backed config sync for this node.
+    #[command(name = "mesh-sync", subcommand)]
+    MeshSync(cmd::sync::SyncCmd),
 }
 
 #[derive(Subcommand, Debug)]
@@ -240,6 +253,9 @@ pub struct InitArgs {
     /// Initial profile name to create when none exists.
     #[arg(long, default_value = "default")]
     profile: String,
+    /// Bootstrap this node from a sync repo URL (clones repo, stores INFISICAL_TOKEN, writes config).
+    #[arg(long)]
+    repo: Option<String>,
 }
 
 #[derive(Args, Debug, Default)]
@@ -708,6 +724,16 @@ pub async fn run(
         McCommand::Secrets(cmd) => handle_secrets(cmd, client, output_mode).await,
         McCommand::Mesh(cmd) => mesh::handle(cmd, &client, &config).await,
         McCommand::Run(args) => run::run(args, &client, &config).await,
+        McCommand::Capabilities(sub) => {
+            // TODO: wire top-level --host and --route global flags through here
+            cmd::capabilities::run(sub, None, None).await
+        }
+        McCommand::Exec(args) => {
+            // TODO: wire top-level --host global flag here when global flags are added
+            cmd::run::run(args, None).await
+        }
+        McCommand::Receipts(sub) => cmd::receipts::run(sub).map_err(Into::into),
+        McCommand::MeshSync(sub) => cmd::sync::run(Some(sub)).map_err(Into::into),
     }
 }
 
@@ -1704,6 +1730,11 @@ async fn handle_init(
     config: &McConfig,
     output_mode: OutputMode,
 ) -> Result<()> {
+    // --repo bootstrap flow — runs independently of the MC backend.
+    if let Some(repo_url) = args.repo.as_deref() {
+        return cmd::init::run_from_repo(repo_url, Some(args.profile.as_str())).await;
+    }
+
     let json_output = output_mode.is_machine();
     let profile_name = args.profile.trim();
     if profile_name.is_empty() {

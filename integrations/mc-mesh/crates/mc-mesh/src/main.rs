@@ -4,6 +4,7 @@
 mod attach_gateway;
 mod config;
 mod daemon;
+mod mgmt_gateway;
 mod supervisor;
 mod task_loop;
 

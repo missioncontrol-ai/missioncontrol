@@ -1,0 +1,10 @@
+name: gcloud-readonly
+version: 1
+description: Read-only gcloud inspection
+capabilities:
+  - gcloud.list-projects
+  - gcloud.compute-instances-list
+  - gcloud.container-clusters-list
+  - gcloud.storage-buckets-list
+  - gcloud.iam-service-accounts-list
+  - gcloud.functions-list

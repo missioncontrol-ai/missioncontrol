@@ -1,0 +1,15 @@
+name: az.vm-list
+version: 1
+description: List virtual machines in a resource group or all groups
+backend:
+  type: subprocess
+  command: az
+  args: ["vm", "list", "--output", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    resource_group:
+      type: string
+      description: Limit to this resource group (omit for all)

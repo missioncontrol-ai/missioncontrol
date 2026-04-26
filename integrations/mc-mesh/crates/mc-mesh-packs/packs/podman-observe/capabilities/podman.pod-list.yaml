@@ -1,0 +1,12 @@
+name: podman.pod-list
+version: 1
+description: List Podman pods and their containers
+backend:
+  type: subprocess
+  command: podman
+  args: ["pod", "list", "--format", "json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties: {}

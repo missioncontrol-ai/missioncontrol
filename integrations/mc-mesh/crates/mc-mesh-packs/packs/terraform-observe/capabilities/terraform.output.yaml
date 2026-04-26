@@ -1,0 +1,15 @@
+name: terraform.output
+version: 1
+description: Show Terraform output values in JSON format
+backend:
+  type: subprocess
+  command: terraform
+  args: ["output", "-json"]
+risk: low
+sideEffectClass: readOnly
+inputSchema:
+  type: object
+  properties:
+    name:
+      type: string
+      description: Specific output value name (omit for all outputs)

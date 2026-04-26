@@ -1,0 +1,11 @@
+name: system.date
+version: 1
+description: Return the current UTC date and time
+backend:
+  type: builtin
+  name: date
+risk: low
+sideEffectClass: none
+inputSchema:
+  type: object
+  properties: {}

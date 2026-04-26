@@ -41,6 +41,11 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 portable-pty = "0.8"
 which = "6"
 libc = "0.2"
+mc-mesh-packs = { path = "../mc-mesh/crates/mc-mesh-packs" }
+mc-mesh-receipts = { path = "../mc-mesh/crates/mc-mesh-receipts" }
+mc-mesh-sync = { path = "../mc-mesh/crates/mc-mesh-sync" }
+mc-mesh-secrets = { path = "../mc-mesh/crates/mc-mesh-secrets" }
+
 [dev-dependencies]
 httpmock = "0.6"
 wasmtime = "16"

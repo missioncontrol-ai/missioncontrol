@@ -1,0 +1,10 @@
+name: gcloud-aiplatform
+version: 1
+description: Vertex AI — model, endpoint, dataset, and job inspection
+capabilities:
+  - gcloud.aiplatform.datasets.list
+  - gcloud.aiplatform.endpoints.describe
+  - gcloud.aiplatform.endpoints.list
+  - gcloud.aiplatform.jobs.list
+  - gcloud.aiplatform.models.describe
+  - gcloud.aiplatform.models.list

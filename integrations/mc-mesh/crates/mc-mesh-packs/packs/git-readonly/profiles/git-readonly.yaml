@@ -1,0 +1,8 @@
+name: git-readonly
+version: 1
+description: Read-only git operations
+capabilities:
+  - git.status
+  - git.log
+  - git.diff
+  - git.branch-list

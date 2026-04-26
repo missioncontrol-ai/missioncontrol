@@ -1,0 +1,8 @@
+name: helm-observe
+version: 1
+description: Read-only Helm release inspection
+capabilities:
+  - helm.list
+  - helm.status
+  - helm.get-values
+  - helm.history

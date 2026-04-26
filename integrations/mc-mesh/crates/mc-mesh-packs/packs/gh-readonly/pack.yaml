@@ -1,0 +1,5 @@
+name: gh-readonly
+version: 1
+description: Read-only GitHub CLI capabilities
+profiles:
+  - gh-readonly
