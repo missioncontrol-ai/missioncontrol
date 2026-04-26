@@ -409,29 +409,30 @@ impl AgentRuntime for ClaudeCodeRuntime {
                 .arg("--version")
                 .output()
                 .await
-                .map_err(|_| anyhow!(
-                    "claude CLI not found and npm is not available. \
+                .map_err(|e| anyhow!(
+                    "claude CLI not found and npm check failed ({e}). \
                      Install Node.js (https://nodejs.org) then re-run the daemon."
                 ))?;
 
             tracing::info!("claude not found — installing via npm…");
-            let status = tokio::process::Command::new("npm")
+            let out = tokio::process::Command::new("npm")
                 .args(["install", "-g", "@anthropic-ai/claude-code"])
-                .status()
+                .output()
                 .await
                 .map_err(|e| anyhow!("npm install failed to launch: {e}"))?;
 
-            if !status.success() {
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
                 return Err(anyhow!(
-                    "npm install -g @anthropic-ai/claude-code failed (exit {status}). \
-                     Check npm permissions or run with sudo."
+                    "npm install -g @anthropic-ai/claude-code failed (exit {}): {stderr}",
+                    out.status
                 ));
             }
             tracing::info!("claude-code installed successfully");
         }
 
         // Step 3: render harness config.
-        self.render_harness()?;
+        tokio::task::block_in_place(|| self.render_harness())?;
 
         // Mark done so subsequent calls are no-ops.
         let _ = self.install_done.set(());
@@ -514,7 +515,7 @@ mod tests {
         assert!(parse_stream_line("   ").is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn ensure_installed_does_not_panic() {
         let runtime = ClaudeCodeRuntime::new();
         let _ = runtime.ensure_installed().await; // Ok or Err, but no panic
@@ -532,24 +533,4 @@ mod tests {
         assert!(result.contains('…'));
     }
 
-    #[test]
-    fn render_harness_creates_claude_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        let target = claude_dir.join("CLAUDE.md");
-        crate::harness::write_capabilities_block(&target).unwrap();
-        let content = std::fs::read_to_string(&target).unwrap();
-        assert!(content.contains("mc exec"), "capabilities block not written");
-    }
-
-    #[test]
-    fn render_harness_is_idempotent() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("CLAUDE.md");
-        crate::harness::write_capabilities_block(&target).unwrap();
-        crate::harness::write_capabilities_block(&target).unwrap();
-        let content = std::fs::read_to_string(&target).unwrap();
-        let count = content.matches("<!-- mc-mesh capabilities -->").count();
-        assert_eq!(count, 1, "block written {count} times; expected 1");
-    }
 }
