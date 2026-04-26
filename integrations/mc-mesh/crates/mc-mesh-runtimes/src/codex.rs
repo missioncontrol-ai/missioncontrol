@@ -3,7 +3,7 @@
 /// Codex CLI does not emit structured JSON; it streams plain text to stdout.
 /// We run `codex --approval-mode full-auto --quiet "<prompt>"` and map each
 /// stdout line to a typed ProgressEvent. Exit code determines success/failure.
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use mc_mesh_core::agent_runtime::AgentRuntime;
@@ -13,12 +13,14 @@ use mc_mesh_core::types::{
     TaskSpec,
 };
 use std::io::{Read, Write};
+use std::sync::OnceLock;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub struct CodexRuntime {
     capabilities: Vec<Capability>,
     version: String,
+    install_done: OnceLock<()>,
 }
 
 impl CodexRuntime {
@@ -32,7 +34,18 @@ impl CodexRuntime {
                 Capability::new("test.write"),
             ],
             version: detect_version(),
+            install_done: OnceLock::new(),
         }
+    }
+
+    fn render_harness(&self) -> Result<()> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| anyhow!("cannot determine HOME directory"))?;
+        let target = home.join(".codex").join("instructions.md");
+        crate::harness::write_capabilities_block(&target)
+            .with_context(|| format!("rendering codex harness to {}", target.display()))?;
+        tracing::info!("codex harness rendered to {}", target.display());
+        Ok(())
     }
 }
 
@@ -336,13 +349,46 @@ impl AgentRuntime for CodexRuntime {
     }
 
     async fn ensure_installed(&self) -> Result<()> {
-        tokio::process::Command::new("codex")
+        if self.install_done.get().is_some() {
+            return Ok(());
+        }
+
+        let already_present = tokio::process::Command::new("codex")
             .arg("--version")
             .output()
             .await
-            .map_err(|_| anyhow!(
-                "codex CLI not found. Install from https://github.com/openai/codex or via npm install -g @openai/codex"
-            ))?;
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !already_present {
+            tokio::process::Command::new("npm")
+                .arg("--version")
+                .output()
+                .await
+                .map_err(|e| anyhow!(
+                    "codex CLI not found and npm check failed ({e}). \
+                     Install Node.js (https://nodejs.org) first."
+                ))?;
+
+            tracing::info!("codex not found — installing via npm…");
+            let out = tokio::process::Command::new("npm")
+                .args(["install", "-g", "@openai/codex"])
+                .output()
+                .await
+                .map_err(|e| anyhow!("npm install failed to launch: {e}"))?;
+
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(anyhow!(
+                    "npm install -g @openai/codex failed (exit {}): {stderr}",
+                    out.status
+                ));
+            }
+            tracing::info!("codex installed successfully");
+        }
+
+        tokio::task::block_in_place(|| self.render_harness())?;
+        let _ = self.install_done.set(());
         Ok(())
     }
 }
@@ -351,7 +397,7 @@ impl AgentRuntime for CodexRuntime {
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn ensure_installed_does_not_panic() {
         let runtime = CodexRuntime::new();
         let _ = runtime.ensure_installed().await; // Ok or Err, but no panic
