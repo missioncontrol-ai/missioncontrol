@@ -39,17 +39,22 @@ pub fn write_capabilities_block(path: &Path) -> Result<()> {
         let end_pos = existing.find(MARKER_END);
 
         let new_content = match (start_pos, end_pos) {
-            (Some(s), Some(e)) => {
+            (Some(s), Some(e)) if s < e => {
                 let end_of_block = e + MARKER_END.len();
                 format!("{}{}{}", &existing[..s], block, &existing[end_of_block..])
             }
-            _ => {
+            (None, None) => {
                 if existing.ends_with('\n') {
                     format!("{}\n{}\n", existing, block)
                 } else {
                     format!("{}\n\n{}\n", existing, block)
                 }
             }
+            _ => anyhow::bail!(
+                "{}: file contains only one mc-mesh marker or markers are inverted; \
+                 refusing to modify",
+                path.display()
+            ),
         };
 
         std::fs::write(path, new_content)
