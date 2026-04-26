@@ -164,10 +164,11 @@ fn parse_stream_line(line: &str) -> Vec<ProgressEvent> {
 
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max])
+        return s.to_string();
     }
+    // Slice at a codepoint boundary to avoid panicking on multi-byte chars.
+    let boundary = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
+    format!("{}…", &s[..boundary])
 }
 
 #[async_trait]
