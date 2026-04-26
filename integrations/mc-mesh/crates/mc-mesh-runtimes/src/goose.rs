@@ -450,14 +450,19 @@ impl AgentRuntime for GooseRuntime {
         }
 
         // Goose is pre-installed at bootstrap; verify presence only.
-        tokio::process::Command::new("goose")
+        let ok = tokio::process::Command::new("goose")
             .arg("--version")
             .output()
             .await
-            .map_err(|e| anyhow!(
-                "goose CLI not found ({e}). Install from https://github.com/block/goose — \
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            return Err(anyhow!(
+                "goose CLI not found or returned non-zero exit. \
+                 Install from https://github.com/block/goose — \
                  run: curl -fsSL https://github.com/block/goose/releases/latest/download/download.sh | sh"
-            ))?;
+            ));
+        }
 
         tokio::task::block_in_place(|| self.render_harness())?;
 
