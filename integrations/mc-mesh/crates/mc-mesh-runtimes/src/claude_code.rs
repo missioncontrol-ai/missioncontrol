@@ -247,6 +247,12 @@ impl AgentRuntime for ClaudeCodeRuntime {
             cmd.env("MC_MESH_SOCKET", socket);
         }
 
+        // Inject mc binary dir so agents can invoke `mc` without an absolute path.
+        let mc_dir = crate::shared::mc_bin_dir();
+        if !mc_dir.is_empty() {
+            cmd.env("PATH", crate::shared::prepend_to_path(&mc_dir));
+        }
+
         let mut child = cmd.spawn()?;
 
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;

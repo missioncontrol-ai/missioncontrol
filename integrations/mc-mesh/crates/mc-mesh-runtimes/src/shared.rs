@@ -167,3 +167,72 @@ pub async fn shutdown_child(mut child: Child, timeout_secs: u64) -> Result<()> {
     }
     Ok(())
 }
+
+/// Returns the directory to prepend to PATH so agents can invoke `mc`.
+///
+/// Resolution order:
+///   1. `MC_BIN_DIR` env var (explicit override, useful in tests and containers).
+///   2. The directory containing the currently-running binary (co-installed alongside `mc`).
+///   3. Empty string (no-op — PATH is left unchanged).
+pub fn mc_bin_dir() -> String {
+    std::env::var("MC_BIN_DIR").ok().unwrap_or_else(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()))
+            .unwrap_or_default()
+    })
+}
+
+/// Prepend `dir` to the `PATH` env var, returning the new value.
+/// If `dir` is empty, returns the existing PATH unchanged.
+pub fn prepend_to_path(dir: &str) -> String {
+    if dir.is_empty() {
+        return std::env::var("PATH").unwrap_or_default();
+    }
+    let current = std::env::var("PATH").unwrap_or_default();
+    if current.is_empty() {
+        dir.to_owned()
+    } else {
+        format!("{dir}:{current}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepend_to_path_empty_dir_returns_existing() {
+        // Don't rely on env state — test the logic with an explicit PATH.
+        // Override PATH for this test.
+        unsafe {
+            std::env::set_var("PATH", "/usr/bin:/bin");
+        }
+        let result = prepend_to_path("");
+        assert_eq!(result, "/usr/bin:/bin");
+    }
+
+    #[test]
+    fn prepend_to_path_injects_dir_at_front() {
+        unsafe {
+            std::env::set_var("PATH", "/usr/bin:/bin");
+        }
+        let result = prepend_to_path("/tmp/testbin");
+        assert!(
+            result.starts_with("/tmp/testbin:"),
+            "expected PATH to start with /tmp/testbin:, got: {result}"
+        );
+    }
+
+    #[test]
+    fn mc_bin_dir_respects_mc_bin_dir_env() {
+        unsafe {
+            std::env::set_var("MC_BIN_DIR", "/tmp/testbin");
+        }
+        let dir = mc_bin_dir();
+        assert_eq!(dir, "/tmp/testbin");
+        unsafe {
+            std::env::remove_var("MC_BIN_DIR");
+        }
+    }
+}
