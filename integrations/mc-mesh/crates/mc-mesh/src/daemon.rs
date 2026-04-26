@@ -89,6 +89,16 @@ pub async fn run(cli: CliOverrides) -> Result<()> {
                     }
                 };
 
+            // Ensure the agent CLI is installed and harness is rendered before spawning.
+            if let Err(e) = rt.ensure_installed().await {
+                tracing::error!(
+                    "ensure_installed failed for agent {} (runtime {}): {e:#}. Skipping.",
+                    agent_entry.agent_id,
+                    agent_entry.runtime_kind
+                );
+                continue;
+            }
+
             // Register in runtime map for attach gateway.
             {
                 let mut map = runtime_map.lock().await;
