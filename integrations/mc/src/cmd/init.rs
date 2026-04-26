@@ -1,4 +1,4 @@
-/// `mc init --from-repo` — bootstrap this node from a git-backed sync repo.
+/// `mc init --repo` — bootstrap this node from a git-backed sync repo.
 ///
 /// Clones the sync repo to ~/.missioncontrol/sync/, stores INFISICAL_TOKEN in
 /// the OS keyring (if available and set), and writes ~/.missioncontrol/config.json
@@ -10,7 +10,7 @@ use std::path::Path;
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Run the `--from-repo` bootstrap flow.
+/// Run the `--repo` bootstrap flow.
 ///
 /// `profile` is used as the keyring profile name for the Infisical service token.
 /// Pass `None` to default to `"default"`.
