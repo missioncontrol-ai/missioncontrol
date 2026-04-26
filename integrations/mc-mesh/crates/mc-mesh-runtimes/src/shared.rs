@@ -183,17 +183,17 @@ pub fn mc_bin_dir() -> String {
     })
 }
 
-/// Prepend `dir` to the `PATH` env var, returning the new value.
-/// If `dir` is empty, returns the existing PATH unchanged.
-pub fn prepend_to_path(dir: &str) -> String {
+/// Prepend `dir` to `current_path`, returning the new PATH value.
+/// If `dir` is empty, returns `current_path` unchanged.
+/// Call as: `prepend_to_path(&mc_dir, &std::env::var("PATH").unwrap_or_default())`
+pub fn prepend_to_path(dir: &str, current_path: &str) -> String {
     if dir.is_empty() {
-        return std::env::var("PATH").unwrap_or_default();
+        return current_path.to_owned();
     }
-    let current = std::env::var("PATH").unwrap_or_default();
-    if current.is_empty() {
+    if current_path.is_empty() {
         dir.to_owned()
     } else {
-        format!("{dir}:{current}")
+        format!("{dir}:{current_path}")
     }
 }
 
@@ -203,21 +203,13 @@ mod tests {
 
     #[test]
     fn prepend_to_path_empty_dir_returns_existing() {
-        // Don't rely on env state — test the logic with an explicit PATH.
-        // Override PATH for this test.
-        unsafe {
-            std::env::set_var("PATH", "/usr/bin:/bin");
-        }
-        let result = prepend_to_path("");
+        let result = prepend_to_path("", "/usr/bin:/bin");
         assert_eq!(result, "/usr/bin:/bin");
     }
 
     #[test]
     fn prepend_to_path_injects_dir_at_front() {
-        unsafe {
-            std::env::set_var("PATH", "/usr/bin:/bin");
-        }
-        let result = prepend_to_path("/tmp/testbin");
+        let result = prepend_to_path("/tmp/testbin", "/usr/bin:/bin");
         assert!(
             result.starts_with("/tmp/testbin:"),
             "expected PATH to start with /tmp/testbin:, got: {result}"
@@ -225,14 +217,19 @@ mod tests {
     }
 
     #[test]
+    fn prepend_to_path_empty_current_returns_dir() {
+        let result = prepend_to_path("/tmp/testbin", "");
+        assert_eq!(result, "/tmp/testbin");
+    }
+
+    #[test]
     fn mc_bin_dir_respects_mc_bin_dir_env() {
-        unsafe {
-            std::env::set_var("MC_BIN_DIR", "/tmp/testbin");
-        }
+        // Use a unique env var value to avoid collisions with parallel tests.
+        // This test is inherently racy if run in parallel with itself (it cannot be),
+        // but MC_BIN_DIR is not read by any other test in this module.
+        unsafe { std::env::set_var("MC_BIN_DIR", "/tmp/mc-test-bin-unique") };
         let dir = mc_bin_dir();
-        assert_eq!(dir, "/tmp/testbin");
-        unsafe {
-            std::env::remove_var("MC_BIN_DIR");
-        }
+        unsafe { std::env::remove_var("MC_BIN_DIR") };
+        assert_eq!(dir, "/tmp/mc-test-bin-unique");
     }
 }
