@@ -6,7 +6,7 @@
 /// The Gemini CLI runs non-interactively via `gemini -p "<prompt>"`.
 /// Output is plain text streamed to stdout. We classify lines heuristically
 /// into typed ProgressEvents; exit code determines success/failure.
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use mc_mesh_core::agent_runtime::AgentRuntime;
@@ -16,12 +16,14 @@ use mc_mesh_core::types::{
     TaskSpec,
 };
 use std::io::{Read, Write};
+use std::sync::OnceLock;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub struct GeminiRuntime {
     capabilities: Vec<Capability>,
     version: String,
+    install_done: OnceLock<()>,
 }
 
 impl GeminiRuntime {
@@ -36,7 +38,18 @@ impl GeminiRuntime {
                 Capability::new("search"),
             ],
             version: detect_version(),
+            install_done: OnceLock::new(),
         }
+    }
+
+    fn render_harness(&self) -> Result<()> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| anyhow!("cannot determine HOME directory"))?;
+        let target = home.join(".gemini").join("GEMINI.md");
+        crate::harness::write_capabilities_block(&target)
+            .with_context(|| format!("rendering gemini harness to {}", target.display()))?;
+        tracing::info!("gemini harness rendered to {}", target.display());
+        Ok(())
     }
 }
 
@@ -360,13 +373,53 @@ impl AgentRuntime for GeminiRuntime {
     }
 
     async fn ensure_installed(&self) -> Result<()> {
-        tokio::process::Command::new("gemini")
+        if self.install_done.get().is_some() {
+            return Ok(());
+        }
+
+        // Check `gemini --version` then `gemini version` (different CLI versions differ).
+        let already_present = tokio::process::Command::new("gemini")
             .arg("--version")
             .output()
             .await
-            .map_err(|_| anyhow!(
-                "gemini CLI not found. Install from https://ai.google.dev/gemini-api/docs/gemini-cli"
-            ))?;
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+            || tokio::process::Command::new("gemini")
+                .arg("version")
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+        if !already_present {
+            tokio::process::Command::new("npm")
+                .arg("--version")
+                .output()
+                .await
+                .map_err(|e| anyhow!(
+                    "gemini CLI not found and npm check failed ({e}). \
+                     Install Node.js (https://nodejs.org) first."
+                ))?;
+
+            tracing::info!("gemini not found — installing via npm…");
+            let out = tokio::process::Command::new("npm")
+                .args(["install", "-g", "@google/gemini-cli"])
+                .output()
+                .await
+                .map_err(|e| anyhow!("npm install failed to launch: {e}"))?;
+
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(anyhow!(
+                    "npm install -g @google/gemini-cli failed (exit {}): {stderr}",
+                    out.status
+                ));
+            }
+            tracing::info!("gemini CLI installed successfully");
+        }
+
+        tokio::task::block_in_place(|| self.render_harness())?;
+        let _ = self.install_done.set(());
         Ok(())
     }
 }
@@ -375,7 +428,7 @@ impl AgentRuntime for GeminiRuntime {
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn ensure_installed_does_not_panic() {
         let runtime = GeminiRuntime::new();
         let _ = runtime.ensure_installed().await; // Ok or Err, but no panic
