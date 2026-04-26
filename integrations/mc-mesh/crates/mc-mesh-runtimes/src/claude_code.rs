@@ -2,7 +2,7 @@
 ///
 /// Uses `--output-format stream-json` for structured real-time output.
 /// Each JSONL line is parsed into a typed `ProgressEvent`.
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use mc_mesh_core::agent_runtime::AgentRuntime;
@@ -12,12 +12,14 @@ use mc_mesh_core::types::{
     TaskSpec,
 };
 use std::io::{Read, Write};
+use std::sync::OnceLock;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub struct ClaudeCodeRuntime {
     capabilities: Vec<Capability>,
     version: String,
+    install_done: OnceLock<()>,
 }
 
 impl ClaudeCodeRuntime {
@@ -31,7 +33,18 @@ impl ClaudeCodeRuntime {
                 Capability::new("test.run"),
             ],
             version: detect_version(),
+            install_done: OnceLock::new(),
         }
+    }
+
+    fn render_harness(&self) -> Result<()> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| anyhow!("cannot determine HOME directory"))?;
+        let target = home.join(".claude").join("CLAUDE.md");
+        crate::harness::write_capabilities_block(&target)
+            .with_context(|| format!("rendering claude harness to {}", target.display()))?;
+        tracing::info!("claude harness rendered to {}", target.display());
+        Ok(())
     }
 }
 
@@ -377,13 +390,51 @@ impl AgentRuntime for ClaudeCodeRuntime {
     }
 
     async fn ensure_installed(&self) -> Result<()> {
-        tokio::process::Command::new("claude")
+        // Return immediately if already verified during this daemon lifetime.
+        if self.install_done.get().is_some() {
+            return Ok(());
+        }
+
+        // Step 1: check if claude is already on PATH.
+        let already_present = tokio::process::Command::new("claude")
             .arg("--version")
             .output()
             .await
-            .map_err(|_| anyhow!(
-                "claude CLI not found. Install from https://claude.ai/download or via npm install -g @anthropic-ai/claude-code"
-            ))?;
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !already_present {
+            // Step 2: ensure npm is available before attempting install.
+            tokio::process::Command::new("npm")
+                .arg("--version")
+                .output()
+                .await
+                .map_err(|_| anyhow!(
+                    "claude CLI not found and npm is not available. \
+                     Install Node.js (https://nodejs.org) then re-run the daemon."
+                ))?;
+
+            tracing::info!("claude not found — installing via npm…");
+            let status = tokio::process::Command::new("npm")
+                .args(["install", "-g", "@anthropic-ai/claude-code"])
+                .status()
+                .await
+                .map_err(|e| anyhow!("npm install failed to launch: {e}"))?;
+
+            if !status.success() {
+                return Err(anyhow!(
+                    "npm install -g @anthropic-ai/claude-code failed (exit {status}). \
+                     Check npm permissions or run with sudo."
+                ));
+            }
+            tracing::info!("claude-code installed successfully");
+        }
+
+        // Step 3: render harness config.
+        self.render_harness()?;
+
+        // Mark done so subsequent calls are no-ops.
+        let _ = self.install_done.set(());
         Ok(())
     }
 }
@@ -479,5 +530,26 @@ mod tests {
         let result = truncate("abcdefghij", 5);
         assert!(result.starts_with("abcde"));
         assert!(result.contains('…'));
+    }
+
+    #[test]
+    fn render_harness_creates_claude_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        let target = claude_dir.join("CLAUDE.md");
+        crate::harness::write_capabilities_block(&target).unwrap();
+        let content = std::fs::read_to_string(&target).unwrap();
+        assert!(content.contains("mc exec"), "capabilities block not written");
+    }
+
+    #[test]
+    fn render_harness_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("CLAUDE.md");
+        crate::harness::write_capabilities_block(&target).unwrap();
+        crate::harness::write_capabilities_block(&target).unwrap();
+        let content = std::fs::read_to_string(&target).unwrap();
+        let count = content.matches("<!-- mc-mesh capabilities -->").count();
+        assert_eq!(count, 1, "block written {count} times; expected 1");
     }
 }
