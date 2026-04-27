@@ -6,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use mc_mesh_core::agent_runtime::AgentRuntime;
+use mc_mesh_core::paths;
 use mc_mesh_core::progress::{ProgressEvent, ProgressEventType};
 use mc_mesh_core::types::{
     AgentHandle, AgentSignal, Capability, LaunchContext, PtySession, RuntimeKind, TaskResult,
@@ -224,12 +225,7 @@ impl AgentRuntime for ClaudeCodeRuntime {
 
         // Spawn `claude -p "{prompt}" --output-format stream-json --no-session-persistence`
         // in the agent's work dir.
-        let work_dir = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".missioncontrol")
-            .join("mc-mesh")
-            .join("work")
-            .join(&agent_id);
+        let work_dir = paths::mc_mesh_work_dir().join(&agent_id);
 
         tracing::info!("claude-code injecting task {task_id}: {}", &prompt[..prompt.len().min(80)]);
 
@@ -330,12 +326,7 @@ impl AgentRuntime for ClaudeCodeRuntime {
     async fn attach_pty(&self, handle: &AgentHandle) -> Result<PtySession> {
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-        let work_dir = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".missioncontrol")
-            .join("mc-mesh")
-            .join("work")
-            .join(&handle.agent_id);
+        let work_dir = paths::mc_mesh_work_dir().join(&handle.agent_id);
         std::fs::create_dir_all(&work_dir)?;
 
         let pty_system = native_pty_system();

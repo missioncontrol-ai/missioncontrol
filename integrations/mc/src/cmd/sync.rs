@@ -1,6 +1,6 @@
 /// `mc sync` — bidirectional git-backed config sync for the local node.
 ///
-/// Reads sync_repo from MC_SYNC_REPO env or ~/.missioncontrol/config.json.
+/// Reads sync_repo from MC_SYNC_REPO env or ~/.mc/config.json.
 use anyhow::Result;
 use clap::Subcommand;
 

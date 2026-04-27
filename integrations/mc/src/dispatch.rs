@@ -74,12 +74,9 @@ fn route_mode_from_str(s: &str, host: Option<&str>) -> RouteMode {
     }
 }
 
-/// Load `~/.missioncontrol/config.json` if it exists.
+/// Load `~/.mc/config.json` if it exists.
 fn load_file_config() -> FileConfig {
-    let path = match dirs::home_dir() {
-        Some(h) => h.join(".missioncontrol").join("config.json"),
-        None => return FileConfig::default(),
-    };
+    let path = crate::config::config_file_path();
     let raw = match std::fs::read_to_string(&path) {
         Ok(r) => r,
         Err(_) => return FileConfig::default(),

@@ -140,7 +140,7 @@ pub fn save_config(cfg: &SavedConfig) -> std::io::Result<()> {
 }
 
 pub fn mc_home_dir() -> PathBuf {
-    expand_home_path(&env::var("MC_HOME").unwrap_or_else(|_| "~/.missioncontrol".into()))
+    expand_home_path(&env::var("MC_HOME").unwrap_or_else(|_| "~/.mc".into()))
 }
 
 pub fn skills_home_dir() -> PathBuf {

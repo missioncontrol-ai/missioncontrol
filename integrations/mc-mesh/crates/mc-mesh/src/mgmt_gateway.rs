@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use mc_mesh_core::capability_dispatcher::{CapabilityDispatcher, DispatchRequest};
+use mc_mesh_core::paths;
 use mc_mesh_packs::PackRegistry;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -31,10 +32,7 @@ impl MgmtGateway {
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(7731);
-        let socket_path = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".missioncontrol")
-            .join("mc-mesh-mgmt.sock");
+        let socket_path = paths::mgmt_socket_path();
 
         MgmtGateway {
             dispatcher,

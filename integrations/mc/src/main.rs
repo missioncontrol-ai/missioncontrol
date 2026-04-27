@@ -13,7 +13,7 @@ const DEFAULT_BASE_URL: &str = "http://localhost:8008";
 #[command(author, version, about, long_about = None)]
 pub struct CliOpts {
     /// Base URL pointing at an existing Mission Control deployment.
-    /// If omitted, falls back to MC_BASE_URL env, then ~/.missioncontrol/config.json,
+    /// If omitted, falls back to MC_BASE_URL env, then ~/.mc/config.json,
     /// then http://localhost:8008.
     #[arg(long, env = "MC_BASE_URL")]
     base_url: Option<String>,
@@ -72,17 +72,17 @@ async fn main() -> anyhow::Result<()> {
 
     let opts = CliOpts::parse();
 
-    // Resolve base_url: flag/env → ~/.missioncontrol/config.json → hardcoded default.
+    // Resolve base_url: flag/env → ~/.mc/config.json → hardcoded default.
     let base_url = resolve_startup_base_url(opts.base_url.clone(), DEFAULT_BASE_URL);
 
     // Resolve the effective token.
     //
-    // Prefer session tokens (`mcs_*`) from `~/.missioncontrol/session.json` over
+    // Prefer session tokens (`mcs_*`) from `~/.mc/session.json` over
     // non-session `MC_TOKEN` values so `mc auth login` reliably takes effect even
     // when a legacy static token is exported in the shell environment.
     let saved_session_token = mc::config::load_session_token(&base_url);
     if saved_session_token.is_some() {
-        tracing::debug!("session token available from ~/.missioncontrol/session.json");
+        tracing::debug!("session token available from ~/.mc/session.json");
     }
     let token = match opts.token.clone() {
         Some(raw) if raw.starts_with(mc::auth::SESSION_TOKEN_PREFIX) => Some(raw),

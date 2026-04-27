@@ -536,7 +536,7 @@ async fn run_node_run(args: NodeAgentRunArgs, client: &MissionControlClient) -> 
     }
     if config.bootstrap_token.is_empty() {
         return Err(anyhow::anyhow!(
-            "node bootstrap token missing; seed ~/.missioncontrol/runtime/node-config.json or MC_NODE_BOOTSTRAP_TOKEN"
+            "node bootstrap token missing; seed ~/.mc/runtime/node-config.json or MC_NODE_BOOTSTRAP_TOKEN"
         ));
     }
     persist_node_config(&config)?;

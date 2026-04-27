@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use mc_mesh_core::agent_runtime::DynAgentRuntime;
+use mc_mesh_core::paths;
 #[cfg(unix)]
 use mc_mesh_core::types::AgentHandle;
 #[cfg(unix)]
@@ -24,10 +25,7 @@ use tokio::sync::Mutex;
 
 /// Return the path to the local control socket.
 pub fn socket_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".missioncontrol")
-        .join("mc-mesh.sock")
+    paths::attach_socket_path()
 }
 
 /// Shared map from agent_id → runtime, built by the daemon.
