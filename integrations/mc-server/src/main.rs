@@ -10,11 +10,11 @@ struct Args {
 
     /// Bootstrap a new single-node cluster (first node only)
     #[arg(long)]
-    raft_bootstrap: bool,
+    bootstrap: bool,
 
     /// Join an existing cluster (comma-separated peer URLs)
     #[arg(long, value_delimiter = ',')]
-    raft_join: Vec<String>,
+    join: Vec<String>,
 
     /// Serve the mc-ui web frontend
     #[arg(long)]
@@ -54,6 +54,8 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!(
         serve = args.serve,
+        bootstrap = args.bootstrap,
+        join = ?args.join,
         ui = args.ui,
         api_proxy = args.api_proxy.as_deref().unwrap_or("none"),
         bind = %args.bind,
