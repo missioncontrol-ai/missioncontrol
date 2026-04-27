@@ -1,0 +1,83 @@
+# mc-server dev overlay — runs mc-server + Postgres alongside the dev FastAPI.
+# Both services share the same Postgres DB.
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml -f docker-compose.mc-dev.yml up --build
+#
+# Ports:
+#   8008 — FastAPI (upstream, unchanged)
+#   8009 — mc-server (proxy mode: handles native routes, forwards rest to FastAPI)
+#   5432 — Postgres (exposed for psql / pgAdmin)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: missioncontrol-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: missioncontrol
+      POSTGRES_USER: missioncontrol
+      POSTGRES_PASSWORD: missioncontrol
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U missioncontrol"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: dev
+    container_name: missioncontrol-migrate-dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env.dev
+    environment:
+      DATABASE_URL: postgresql+psycopg://missioncontrol:missioncontrol@postgres:5432/missioncontrol
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    restart: "no"
+
+  # Override the api service to use Postgres instead of SQLite
+  api:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+psycopg://missioncontrol:missioncontrol@postgres:5432/missioncontrol
+      MC_DB_RUNTIME_MIGRATIONS: "false"
+
+  mc-server:
+    build:
+      context: .
+      dockerfile: integrations/mc-server/Dockerfile
+    container_name: missioncontrol-mc-server-dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://missioncontrol:missioncontrol@postgres:5432/missioncontrol
+      MC_BIND: 0.0.0.0:8009
+      MC_TOKEN: dev-token
+      RUST_LOG: mc_server=debug,info
+    ports:
+      - "8009:8009"
+    command: ["--serve", "--api-proxy", "http://api:8008"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8009/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s

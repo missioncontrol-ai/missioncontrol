@@ -8,6 +8,7 @@ use crate::{
     compat,
     config::McConfig,
     daemon::{self, DaemonArgs},
+    discover,
     drift, evolve, governance, launch, maintenance, mcp_server, mcp_tools, mesh, ops, run,
     output::{self, OutputMode},
     remote, runtime,
@@ -118,6 +119,8 @@ pub enum McCommand {
     /// Bidirectional git-backed config sync for this node.
     #[command(name = "mesh-sync", subcommand)]
     MeshSync(cmd::sync::SyncCmd),
+    /// Discover mc-server nodes and write ~/.mc/servers.
+    Discover(discover::DiscoverArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -734,6 +737,7 @@ pub async fn run(
         }
         McCommand::Receipts(sub) => cmd::receipts::run(sub).map_err(Into::into),
         McCommand::MeshSync(sub) => cmd::sync::run(Some(sub)).map_err(Into::into),
+        McCommand::Discover(args) => discover::run(args).await,
     }
 }
 
