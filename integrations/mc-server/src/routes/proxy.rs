@@ -6,41 +6,29 @@ use axum::{
     routing::any,
     Router,
 };
-use reqwest::Client;
+use std::sync::Arc;
 
-#[derive(Clone)]
-pub struct ProxyState {
-    client: Client,
-    upstream: String,
-}
+use crate::state::AppState;
 
-pub fn router(upstream: String) -> Router {
-    let state = ProxyState {
-        client: Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .expect("proxy client init"),
-        upstream,
-    };
-    Router::new()
-        .route("/{*path}", any(proxy_handler))
-        .with_state(state)
+pub fn router() -> Router<Arc<AppState>> {
+    Router::new().route("/{*path}", any(proxy_handler))
 }
 
 async fn proxy_handler(
-    State(state): State<ProxyState>,
+    State(state): State<Arc<AppState>>,
     req: Request,
 ) -> Result<Response, StatusCode> {
+    let (client, upstream) = match (&state.proxy_client, &state.proxy_upstream) {
+        (Some(c), Some(u)) => (c, u),
+        _ => return Err(StatusCode::NOT_FOUND),
+    };
+
     let path_and_query = req
         .uri()
         .path_and_query()
         .map(|pq| pq.as_str())
         .unwrap_or("/");
-    let target = format!(
-        "{}{}",
-        state.upstream.trim_end_matches('/'),
-        path_and_query
-    );
+    let target = format!("{}{}", upstream.trim_end_matches('/'), path_and_query);
 
     let method = reqwest::Method::from_bytes(req.method().as_str().as_bytes())
         .map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -49,17 +37,15 @@ async fn proxy_handler(
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let upstream_res = state
-        .client
+    let upstream_res = client
         .request(method, &target)
         .body(body_bytes.to_vec())
         .send()
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
 
-    let status =
-        axum::http::StatusCode::from_u16(upstream_res.status().as_u16())
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let status = axum::http::StatusCode::from_u16(upstream_res.status().as_u16())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let body_bytes = upstream_res
         .bytes()

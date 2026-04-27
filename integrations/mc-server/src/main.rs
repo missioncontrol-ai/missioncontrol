@@ -66,7 +66,8 @@ async fn main() -> anyhow::Result<()> {
         api_proxy: args.api_proxy.clone(),
     };
 
-    let app = build_app(config);
+    let db = mc_server::db::connect().await?;
+    let app = build_app(db, config);
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
     tracing::info!(bind = %args.bind, "listening");
     axum::serve(listener, app).await?;

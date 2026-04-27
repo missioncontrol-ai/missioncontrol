@@ -1,9 +1,14 @@
 use axum_test::TestServer;
 use mc_server::{build_app, AppConfig};
+use sqlx::PgPool;
+
+fn test_pool() -> PgPool {
+    PgPool::connect_lazy("postgres://localhost/test").expect("lazy pool")
+}
 
 #[tokio::test]
 async fn test_health_returns_ok() {
-    let app = build_app(AppConfig::default());
+    let app = build_app(test_pool(), AppConfig::default());
     let server = TestServer::new(app);
     let res = server.get("/health").await;
     res.assert_status_ok();
@@ -13,7 +18,7 @@ async fn test_health_returns_ok() {
 
 #[tokio::test]
 async fn test_health_includes_version() {
-    let app = build_app(AppConfig::default());
+    let app = build_app(test_pool(), AppConfig::default());
     let server = TestServer::new(app);
     let res = server.get("/health").await;
     let body: serde_json::Value = res.json();
