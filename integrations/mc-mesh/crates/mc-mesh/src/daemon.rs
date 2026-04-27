@@ -2,6 +2,7 @@
 use anyhow::Result;
 use mc_mesh_core::capability_dispatcher::CapabilityDispatcher;
 use mc_mesh_core::client::BackendClient;
+use mc_mesh_core::paths;
 use mc_mesh_packs::{PackRegistry, PolicyBundle};
 use mc_mesh_runtimes::{
     claude_code::ClaudeCodeRuntime,
@@ -180,10 +181,7 @@ pub async fn run(cli: CliOverrides) -> Result<()> {
                 return Err(anyhow::anyhow!("pack registry load failed: {e}"));
             }
         });
-        let receipts_path = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".missioncontrol")
-            .join("receipts.db");
+        let receipts_path = paths::receipts_db_path();
         let receipt_store = ReceiptStore::open(&receipts_path)
             .map_err(|e| anyhow::anyhow!("failed to open receipt store at {}: {e}", receipts_path.display()))?;
         let dispatcher = Arc::new(

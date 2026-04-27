@@ -526,7 +526,7 @@ fn handle_uninstall() -> Result<()> {
 
     if removed_binary {
         println!(
-            "mc-mesh uninstalled. Config and work dirs are preserved at ~/.missioncontrol/mc-mesh*"
+            "mc-mesh uninstalled. Config and work dirs are preserved at ~/.mc/mc-mesh*"
         );
     } else {
         println!("mc-mesh binary not found; nothing to remove.");
@@ -791,11 +791,7 @@ fn detect_machine_info() -> Value {
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
 
-    let work_dir = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".missioncontrol")
-        .join("mc-mesh")
-        .join("work");
+    let work_dir = crate::config::mc_home_dir().join("mc-mesh").join("work");
 
     // Detect key tools.
     let tools: Vec<Value> = [
@@ -1496,10 +1492,7 @@ impl Drop for RawTerminal {
 }
 
 fn attach_socket_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join(".missioncontrol")
-        .join("mc-mesh.sock")
+    crate::config::mc_home_dir().join("mc-mesh.sock")
 }
 
 // ---------------------------------------------------------------------------
@@ -1544,10 +1537,7 @@ fn pid_file_path() -> std::path::PathBuf {
 }
 
 fn mc_mesh_config_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".missioncontrol")
-        .join("mc-mesh.yaml")
+    crate::config::mc_home_dir().join("mc-mesh.yaml")
 }
 
 fn is_daemon_running() -> bool {

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import parse_qs, urlparse
 
+from app.config_paths import mc_home, profile_dir
+
 
 class SecretsProvider(Protocol):
     def get(self, name: str) -> str | None: ...
@@ -131,8 +133,7 @@ def _first(query: dict[str, list[str]], key: str) -> str | None:
 
 def _profile_secret_ref(name: str) -> str | None:
     profile_name = (os.getenv("MC_SECRETS_PROFILE") or os.getenv("MC_AGENT_PROFILE") or "default").strip() or "default"
-    mc_home = Path((os.getenv("MC_HOME") or "~/.missioncontrol")).expanduser()
-    path = mc_home / "profiles" / profile_name / "secrets.json"
+    path = profile_dir(profile_name) / "secrets.json"
     try:
         content = path.read_text(encoding="utf-8")
         parsed = json.loads(content)
@@ -150,8 +151,7 @@ def _profile_secret_ref(name: str) -> str | None:
 
 def secrets_status() -> dict:
     profile_name = (os.getenv("MC_SECRETS_PROFILE") or os.getenv("MC_AGENT_PROFILE") or "default").strip() or "default"
-    mc_home = Path((os.getenv("MC_HOME") or "~/.missioncontrol")).expanduser()
-    profile_path = mc_home / "profiles" / profile_name / "secrets.json"
+    profile_path = profile_dir(profile_name) / "secrets.json"
     provider = _provider_name()
 
     refs_count = 0
@@ -275,8 +275,7 @@ def _generate_secret(generator: str) -> str:
 
 
 def _profile_secrets_path(profile_name: str) -> Path:
-    mc_home = Path((os.getenv("MC_HOME") or "~/.missioncontrol")).expanduser()
-    return mc_home / "profiles" / profile_name / "secrets.json"
+    return profile_dir(profile_name) / "secrets.json"
 
 
 def _load_profile_data(path: Path) -> dict:

@@ -1,8 +1,12 @@
 /// mc-mesh daemon configuration.
 ///
-/// Loaded from `/etc/mc-mesh/agent.yaml` or `~/.missioncontrol/mc-mesh.yaml`
-/// (whichever exists first).  All fields can be overridden by CLI flags.
+/// Loaded from `/etc/mc-mesh/agent.yaml` or `~/.mc/mc-mesh.yaml`
+/// (whichever exists first). All fields can be overridden by CLI flags.
+///
+/// Token and backend_url fall back to mc's shared session.json / config.json
+/// so mc-mesh and mc stay in sync without duplicating credentials.
 use anyhow::{Context, Result};
+use mc_mesh_core::paths;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -10,7 +14,8 @@ use std::path::{Path, PathBuf};
 pub struct DaemonConfig {
     /// MissionControl backend base URL.
     pub backend_url: String,
-    /// Bearer token for the backend.  In practice loaded from env or keyring.
+    /// Bearer token for the backend. Optional — falls back to mc's session.json.
+    #[serde(default)]
     pub token: String,
     /// Local directory used as the working root for agent processes.
     #[serde(default = "default_work_dir")]
@@ -45,12 +50,32 @@ pub struct AgentEntry {
     pub runtime_kind: String,
 }
 
+/// Shared session fields written by `mc auth login`.
+#[derive(Deserialize)]
+struct McSession {
+    token: String,
+    base_url: String,
+}
+
+/// Shared persistent config written by `mc auth login`.
+#[derive(Deserialize)]
+struct McConfig {
+    base_url: Option<String>,
+}
+
+fn read_mc_session() -> Option<McSession> {
+    let content = std::fs::read_to_string(paths::session_file_path()).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn read_mc_base_url() -> Option<String> {
+    let content = std::fs::read_to_string(paths::mc_home_dir().join("config.json")).ok()?;
+    let cfg: McConfig = serde_json::from_str(&content).ok()?;
+    cfg.base_url
+}
+
 fn default_work_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".missioncontrol")
-        .join("mc-mesh")
-        .join("work")
+    paths::mc_mesh_work_dir()
 }
 
 fn default_grace() -> u64 {
@@ -66,20 +91,44 @@ fn default_socket() -> PathBuf {
 }
 
 impl DaemonConfig {
-    /// Load from the first config file found, falling back to an empty default.
+    /// Load from the first config file found, falling back to mc's shared credentials.
     pub fn load_or_default() -> Self {
-        if let Some(cfg) = Self::try_load() {
-            cfg
-        } else {
-            DaemonConfig {
-                backend_url: std::env::var("MC_BACKEND_URL")
-                    .unwrap_or_else(|_| "http://localhost:8000".into()),
-                token: std::env::var("MC_TOKEN").unwrap_or_default(),
-                work_dir: default_work_dir(),
-                missions: vec![],
-                offline_grace_secs: default_grace(),
-                offline_policy: default_policy(),
-                control_socket: default_socket(),
+        let mut cfg = Self::try_load().unwrap_or_else(|| DaemonConfig {
+            backend_url: String::new(),
+            token: String::new(),
+            work_dir: default_work_dir(),
+            missions: vec![],
+            offline_grace_secs: default_grace(),
+            offline_policy: default_policy(),
+            control_socket: default_socket(),
+        });
+        cfg.resolve_credentials();
+        cfg
+    }
+
+    /// Fill in missing token / backend_url from env vars and mc's shared files.
+    fn resolve_credentials(&mut self) {
+        // Token: env → mc-mesh.yaml → mc session.json
+        if self.token.is_empty() {
+            if let Ok(t) = std::env::var("MC_TOKEN") {
+                self.token = t;
+            } else if let Some(s) = read_mc_session() {
+                self.token = s.token;
+                // Also pick up base_url from session if not set
+                if self.backend_url.is_empty() {
+                    self.backend_url = s.base_url;
+                }
+            }
+        }
+
+        // backend_url: env → mc-mesh.yaml → mc config.json → localhost fallback
+        if self.backend_url.is_empty() {
+            if let Ok(u) = std::env::var("MC_BASE_URL") {
+                self.backend_url = u;
+            } else if let Some(u) = read_mc_base_url() {
+                self.backend_url = u;
+            } else {
+                self.backend_url = "http://localhost:8008".into();
             }
         }
     }
@@ -87,7 +136,7 @@ impl DaemonConfig {
     fn try_load() -> Option<Self> {
         let candidates = [
             PathBuf::from("/etc/mc-mesh/agent.yaml"),
-            dirs::home_dir()?.join(".missioncontrol").join("mc-mesh.yaml"),
+            paths::mc_mesh_config_path(),
         ];
         for path in &candidates {
             if path.exists() {
@@ -116,11 +165,7 @@ impl DaemonConfig {
         Ok(())
     }
 
-    /// Default user config path.
     pub fn user_config_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".missioncontrol")
-            .join("mc-mesh.yaml")
+        paths::mc_mesh_config_path()
     }
 }

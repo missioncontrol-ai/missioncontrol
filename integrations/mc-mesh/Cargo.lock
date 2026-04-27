@@ -1346,6 +1346,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "dirs",
  "futures",
  "mc-mesh-packs",
  "mc-mesh-receipts",

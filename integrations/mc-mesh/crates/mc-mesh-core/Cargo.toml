@@ -1,6 +1,6 @@
 [package]
 name = "mc-mesh-core"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 description = "Shared types, client, progress events, and AgentRuntime trait for mc-mesh"
 license = "Apache-2.0"
@@ -8,6 +8,7 @@ license = "Apache-2.0"
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+dirs = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 portable-pty = { workspace = true }

@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from app.config_paths import backups_dir
 from app.services.authz import actor_subject_from_request, ensure_platform_admin
 from app.services.ids import new_hash_id
 from app.services.log_export import emit_structured_log
@@ -14,7 +15,7 @@ from app.services.secrets import bootstrap_profile_secrets, rotate_profile_secre
 
 router = APIRouter(prefix="/ops", tags=["ops"])
 
-BACKUP_DIR = Path(os.getenv("MC_HOME", "~/.missioncontrol")).expanduser() / "backups"
+BACKUP_DIR = backups_dir()
 BACKUP_FILE = BACKUP_DIR / "records.json"
 
 
