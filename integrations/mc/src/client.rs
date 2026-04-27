@@ -1,4 +1,4 @@
-use crate::config::McConfig;
+use crate::config::{load_server_list, McConfig};
 use anyhow::{Context, Result};
 use reqwest::{Client, Method, RequestBuilder};
 use serde_json::Value;
@@ -168,5 +168,172 @@ impl MissionControlClient {
             .join(path)
             .with_context(|| format!("invalid websocket path: {path}"))?;
         Ok(url)
+    }
+
+    pub fn base_url(&self) -> &Url {
+        &self.base_url
+    }
+
+    /// Return a clone of this client pointing at a different base URL.
+    pub fn with_base_url(&self, base_url: Url) -> Self {
+        Self {
+            http: self.http.clone(),
+            base_url,
+            token: self.token.clone(),
+            agent_id: self.agent_id.clone(),
+            runtime_session_id: self.runtime_session_id.clone(),
+            profile_name: self.profile_name.clone(),
+        }
+    }
+}
+
+// ── Multi-server failover client ──────────────────────────────────────────────
+
+/// Wraps a list of mc-server endpoints and retries each in order on connection
+/// failure or 5xx. Reads the server list from `~/.mc/servers` (via
+/// `load_server_list()`) unless overridden with explicit URLs.
+///
+/// HTTP 4xx errors from the first responding server are returned immediately
+/// without trying the next — they indicate a bad request, not a bad server.
+#[derive(Clone)]
+pub struct MultiServerClient {
+    servers: Vec<Url>,
+    inner: Client,
+    token: Option<String>,
+    agent_id: Option<String>,
+    runtime_session_id: Option<String>,
+    profile_name: Option<String>,
+}
+
+impl MultiServerClient {
+    /// Build from a full McConfig, using `load_server_list()` for the URL list.
+    pub fn from_config(config: &McConfig) -> Result<Self> {
+        let servers = load_server_list()
+            .iter()
+            .map(|u| Url::parse(u).with_context(|| format!("invalid server URL: {u}")))
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut builder = Client::builder().timeout(config.timeout);
+        if config.allow_insecure {
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+        Ok(Self {
+            servers,
+            inner: builder.build()?,
+            token: config.token.clone(),
+            agent_id: config.agent_context.agent_id.clone(),
+            runtime_session_id: config.agent_context.runtime_session_id.clone(),
+            profile_name: config.agent_context.profile_name.clone(),
+        })
+    }
+
+    /// Build with an explicit list of server URLs (useful for testing).
+    pub fn new(servers: Vec<String>, timeout: Duration) -> Result<Self> {
+        let parsed = servers
+            .iter()
+            .map(|u| Url::parse(u).with_context(|| format!("invalid server URL: {u}")))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            servers: parsed,
+            inner: Client::builder()
+                .timeout(timeout)
+                .build()
+                .context("http client init")?,
+            token: None,
+            agent_id: None,
+            runtime_session_id: None,
+            profile_name: None,
+        })
+    }
+
+    fn apply_auth(&self, builder: RequestBuilder) -> RequestBuilder {
+        let mut req = if let Some(token) = &self.token {
+            builder.bearer_auth(token)
+        } else {
+            builder
+        };
+        if let Some(id) = &self.agent_id {
+            if !id.trim().is_empty() {
+                req = req.header("x-mc-agent-id", id);
+            }
+        }
+        if let Some(rsid) = &self.runtime_session_id {
+            if !rsid.trim().is_empty() {
+                req = req
+                    .header("x-mc-runtime-session-id", rsid)
+                    .header("x-mc-instance-id", rsid);
+            }
+        }
+        if let Some(profile) = &self.profile_name {
+            if !profile.trim().is_empty() {
+                req = req.header("x-mc-agent-profile", profile);
+            }
+        }
+        req
+    }
+
+    /// Try each server in order. Returns the first successful response.
+    /// Connection errors and 5xx advance to the next server.
+    /// 4xx from any server is returned immediately.
+    pub async fn get_json(&self, path: &str) -> Result<Value> {
+        self.try_servers(Method::GET, path, None).await
+    }
+
+    pub async fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
+        self.try_servers(Method::POST, path, Some(body)).await
+    }
+
+    pub async fn patch_json(&self, path: &str, body: &Value) -> Result<Value> {
+        self.try_servers(Method::PATCH, path, Some(body)).await
+    }
+
+    pub async fn put_json(&self, path: &str, body: &Value) -> Result<Value> {
+        self.try_servers(Method::PUT, path, Some(body)).await
+    }
+
+    pub async fn delete(&self, path: &str) -> Result<()> {
+        self.try_servers(Method::DELETE, path, None).await?;
+        Ok(())
+    }
+
+    async fn try_servers(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Value> {
+        let mut last_err = anyhow::anyhow!("no mc-server nodes configured");
+        for base in &self.servers {
+            let url = base
+                .join(path)
+                .with_context(|| format!("invalid path: {path}"))?;
+            let mut builder = self.apply_auth(self.inner.request(method.clone(), url));
+            if let Some(b) = body {
+                builder = builder.json(b);
+            }
+            match builder.send().await {
+                Err(e) => {
+                    tracing::debug!(server = %base, error = %e, "mc-server unreachable, trying next");
+                    last_err = e.into();
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_client_error() {
+                        // 4xx — bad request, not a bad server; return immediately
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(anyhow::anyhow!("HTTP {status}: {text}"));
+                    }
+                    if status.is_server_error() {
+                        tracing::debug!(server = %base, %status, "mc-server 5xx, trying next");
+                        last_err = anyhow::anyhow!("HTTP {status} from {base}");
+                        continue;
+                    }
+                    return resp
+                        .json::<Value>()
+                        .await
+                        .context("unable to parse json response");
+                }
+            }
+        }
+        Err(last_err)
+    }
+
+    pub fn server_count(&self) -> usize {
+        self.servers.len()
     }
 }
