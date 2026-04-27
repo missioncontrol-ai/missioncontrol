@@ -24,7 +24,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push
+      - name: Build and push missioncontrol API
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -34,10 +34,22 @@ jobs:
           tags: |
             ghcr.io/missioncontrol-ai/missioncontrol:${{ github.sha }}
             ghcr.io/missioncontrol-ai/missioncontrol:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=missioncontrol
+          cache-to: type=gha,mode=max,scope=missioncontrol
 
-      - name: Update gitops image tag
+      - name: Build and push mc-server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: integrations/mc-server/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/missioncontrol-ai/mc-server:${{ github.sha }}
+            ghcr.io/missioncontrol-ai/mc-server:latest
+          cache-from: type=gha,scope=mc-server
+          cache-to: type=gha,mode=max,scope=mc-server
+
+      - name: Update gitops image tags
         env:
           GH_TOKEN: ${{ secrets.GITOPS_DEPLOY_TOKEN }}
         run: |
@@ -46,8 +58,11 @@ jobs:
           cd /tmp/gitops
           sed -i "s|ghcr.io/missioncontrol-ai/missioncontrol:[a-f0-9]*|ghcr.io/missioncontrol-ai/missioncontrol:${SHORT_SHA}|g" \
             merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml
+          sed -i "s|ghcr.io/missioncontrol-ai/mc-server:[a-f0-9]*|ghcr.io/missioncontrol-ai/mc-server:${SHORT_SHA}|g" \
+            merlinlabs/applications/missioncontrol/mc-server-deployment.yaml
           git config user.email "ci@missioncontrol-ai"
           git config user.name "MC CI"
-          git add merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml
-          git diff --staged --quiet || git commit -m "chore(deploy): bump missioncontrol image to ${SHORT_SHA}"
+          git add merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml \
+                  merlinlabs/applications/missioncontrol/mc-server-deployment.yaml
+          git diff --staged --quiet || git commit -m "chore(deploy): bump images to ${SHORT_SHA}"
           git push
