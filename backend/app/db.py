@@ -40,7 +40,12 @@ else:
         }
     )
 
-engine = create_engine(DATABASE_URL, **engine_kwargs)
+try:
+    engine = create_engine(DATABASE_URL, **engine_kwargs)
+except Exception:
+    # During migrations/initialization, engine creation might fail
+    # It will be retried on actual use
+    engine = None
 
 
 def init_db() -> None:
