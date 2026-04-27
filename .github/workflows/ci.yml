@@ -1,6 +1,10 @@
 name: CI
 on:
-  workflow_dispatch: # push/PR triggers disabled during pilot dev — re-enable before public release
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
     inputs:
       run_compat_smoke:
         description: "Run compatibility smoke matrix"

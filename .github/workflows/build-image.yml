@@ -1,0 +1,53 @@
+name: Build and Push Image
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          target: prod
+          push: true
+          tags: |
+            ghcr.io/missioncontrol-ai/missioncontrol:${{ github.sha }}
+            ghcr.io/missioncontrol-ai/missioncontrol:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Update gitops image tag
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_DEPLOY_TOKEN }}
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          git clone https://x-access-token:${GH_TOKEN}@github.com/RyanMerlin/gitops-merlinlabs.git /tmp/gitops
+          cd /tmp/gitops
+          sed -i "s|ghcr.io/missioncontrol-ai/missioncontrol:[a-f0-9]*|ghcr.io/missioncontrol-ai/missioncontrol:${SHORT_SHA}|g" \
+            merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml
+          git config user.email "ci@missioncontrol-ai"
+          git config user.name "MC CI"
+          git add merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml
+          git diff --staged --quiet || git commit -m "chore(deploy): bump missioncontrol image to ${SHORT_SHA}"
+          git push
