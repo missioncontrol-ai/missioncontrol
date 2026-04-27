@@ -12,5 +12,5 @@ paho-mqtt
 alembic
 boto3
 httpx
-apscheduler>=3.10
+apscheduler>=3.11.2
 anthropic
