@@ -14,18 +14,31 @@ branch_labels = None
 depends_on = None
 
 
+def _col_set(conn, table: str) -> set:
+    from sqlalchemy import inspect as _inspect
+    return {c["name"] for c in _inspect(conn).get_columns(table)}
+
+
+def _constraint_names(conn, table: str) -> set:
+    from sqlalchemy import inspect as _inspect
+    uqs = _inspect(conn).get_unique_constraints(table)
+    return {c["name"] for c in uqs}
+
+
 def upgrade() -> None:
-    with op.batch_alter_table("agentrun") as batch_op:
-        batch_op.add_column(
-            sa.Column("idempotency_key", sa.String(), nullable=True)
-        )
-        batch_op.create_unique_constraint(
+    conn = op.get_bind()
+
+    if "idempotency_key" not in _col_set(conn, "agentrun"):
+        op.add_column("agentrun", sa.Column("idempotency_key", sa.String(), nullable=True))
+
+    if "uq_agentrun_owner_idempotency" not in _constraint_names(conn, "agentrun"):
+        op.create_unique_constraint(
             "uq_agentrun_owner_idempotency",
+            "agentrun",
             ["owner_subject", "idempotency_key"],
         )
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("agentrun") as batch_op:
-        batch_op.drop_constraint("uq_agentrun_owner_idempotency", type_="unique")
-        batch_op.drop_column("idempotency_key")
+    op.drop_constraint("uq_agentrun_owner_idempotency", "agentrun", type_="unique")
+    op.drop_column("agentrun", "idempotency_key")

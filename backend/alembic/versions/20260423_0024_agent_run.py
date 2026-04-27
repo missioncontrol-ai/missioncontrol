@@ -90,18 +90,19 @@ def upgrade() -> None:
             sa.UniqueConstraint("run_id", "seq", name="uq_runcheckpoint_run_seq"),
         )
 
-    # Add agent_run_id FK to meshprogressevent
+    # Add agent_run_id FK to meshprogressevent (direct ops — avoid batch_alter_table
+    # which can trigger a full table recreate from SQLModel metadata in newer alembic)
     if "agent_run_id" not in _col_set(conn, "meshprogressevent"):
-        with op.batch_alter_table("meshprogressevent") as batch_op:
-            batch_op.add_column(
-                sa.Column(
-                    "agent_run_id",
-                    sa.String(),
-                    sa.ForeignKey("agentrun.id", ondelete="SET NULL"),
-                    nullable=True,
-                )
-            )
-            batch_op.create_index("ix_meshprogressevent_agent_run_id", ["agent_run_id"])
+        op.add_column(
+            "meshprogressevent",
+            sa.Column(
+                "agent_run_id",
+                sa.String(),
+                sa.ForeignKey("agentrun.id", ondelete="SET NULL"),
+                nullable=True,
+            ),
+        )
+        op.create_index("ix_meshprogressevent_agent_run_id", "meshprogressevent", ["agent_run_id"])
 
 
 def downgrade() -> None:

@@ -15,27 +15,41 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade() -> None:
-    # Add columns to scheduledagentjob (if they don't exist)
-    with op.batch_alter_table("scheduledagentjob") as batch_op:
-        batch_op.add_column(sa.Column("target_type", sa.String(), nullable=True, server_default="ai_session"))
-        batch_op.add_column(sa.Column("target_spec_json", sa.Text(), nullable=True))
+def _col_set(conn, table: str) -> set:
+    from sqlalchemy import inspect as _inspect
+    return {c["name"] for c in _inspect(conn).get_columns(table)}
 
-    op.create_table(
-        "eventtrigger",
-        sa.Column("id", sa.String(), primary_key=True),
-        sa.Column("owner_subject", sa.String(), nullable=False, index=True),
-        sa.Column("event_type", sa.String(), nullable=False),
-        sa.Column("predicate_json", sa.Text(), nullable=True),
-        sa.Column("target_type", sa.String(), nullable=False, server_default="mesh_task"),
-        sa.Column("target_spec_json", sa.Text(), nullable=False),
-        sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("cooldown_seconds", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("last_fired_at", sa.DateTime(), nullable=True),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(), nullable=False),
-    )
-    op.create_index("ix_eventtrigger_owner_subject", "eventtrigger", ["owner_subject"])
+
+def _has_table(conn, name: str) -> bool:
+    from sqlalchemy import inspect as _inspect
+    return name in _inspect(conn).get_table_names()
+
+
+def upgrade() -> None:
+    conn = op.get_bind()
+    existing = _col_set(conn, "scheduledagentjob")
+
+    if "target_type" not in existing:
+        op.add_column("scheduledagentjob", sa.Column("target_type", sa.String(), nullable=True, server_default="ai_session"))
+    if "target_spec_json" not in existing:
+        op.add_column("scheduledagentjob", sa.Column("target_spec_json", sa.Text(), nullable=True))
+
+    if not _has_table(conn, "eventtrigger"):
+        op.create_table(
+            "eventtrigger",
+            sa.Column("id", sa.String(), primary_key=True),
+            sa.Column("owner_subject", sa.String(), nullable=False, index=True),
+            sa.Column("event_type", sa.String(), nullable=False),
+            sa.Column("predicate_json", sa.Text(), nullable=True),
+            sa.Column("target_type", sa.String(), nullable=False, server_default="mesh_task"),
+            sa.Column("target_spec_json", sa.Text(), nullable=False),
+            sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column("cooldown_seconds", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("last_fired_at", sa.DateTime(), nullable=True),
+            sa.Column("created_at", sa.DateTime(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(), nullable=False),
+        )
+        op.create_index("ix_eventtrigger_owner_subject", "eventtrigger", ["owner_subject"])
 
 
 def downgrade() -> None:
