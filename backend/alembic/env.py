@@ -50,7 +50,7 @@ def run_migrations_online() -> None:
     @_sa_event.listens_for(connectable, "before_cursor_execute")
     def _trace_ddl(conn, cursor, statement, parameters, context_, executemany):
         if "budgetpolicy" in statement.lower():
-            _diag.warning("TRACE budgetpolicy DDL:\n%s\n%s", statement[:500], "".join(_tb.format_stack()[-6:]))
+            _diag.warning("TRACE budgetpolicy DDL:\n%s\nSTACK:\n%s", statement[:300], "".join(_tb.format_stack()))
 
     with connectable.connect() as connection:
         # Acquire a PostgreSQL advisory lock so concurrent migration processes
