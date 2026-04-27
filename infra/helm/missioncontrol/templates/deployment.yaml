@@ -12,6 +12,19 @@ spec:
       labels:
         app: {{ include "missioncontrol.fullname" . }}
     spec:
+      initContainers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "alembic", "upgrade", "head"]
+          workingDir: /app
+          envFrom:
+            - configMapRef:
+                name: {{ include "missioncontrol.fullname" . }}-config
+            {{- if .Values.secrets }}
+            - secretRef:
+                name: {{ include "missioncontrol.fullname" . }}-secrets
+            {{- end }}
       containers:
         - name: missioncontrol
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
