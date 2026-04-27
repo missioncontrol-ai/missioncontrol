@@ -36,11 +36,21 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    import logging, traceback as _tb
+    _diag = logging.getLogger("alembic.diag")
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+
+    # DDL tracing: log any CREATE TABLE for tables that shouldn't exist yet
+    from sqlalchemy import event as _sa_event
+    @_sa_event.listens_for(connectable, "before_cursor_execute")
+    def _trace_ddl(conn, cursor, statement, parameters, context_, executemany):
+        if "budgetpolicy" in statement.lower():
+            _diag.warning("TRACE budgetpolicy DDL:\n%s\n%s", statement[:500], "".join(_tb.format_stack()[-6:]))
 
     with connectable.connect() as connection:
         # Acquire a PostgreSQL advisory lock so concurrent migration processes
