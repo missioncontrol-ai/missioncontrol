@@ -113,7 +113,7 @@ async fn create_task(
         return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({"detail": "title is required"}))).into_response();
     }
 
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
     match sqlx::query_as::<_, Task>(
         "INSERT INTO task (public_id, kluster_id, epic_id, title, description, status, owner, \
          contributors, dependencies, definition_of_done, related_artifacts, created_at, updated_at) \
@@ -184,7 +184,7 @@ async fn update_task(
     let definition_of_done   = payload.definition_of_done.unwrap_or(task.definition_of_done);
     let related_artifacts    = payload.related_artifacts.unwrap_or(task.related_artifacts);
     let epic_id              = payload.epic_id.or(task.epic_id);
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
 
     match sqlx::query_as::<_, Task>(
         "UPDATE task SET title=$2, description=$3, status=$4, owner=$5, contributors=$6, \

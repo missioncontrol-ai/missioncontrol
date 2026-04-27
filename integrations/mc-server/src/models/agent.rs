@@ -1,48 +1,49 @@
-use chrono::{DateTime, Utc};
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
-    pub id: i64,
+    pub id: i32,
     pub name: String,
     pub capabilities: String,
     pub status: String,
     pub metadata: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct AgentSession {
-    pub id: i64,
-    pub agent_id: i64,
+    pub id: i32,
+    pub agent_id: i32,
     pub context: String,
-    pub started_at: DateTime<Utc>,
-    pub ended_at: Option<DateTime<Utc>>,
+    pub started_at: NaiveDateTime,
+    pub ended_at: Option<NaiveDateTime>,
     pub claude_session_id: Option<String>,
     pub end_reason: Option<String>,
+    pub audit_log: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct TaskAssignment {
-    pub id: i64,
-    pub task_id: i64,
-    pub agent_id: i64,
+    pub id: i32,
+    pub task_id: i32,
+    pub agent_id: i32,
     pub status: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct AgentMessage {
-    pub id: i64,
-    pub from_agent_id: i64,
-    pub to_agent_id: i64,
+    pub id: i32,
+    pub from_agent_id: i32,
+    pub to_agent_id: i32,
     pub content: String,
     pub message_type: String,
-    pub task_id: Option<i64>,
+    pub task_id: Option<i32>,
     pub read: bool,
-    pub created_at: DateTime<Utc>,
+    pub created_at: NaiveDateTime,
 }
 
 // ── Request shapes ────────────────────────────────────────────────────────────
@@ -74,8 +75,8 @@ pub struct SessionCreate {
 
 #[derive(Debug, Deserialize)]
 pub struct AssignmentCreate {
-    pub task_id: i64,
-    pub agent_id: i64,
+    pub task_id: i32,
+    pub agent_id: i32,
     #[serde(default = "default_available")]
     pub status: String,
 }
@@ -87,11 +88,11 @@ pub struct AssignmentUpdate {
 
 #[derive(Debug, Deserialize)]
 pub struct MessageSend {
-    pub to_agent_id: i64,
+    pub to_agent_id: i32,
     pub content: String,
     #[serde(default = "default_info")]
     pub message_type: String,
-    pub task_id: Option<i64>,
+    pub task_id: Option<i32>,
 }
 
 fn default_offline() -> String { "offline".into() }

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -15,10 +15,10 @@ pub struct Kluster {
     pub workstream_version: i32,
     pub workstream_created_by: String,
     pub workstream_modified_by: String,
-    pub workstream_created_at: Option<DateTime<Utc>>,
-    pub workstream_modified_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub workstream_created_at: Option<NaiveDateTime>,
+    pub workstream_modified_at: Option<NaiveDateTime>,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,12 +1,12 @@
-use chrono::{DateTime, Utc};
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Task {
-    pub id: i64,
+    pub id: i32,
     pub public_id: String,
     pub kluster_id: String,
-    pub epic_id: Option<i64>,
+    pub epic_id: Option<i32>,
     pub title: String,
     pub description: String,
     pub status: String,
@@ -15,8 +15,8 @@ pub struct Task {
     pub dependencies: String,
     pub definition_of_done: String,
     pub related_artifacts: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,7 +37,7 @@ pub struct TaskCreate {
     #[serde(default)]
     pub related_artifacts: String,
     pub kluster_id: Option<String>,
-    pub epic_id: Option<i64>,
+    pub epic_id: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,7 +50,7 @@ pub struct TaskUpdate {
     pub dependencies: Option<String>,
     pub definition_of_done: Option<String>,
     pub related_artifacts: Option<String>,
-    pub epic_id: Option<i64>,
+    pub epic_id: Option<i32>,
 }
 
 fn default_proposed() -> String { "proposed".into() }

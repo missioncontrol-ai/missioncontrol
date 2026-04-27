@@ -51,8 +51,8 @@ fn not_found(msg: &str) -> axum::response::Response {
 struct ListQuery {
     status: Option<String>,
     limit: Option<i64>,
-    agent_id: Option<i64>,
-    task_id: Option<i64>,
+    agent_id: Option<i32>,
+    task_id: Option<i32>,
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ async fn create_agent(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<AgentCreate>,
 ) -> impl IntoResponse {
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
     let result = sqlx::query(
         "INSERT INTO agent (name, capabilities, status, metadata, created_at, updated_at) \
          VALUES ($1,$2,$3,$4,$5,$5) RETURNING *"
@@ -99,7 +99,7 @@ async fn create_agent(
 
 async fn get_agent(
     State(state): State<Arc<AppState>>,
-    Path(agent_id): Path<i64>,
+    Path(agent_id): Path<i32>,
 ) -> impl IntoResponse {
     match sqlx::query("SELECT * FROM agent WHERE id=$1").bind(agent_id).fetch_optional(&state.db).await {
         Ok(Some(row)) => Json(row_to_agent(&row)).into_response(),
@@ -110,7 +110,7 @@ async fn get_agent(
 
 async fn update_agent(
     State(state): State<Arc<AppState>>,
-    Path(agent_id): Path<i64>,
+    Path(agent_id): Path<i32>,
     Json(payload): Json<AgentUpdate>,
 ) -> impl IntoResponse {
     let existing = sqlx::query("SELECT * FROM agent WHERE id=$1")
@@ -125,7 +125,7 @@ async fn update_agent(
     let capabilities = payload.capabilities.unwrap_or(agent.capabilities);
     let status       = payload.status.unwrap_or(agent.status);
     let metadata     = payload.metadata.unwrap_or(agent.metadata);
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
 
     match sqlx::query(
         "UPDATE agent SET name=$2, capabilities=$3, status=$4, metadata=$5, updated_at=$6 WHERE id=$1 RETURNING *"
@@ -141,7 +141,7 @@ async fn update_agent(
 
 async fn list_sessions(
     State(state): State<Arc<AppState>>,
-    Path(agent_id): Path<i64>,
+    Path(agent_id): Path<i32>,
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(50).min(200);
@@ -157,14 +157,14 @@ async fn list_sessions(
 
 async fn start_session(
     State(state): State<Arc<AppState>>,
-    Path(agent_id): Path<i64>,
+    Path(agent_id): Path<i32>,
     Json(payload): Json<SessionCreate>,
 ) -> impl IntoResponse {
     let agent_exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM agent WHERE id=$1")
         .bind(agent_id).fetch_optional(&state.db).await.unwrap_or(None);
     if agent_exists.is_none() { return not_found("Agent not found"); }
 
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
     let _ = sqlx::query("UPDATE agent SET status='online', updated_at=$2 WHERE id=$1")
         .bind(agent_id).bind(now).execute(&state.db).await;
 
@@ -181,13 +181,13 @@ async fn start_session(
 
 async fn end_session(
     State(state): State<Arc<AppState>>,
-    Path((agent_id, session_id)): Path<(i64, i64)>,
+    Path((agent_id, session_id)): Path<(i32, i32)>,
 ) -> impl IntoResponse {
     let agent_exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM agent WHERE id=$1")
         .bind(agent_id).fetch_optional(&state.db).await.unwrap_or(None);
     if agent_exists.is_none() { return not_found("Agent not found"); }
 
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
     let _ = sqlx::query("UPDATE agent SET status='offline', updated_at=$2 WHERE id=$1")
         .bind(agent_id).bind(now).execute(&state.db).await;
 
@@ -235,7 +235,7 @@ async fn create_assignment(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<AssignmentCreate>,
 ) -> impl IntoResponse {
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
     match sqlx::query_as::<_, TaskAssignment>(
         "INSERT INTO taskassignment (task_id, agent_id, status, created_at, updated_at) \
          VALUES ($1,$2,$3,$4,$4) RETURNING *"
@@ -249,7 +249,7 @@ async fn create_assignment(
 
 async fn update_assignment(
     State(state): State<Arc<AppState>>,
-    Path(assignment_id): Path<i64>,
+    Path(assignment_id): Path<i32>,
     Json(payload): Json<AssignmentUpdate>,
 ) -> impl IntoResponse {
     let existing = sqlx::query_as::<_, TaskAssignment>("SELECT * FROM taskassignment WHERE id=$1")
@@ -260,7 +260,7 @@ async fn update_assignment(
         Err(e) => { tracing::error!("update_assignment: {e}"); return StatusCode::INTERNAL_SERVER_ERROR.into_response(); }
     };
     let status = payload.status.unwrap_or(a.status);
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
     match sqlx::query_as::<_, TaskAssignment>(
         "UPDATE taskassignment SET status=$2, updated_at=$3 WHERE id=$1 RETURNING *"
     )
@@ -275,7 +275,7 @@ async fn update_assignment(
 
 async fn send_message(
     State(state): State<Arc<AppState>>,
-    Path(agent_id): Path<i64>,
+    Path(agent_id): Path<i32>,
     Json(payload): Json<MessageSend>,
 ) -> impl IntoResponse {
     let from_exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM agent WHERE id=$1")
@@ -285,7 +285,7 @@ async fn send_message(
         .bind(payload.to_agent_id).fetch_optional(&state.db).await.unwrap_or(None);
     if to_exists.is_none() { return not_found("Recipient agent not found"); }
 
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
     match sqlx::query_as::<_, AgentMessage>(
         "INSERT INTO agentmessage (from_agent_id, to_agent_id, content, message_type, task_id, read, created_at) \
          VALUES ($1,$2,$3,$4,$5,false,$6) RETURNING *"
@@ -300,7 +300,7 @@ async fn send_message(
 
 async fn list_messages(
     State(state): State<Arc<AppState>>,
-    Path(agent_id): Path<i64>,
+    Path(agent_id): Path<i32>,
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(50).min(200);
@@ -316,7 +316,7 @@ async fn list_messages(
 
 async fn get_inbox(
     State(state): State<Arc<AppState>>,
-    Path(agent_id): Path<i64>,
+    Path(agent_id): Path<i32>,
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(50).min(200);

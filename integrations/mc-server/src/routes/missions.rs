@@ -148,7 +148,7 @@ async fn create_mission(
         id = new_hash_id();
     }
 
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
     let result = sqlx::query(
         r#"INSERT INTO mission
             (id, name, description, owners, contributors, tags, visibility, status,
@@ -220,7 +220,7 @@ async fn update_mission(
     let tags         = payload.tags.unwrap_or(mission.tags);
     let visibility   = payload.visibility.unwrap_or(mission.visibility);
     let status       = payload.status.unwrap_or(mission.status);
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
 
     let result = sqlx::query(
         "UPDATE mission SET description=$2, owners=$3, contributors=$4, tags=$5, \
@@ -312,7 +312,7 @@ async fn upsert_role(
         Err(e) => { tracing::error!("upsert_role fetch: {e}"); return StatusCode::INTERNAL_SERVER_ERROR.into_response(); }
     }
 
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
     let result = sqlx::query(
         r#"INSERT INTO missionrolemembership (mission_id, subject, role, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $4)

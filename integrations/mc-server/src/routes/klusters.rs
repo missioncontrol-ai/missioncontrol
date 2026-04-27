@@ -117,7 +117,7 @@ async fn create_kluster(
         id = new_hash_id();
     }
 
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
     match sqlx::query_as::<_, Kluster>(
         r#"INSERT INTO kluster
             (id, mission_id, name, description, owners, contributors, tags, status,
@@ -197,7 +197,7 @@ async fn update_kluster(
         return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({"detail": "owners must include at least one owner"}))).into_response();
     }
 
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
     match sqlx::query_as::<_, Kluster>(
         "UPDATE kluster SET name=$2, description=$3, owners=$4, contributors=$5, tags=$6, \
          status=$7, updated_at=$8 WHERE id=$1 RETURNING *"

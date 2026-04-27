@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -15,20 +15,20 @@ pub struct Mission {
     pub northstar_version: i32,
     pub northstar_created_by: String,
     pub northstar_modified_by: String,
-    pub northstar_created_at: Option<DateTime<Utc>>,
-    pub northstar_modified_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub northstar_created_at: Option<NaiveDateTime>,
+    pub northstar_modified_at: Option<NaiveDateTime>,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct MissionRoleMembership {
-    pub id: i64,
+    pub id: i32,
     pub mission_id: String,
     pub subject: String,
     pub role: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
 }
 
 // ── Request/response shapes ───────────────────────────────────────────────────
