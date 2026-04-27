@@ -64,6 +64,11 @@ def run_migrations_online() -> None:
         with context.begin_transaction():
             context.run_migrations()
 
+        # pg_advisory_lock() starts an implicit transaction; alembic's
+        # begin_transaction() becomes a savepoint inside it, so we must
+        # commit the outer connection explicitly to persist DDL.
+        connection.commit()
+
 
 if context.is_offline_mode():
     run_migrations_offline()

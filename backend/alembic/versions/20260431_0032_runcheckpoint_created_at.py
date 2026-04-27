@@ -14,17 +14,30 @@ branch_labels = None
 depends_on = None
 
 
+def _has_column(conn, table: str, column: str) -> bool:
+    from sqlalchemy import inspect as _inspect
+    return column in [c["name"] for c in _inspect(conn).get_columns(table)]
+
+
+def _has_index(conn, table: str, index: str) -> bool:
+    from sqlalchemy import inspect as _inspect
+    return any(i["name"] == index for i in _inspect(conn).get_indexes(table))
+
+
 def upgrade() -> None:
-    op.add_column(
-        "runcheckpoint",
-        sa.Column(
-            "created_at",
-            sa.DateTime(),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-    )
-    op.create_index("ix_runcheckpoint_created_at", "runcheckpoint", ["created_at"])
+    conn = op.get_bind()
+    if not _has_column(conn, "runcheckpoint", "created_at"):
+        op.add_column(
+            "runcheckpoint",
+            sa.Column(
+                "created_at",
+                sa.DateTime(),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+        )
+    if not _has_index(conn, "runcheckpoint", "ix_runcheckpoint_created_at"):
+        op.create_index("ix_runcheckpoint_created_at", "runcheckpoint", ["created_at"])
 
 
 def downgrade() -> None:

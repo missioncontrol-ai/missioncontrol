@@ -14,8 +14,15 @@ branch_labels = None
 depends_on = None
 
 
+def _has_column(conn, table: str, column: str) -> bool:
+    from sqlalchemy import inspect as _inspect
+    return column in [c["name"] for c in _inspect(conn).get_columns(table)]
+
+
 def upgrade():
-    op.add_column("meshagent", sa.Column("supervision_mode", sa.String, nullable=True))
+    conn = op.get_bind()
+    if not _has_column(conn, "meshagent", "supervision_mode"):
+        op.add_column("meshagent", sa.Column("supervision_mode", sa.String, nullable=True))
 
 
 def downgrade():

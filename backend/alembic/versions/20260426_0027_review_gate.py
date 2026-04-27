@@ -15,7 +15,16 @@ branch_labels = None
 depends_on = None
 
 
+def _has_table(conn, name: str) -> bool:
+    from sqlalchemy import inspect as _inspect
+    return name in _inspect(conn).get_table_names()
+
+
 def upgrade() -> None:
+    conn = op.get_bind()
+    if _has_table(conn, "reviewgate"):
+        return
+
     op.create_table(
         "reviewgate",
         sa.Column("id", sa.String(), primary_key=True),
