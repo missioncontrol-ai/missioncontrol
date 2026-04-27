@@ -9,6 +9,11 @@ from alembic import op
 import sqlalchemy as sa
 from datetime import datetime
 
+revision = "eee0429001"
+down_revision = "fff0430001"
+branch_labels = None
+depends_on = None
+
 
 def upgrade():
     op.create_table(
