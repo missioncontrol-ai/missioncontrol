@@ -14,26 +14,37 @@ branch_labels = None
 depends_on = None
 
 
+def _existing_columns(conn, table: str) -> set:
+    from sqlalchemy import inspect as _inspect
+    return {c["name"] for c in _inspect(conn).get_columns(table)}
+
+
 def upgrade():
+    conn = op.get_bind()
+    existing = _existing_columns(conn, "meshagent")
+
     with op.batch_alter_table("meshagent") as batch_op:
-        batch_op.add_column(
-            sa.Column("profile_json", sa.Text(), nullable=True, comment=(
-                "User-defined agent profile: name, role, description, instructions, "
-                "scope (directories/repos), permissions, constraints."
-            ))
-        )
-        batch_op.add_column(
-            sa.Column("machine_json", sa.Text(), nullable=True, comment=(
-                "Auto-detected by mc-mesh at enrollment: hostname, os, cpu_cores, "
-                "ram_gb, disk_free_gb, working_dir, installed_tools."
-            ))
-        )
-        batch_op.add_column(
-            sa.Column("runtime_json", sa.Text(), nullable=True, comment=(
-                "Runtime metadata reported by mc-mesh: model, context_window, "
-                "available_tools, extra version info."
-            ))
-        )
+        if "profile_json" not in existing:
+            batch_op.add_column(
+                sa.Column("profile_json", sa.Text(), nullable=True, comment=(
+                    "User-defined agent profile: name, role, description, instructions, "
+                    "scope (directories/repos), permissions, constraints."
+                ))
+            )
+        if "machine_json" not in existing:
+            batch_op.add_column(
+                sa.Column("machine_json", sa.Text(), nullable=True, comment=(
+                    "Auto-detected by mc-mesh at enrollment: hostname, os, cpu_cores, "
+                    "ram_gb, disk_free_gb, working_dir, installed_tools."
+                ))
+            )
+        if "runtime_json" not in existing:
+            batch_op.add_column(
+                sa.Column("runtime_json", sa.Text(), nullable=True, comment=(
+                    "Runtime metadata reported by mc-mesh: model, context_window, "
+                    "available_tools, extra version info."
+                ))
+            )
 
 
 def downgrade():

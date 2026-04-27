@@ -14,8 +14,21 @@ branch_labels = None
 depends_on = None
 
 
+def _has_table(conn, name: str) -> bool:
+    from sqlalchemy import inspect as _inspect
+    return name in _inspect(conn).get_table_names()
+
+
+def _col_set(conn, table: str) -> set:
+    from sqlalchemy import inspect as _inspect
+    return {c["name"] for c in _inspect(conn).get_columns(table)}
+
+
 def upgrade() -> None:
-    op.create_table(
+    conn = op.get_bind()
+
+    if not _has_table(conn, "agentrun"):
+        op.create_table(
         "agentrun",
         sa.Column("id", sa.String(), primary_key=True),
         sa.Column("owner_subject", sa.String(), nullable=False, index=True),
@@ -57,36 +70,38 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(), nullable=False),
     )
 
-    op.create_table(
-        "runcheckpoint",
-        sa.Column("id", sa.String(), primary_key=True),
-        sa.Column(
-            "run_id",
-            sa.String(),
-            sa.ForeignKey("agentrun.id", ondelete="CASCADE"),
-            nullable=False,
-            index=True,
-        ),
-        # Monotonically increasing within a run
-        sa.Column("seq", sa.Integer(), nullable=False),
-        # tool_call | turn | review | publish | manual
-        sa.Column("kind", sa.String(), nullable=False),
-        sa.Column("payload_json", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False, index=True),
-        sa.UniqueConstraint("run_id", "seq", name="uq_runcheckpoint_run_seq"),
-    )
+    if not _has_table(conn, "runcheckpoint"):
+        op.create_table(
+            "runcheckpoint",
+            sa.Column("id", sa.String(), primary_key=True),
+            sa.Column(
+                "run_id",
+                sa.String(),
+                sa.ForeignKey("agentrun.id", ondelete="CASCADE"),
+                nullable=False,
+                index=True,
+            ),
+            # Monotonically increasing within a run
+            sa.Column("seq", sa.Integer(), nullable=False),
+            # tool_call | turn | review | publish | manual
+            sa.Column("kind", sa.String(), nullable=False),
+            sa.Column("payload_json", sa.Text(), nullable=False),
+            sa.Column("created_at", sa.DateTime(), nullable=False, index=True),
+            sa.UniqueConstraint("run_id", "seq", name="uq_runcheckpoint_run_seq"),
+        )
 
     # Add agent_run_id FK to meshprogressevent
-    with op.batch_alter_table("meshprogressevent") as batch_op:
-        batch_op.add_column(
-            sa.Column(
-                "agent_run_id",
-                sa.String(),
-                sa.ForeignKey("agentrun.id", ondelete="SET NULL"),
-                nullable=True,
+    if "agent_run_id" not in _col_set(conn, "meshprogressevent"):
+        with op.batch_alter_table("meshprogressevent") as batch_op:
+            batch_op.add_column(
+                sa.Column(
+                    "agent_run_id",
+                    sa.String(),
+                    sa.ForeignKey("agentrun.id", ondelete="SET NULL"),
+                    nullable=True,
+                )
             )
-        )
-        batch_op.create_index("ix_meshprogressevent_agent_run_id", ["agent_run_id"])
+            batch_op.create_index("ix_meshprogressevent_agent_run_id", ["agent_run_id"])
 
 
 def downgrade() -> None:
