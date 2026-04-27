@@ -43,6 +43,12 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        # Acquire a PostgreSQL advisory lock so concurrent migration processes
+        # (e.g., multiple pods starting up) don't race each other.
+        if connectable.dialect.name == "postgresql":
+            from sqlalchemy import text as _text
+            connection.execute(_text("SELECT pg_advisory_lock(20260301)"))
+
         context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
 
         with context.begin_transaction():
