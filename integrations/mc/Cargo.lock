@@ -2229,7 +2229,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mc"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2275,7 +2275,7 @@ dependencies = [
 
 [[package]]
 name = "mc-mesh-packs"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "mc-mesh-sandbox",
  "mc-mesh-secrets",
@@ -2288,7 +2288,7 @@ dependencies = [
 
 [[package]]
 name = "mc-mesh-receipts"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -2302,7 +2302,7 @@ dependencies = [
 
 [[package]]
 name = "mc-mesh-sandbox"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "dirs",
  "hex",
@@ -2317,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "mc-mesh-secrets"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "keyring",
  "reqwest 0.12.28",
@@ -2331,7 +2331,7 @@ dependencies = [
 
 [[package]]
 name = "mc-mesh-sync"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
