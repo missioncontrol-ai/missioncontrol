@@ -38,6 +38,13 @@ def upgrade() -> None:
             ["owner_subject", "idempotency_key"],
         )
 
+    # DIAGNOSTIC: log which tables exist after this migration
+    from sqlalchemy import inspect as _inspect
+    import logging
+    _log = logging.getLogger(__name__)
+    tables = _inspect(conn).get_table_names()
+    _log.warning("DIAG 0025 post-upgrade tables: %s", sorted(tables))
+
 
 def downgrade() -> None:
     op.drop_constraint("uq_agentrun_owner_idempotency", "agentrun", type_="unique")
