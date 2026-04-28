@@ -121,6 +121,8 @@ pub enum McCommand {
     MeshSync(cmd::sync::SyncCmd),
     /// Discover mc-server nodes and write ~/.mc/servers.
     Discover(discover::DiscoverArgs),
+    /// Launch the terminal UI (ratatui) for fleet monitoring and management.
+    Tui(TuiArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -229,6 +231,58 @@ pub enum SecretsCommand {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Manage Infisical connection profiles (multi-account, multi-instance).
+    #[command(subcommand)]
+    Infisical(InfisicalProfileCommand),
+}
+
+/// Subcommands for `mc secrets infisical` — manage multi-account Infisical
+/// connection profiles stored at `~/.mc/infisical_profiles.json`.
+#[derive(Subcommand, Debug)]
+pub enum InfisicalProfileCommand {
+    /// Add or update a named Infisical connection profile.
+    Add {
+        /// Profile name (e.g. "work", "personal").
+        name: String,
+        /// Infisical instance URL (default: https://app.infisical.com).
+        #[arg(long, default_value = "https://app.infisical.com")]
+        site_url: String,
+        /// Service token (mutually exclusive with --client-id / --client-secret).
+        #[arg(long)]
+        service_token: Option<String>,
+        /// Universal Auth client ID.
+        #[arg(long)]
+        client_id: Option<String>,
+        /// Universal Auth client secret.
+        #[arg(long)]
+        client_secret: Option<String>,
+        /// Default project ID.
+        #[arg(long)]
+        project_id: Option<String>,
+        /// Default environment slug.
+        #[arg(long, default_value = "prod")]
+        environment: String,
+        /// Make this the active profile after adding.
+        #[arg(long, default_value_t = true)]
+        activate: bool,
+    },
+    /// List all Infisical profiles (marks the active one).
+    List,
+    /// Switch the active Infisical profile.
+    Use {
+        /// Profile name to activate.
+        name: String,
+    },
+    /// Test connectivity to the active (or specified) Infisical profile.
+    Test {
+        /// Profile name to test (default: active profile).
+        name: Option<String>,
+    },
+    /// Remove a named Infisical profile.
+    Rm {
+        /// Profile name to remove.
+        name: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -266,6 +320,13 @@ pub struct StatusArgs {
     /// Validate active lease by sending a heartbeat call.
     #[arg(long, default_value_t = false)]
     verify_lease: bool,
+}
+
+#[derive(Args, Debug, Default)]
+pub struct TuiArgs {
+    /// Open the TUI pre-focused on a specific mission by ID.
+    #[arg(long)]
+    pub mission: Option<String>,
 }
 
 #[derive(Args, Debug, Default)]
@@ -738,6 +799,27 @@ pub async fn run(
         McCommand::Receipts(sub) => cmd::receipts::run(sub).map_err(Into::into),
         McCommand::MeshSync(sub) => cmd::sync::run(Some(sub)).map_err(Into::into),
         McCommand::Discover(args) => discover::run(args).await,
+        McCommand::Tui(args) => handle_tui(args, &config),
+    }
+}
+
+fn handle_tui(args: TuiArgs, #[allow(unused_variables)] config: &McConfig) -> Result<()> {
+    #[cfg(feature = "tui")]
+    {
+        let cfg = mc_tui::TuiConfig {
+            base_url: config.base_url.to_string(),
+            token: config.token.clone(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            initial_mission: args.mission,
+        };
+        mc_tui::run(cfg)
+    }
+    #[cfg(not(feature = "tui"))]
+    {
+        let _ = args;
+        anyhow::bail!(
+            "mc was built without the `tui` feature — rebuild with `--features tui` to use `mc tui`"
+        )
     }
 }
 
@@ -1616,6 +1698,7 @@ async fn handle_secrets(
             );
             Ok(())
         }
+        SecretsCommand::Infisical(cmd) => handle_infisical_profiles(cmd, output_mode),
     }
 }
 
@@ -1671,6 +1754,113 @@ async fn handle_secrets_provider(
             Ok(())
         }
     }
+}
+
+fn handle_infisical_profiles(command: InfisicalProfileCommand, output_mode: OutputMode) -> Result<()> {
+    let path = crate::config::mc_home_dir().join("infisical_profiles.json");
+    let mut map = if path.exists() {
+        let raw = fs::read_to_string(&path)?;
+        serde_json::from_str::<mc_mesh_secrets::InfisicalProfileMap>(&raw)
+            .unwrap_or_default()
+    } else {
+        mc_mesh_secrets::InfisicalProfileMap::default()
+    };
+
+    let save = |map: &mc_mesh_secrets::InfisicalProfileMap| -> Result<()> {
+        if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+        fs::write(&path, serde_json::to_string_pretty(map)?)?;
+        Ok(())
+    };
+
+    match command {
+        InfisicalProfileCommand::Add {
+            name,
+            site_url,
+            service_token,
+            client_id,
+            client_secret,
+            project_id,
+            environment,
+            activate,
+        } => {
+            use mc_mesh_secrets::InfisicalConfig;
+            let cfg = InfisicalConfig {
+                site_url,
+                service_token: service_token.filter(|s| !s.is_empty()),
+                client_id: client_id.filter(|s| !s.is_empty()),
+                client_secret: client_secret.filter(|s| !s.is_empty()),
+                default_project_id: project_id.filter(|s| !s.is_empty()),
+                default_environment: environment,
+            };
+            map.upsert(name.clone(), cfg);
+            if activate {
+                let _ = map.set_active(&name);
+            }
+            save(&map)?;
+            output::print_value(output_mode, &json!({
+                "ok": true,
+                "name": name,
+                "active": map.active,
+                "path": path,
+            }));
+        }
+        InfisicalProfileCommand::List => {
+            let profiles: Vec<serde_json::Value> = map.profiles.iter().map(|(name, cfg)| {
+                json!({
+                    "name": name,
+                    "active": map.active.as_deref() == Some(name),
+                    "site_url": cfg.site_url,
+                    "auth_type": if cfg.service_token.is_some() { "service_token" } else { "universal_auth" },
+                    "configured": cfg.is_configured(),
+                    "default_project_id": cfg.default_project_id,
+                    "default_environment": cfg.default_environment,
+                })
+            }).collect();
+            output::print_value(output_mode, &json!({ "profiles": profiles, "active": map.active }));
+        }
+        InfisicalProfileCommand::Use { name } => {
+            map.set_active(&name).map_err(|e| anyhow::anyhow!("{e}"))?;
+            save(&map)?;
+            output::print_value(output_mode, &json!({ "ok": true, "active": name }));
+        }
+        InfisicalProfileCommand::Test { name } => {
+            let profile_name = name.as_deref().or(map.active.as_deref());
+            let Some(profile_name) = profile_name else {
+                anyhow::bail!("no active profile — run `mc secrets infisical add <name>` first");
+            };
+            let cfg = map.profiles.get(profile_name)
+                .ok_or_else(|| anyhow::anyhow!("profile '{profile_name}' not found"))?;
+            // Quick connectivity test: fetch /api/v3/auth endpoint (no auth)
+            let test_url = format!("{}/api/v1/auth/token/renew", cfg.site_url.trim_end_matches('/'));
+            let rt = tokio::runtime::Handle::current();
+            let resp = rt.block_on(async {
+                reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(10))
+                    .build()
+                    .unwrap()
+                    .post(&test_url)
+                    .send()
+                    .await
+            });
+            let reachable = matches!(resp, Ok(r) if r.status().as_u16() < 500);
+            output::print_value(output_mode, &json!({
+                "ok": reachable,
+                "profile": profile_name,
+                "site_url": cfg.site_url,
+                "reachable": reachable,
+            }));
+        }
+        InfisicalProfileCommand::Rm { name } => {
+            let removed = map.remove(&name);
+            if removed { save(&map)?; }
+            output::print_value(output_mode, &json!({
+                "ok": removed,
+                "name": name,
+                "active": map.active,
+            }));
+        }
+    }
+    Ok(())
 }
 
 async fn handle_data(

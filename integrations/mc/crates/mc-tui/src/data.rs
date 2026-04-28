@@ -1,0 +1,120 @@
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+// ─── domain types ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionSummary {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KlusterSummary {
+    pub id: String,
+    #[serde(default)]
+    pub mission_id: Option<String>,
+    pub name: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskSummary {
+    pub id: i32,
+    pub public_id: String,
+    pub kluster_id: String,
+    pub title: String,
+    pub status: String,
+    pub owner: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+// ─── trait ───────────────────────────────────────────────────────────────────
+
+#[async_trait::async_trait]
+pub trait DataClient: Send + Sync {
+    async fn ping(&self) -> Result<()>;
+    async fn list_missions(&self) -> Result<Vec<MissionSummary>>;
+    async fn list_klusters(&self, mission_id: &str) -> Result<Vec<KlusterSummary>>;
+    async fn list_tasks(&self, kluster_id: &str) -> Result<Vec<TaskSummary>>;
+}
+
+// ─── fixture client (test / offline use) ─────────────────────────────────────
+
+#[derive(Default)]
+pub struct FixtureDataClient {
+    pub missions: Vec<MissionSummary>,
+}
+
+#[async_trait::async_trait]
+impl DataClient for FixtureDataClient {
+    async fn ping(&self) -> Result<()> { Ok(()) }
+
+    async fn list_missions(&self) -> Result<Vec<MissionSummary>> {
+        Ok(self.missions.clone())
+    }
+
+    async fn list_klusters(&self, _mission_id: &str) -> Result<Vec<KlusterSummary>> {
+        Ok(vec![])
+    }
+
+    async fn list_tasks(&self, _kluster_id: &str) -> Result<Vec<TaskSummary>> {
+        Ok(vec![])
+    }
+}
+
+// ─── remote client (wraps reqwest, talks to mc-server / backend) ──────────────
+
+pub struct RemoteDataClient {
+    pub base_url: String,
+    pub token: Option<String>,
+    client: reqwest::Client,
+}
+
+impl RemoteDataClient {
+    pub fn new(base_url: impl Into<String>, token: Option<String>) -> Result<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()?;
+        Ok(Self { base_url: base_url.into(), token, client })
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base_url.trim_end_matches('/'), path)
+    }
+
+    async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let mut req = self.client.get(self.url(path));
+        if let Some(tok) = &self.token {
+            req = req.bearer_auth(tok);
+        }
+        let resp = req.send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("backend returned {status} for {path}");
+        }
+        Ok(resp.json::<T>().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl DataClient for RemoteDataClient {
+    async fn ping(&self) -> Result<()> {
+        self.get::<serde_json::Value>("/health").await?;
+        Ok(())
+    }
+
+    async fn list_missions(&self) -> Result<Vec<MissionSummary>> {
+        self.get("/missions").await
+    }
+
+    async fn list_klusters(&self, mission_id: &str) -> Result<Vec<KlusterSummary>> {
+        self.get(&format!("/missions/{mission_id}/k")).await
+    }
+
+    async fn list_tasks(&self, kluster_id: &str) -> Result<Vec<TaskSummary>> {
+        self.get(&format!("/klusters/{kluster_id}/t")).await
+    }
+}

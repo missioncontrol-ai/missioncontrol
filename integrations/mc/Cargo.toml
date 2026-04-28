@@ -1,3 +1,7 @@
+[workspace]
+members = ["crates/mc-tui", "crates/mc-tui-widgets"]
+resolver = "2"
+
 [package]
 name = "mc"
 version = "0.3.0"
@@ -45,6 +49,10 @@ mc-mesh-packs = { path = "../mc-mesh/crates/mc-mesh-packs" }
 mc-mesh-receipts = { path = "../mc-mesh/crates/mc-mesh-receipts" }
 mc-mesh-sync = { path = "../mc-mesh/crates/mc-mesh-sync" }
 mc-mesh-secrets = { path = "../mc-mesh/crates/mc-mesh-secrets" }
+mc-tui = { path = "crates/mc-tui", optional = true }
+
+[features]
+tui = ["mc-tui"]
 
 [dev-dependencies]
 httpmock = "0.6"

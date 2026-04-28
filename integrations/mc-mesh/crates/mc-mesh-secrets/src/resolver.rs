@@ -1,7 +1,26 @@
 use crate::client::InfisicalClient;
-use crate::config::InfisicalConfig;
+use crate::config::{InfisicalConfig, InfisicalProfileMap};
 use crate::error::{Result, SecretsError};
 use crate::types::{CredentialKind, CredentialSource, ResolvedCredentials};
+
+/// Resolve a list of credential sources using a multi-profile map.
+///
+/// `Infisical` sources can optionally specify a profile name via the
+/// `profile` field (reserved for future CredentialKind extension).
+/// For now, the active profile is selected from the map.
+pub async fn resolve_credentials_with_profiles(
+    sources: &[CredentialSource],
+    profiles: &InfisicalProfileMap,
+) -> Result<ResolvedCredentials> {
+    let active = profiles.active_profile();
+    match active {
+        Some(cfg) => resolve_credentials_with_config(sources, cfg).await,
+        None => {
+            // No active profile — only Literal and Env sources work
+            resolve_credentials_with_config(sources, &InfisicalConfig::default()).await
+        }
+    }
+}
 
 /// Resolve a list of credential sources into concrete env-var values.
 ///
@@ -11,6 +30,13 @@ use crate::types::{CredentialKind, CredentialSource, ResolvedCredentials};
 ///
 /// The first resolution error is returned immediately (fail-fast).
 pub async fn resolve_credentials(
+    sources: &[CredentialSource],
+    cfg: &InfisicalConfig,
+) -> Result<ResolvedCredentials> {
+    resolve_credentials_with_config(sources, cfg).await
+}
+
+async fn resolve_credentials_with_config(
     sources: &[CredentialSource],
     cfg: &InfisicalConfig,
 ) -> Result<ResolvedCredentials> {

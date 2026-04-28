@@ -12,6 +12,7 @@ pub struct InfisicalClient {
 
 impl InfisicalClient {
     pub fn new(cfg: &InfisicalConfig) -> Result<Self> {
+        let token = cfg.service_token.clone().unwrap_or_default();
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(5))
@@ -19,7 +20,7 @@ impl InfisicalClient {
             .map_err(|e| SecretsError::Http(format!("failed to build reqwest client: {e}")))?;
         Ok(Self {
             site_url: cfg.site_url.trim_end_matches('/').to_string(),
-            token: cfg.service_token.clone(),
+            token,
             http,
         })
     }
