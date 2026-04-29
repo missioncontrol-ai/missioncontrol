@@ -73,7 +73,7 @@ pub struct LaunchContext {
     pub roster: Vec<serde_json::Value>,
     /// If true, the runtime should attempt to enable RTK (Rust Token Killer) hooks
     /// for output compression before spawning the agent process.
-    pub rtk: bool,
+    pub with_rtk: bool,
 }
 
 /// A handle to a running agent runtime process.

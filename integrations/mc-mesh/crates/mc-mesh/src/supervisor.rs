@@ -56,7 +56,7 @@ impl Supervisor {
             // Profile and roster are injected per-task in the task loop, not at launch time.
             profile: None,
             roster: vec![],
-            rtk: false,
+            with_rtk: false,
         };
 
         let handle = runtime.launch(ctx).await?;

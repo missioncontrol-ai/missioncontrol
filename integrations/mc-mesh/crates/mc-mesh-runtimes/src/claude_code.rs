@@ -22,10 +22,10 @@ pub struct ClaudeCodeRuntime {
     capabilities: Vec<Capability>,
     version: String,
     install_done: OnceLock<()>,
-    // SAFETY: This runtime instance is used for exactly one agent session. `rtk`
+    // SAFETY: This runtime instance is used for exactly one agent session. `with_rtk`
     // is written once in `launch()` before `inject_task()` is ever called, so
     // the Relaxed ordering is sufficient.
-    rtk: AtomicBool,
+    with_rtk: AtomicBool,
     /// Tracks whether RTK hooks have already been verified/installed for this runtime
     /// instance. Avoids running a subprocess on every task injection.
     rtk_hooks_done: OnceLock<()>,
@@ -43,7 +43,7 @@ impl ClaudeCodeRuntime {
             ],
             version: detect_version(),
             install_done: OnceLock::new(),
-            rtk: AtomicBool::new(false),
+            with_rtk: AtomicBool::new(false),
             rtk_hooks_done: OnceLock::new(),
         }
     }
@@ -202,7 +202,7 @@ impl AgentRuntime for ClaudeCodeRuntime {
         std::fs::create_dir_all(&ctx.work_dir)?;
 
         // Capture rtk preference from launch context.
-        self.rtk.store(ctx.rtk, Ordering::Relaxed);
+        self.with_rtk.store(ctx.with_rtk, Ordering::Relaxed);
 
         // Quick check that `claude` is on PATH.
         let output = std::process::Command::new("claude")
@@ -245,7 +245,7 @@ impl AgentRuntime for ClaudeCodeRuntime {
         // If RTK compression was requested, attempt to install hooks before spawning.
         // The OnceLock ensures we only run the subprocess once per runtime instance.
         'rtk_setup: {
-            if !self.rtk.load(Ordering::Relaxed) {
+            if !self.with_rtk.load(Ordering::Relaxed) {
                 break 'rtk_setup;
             }
             if self.rtk_hooks_done.get().is_some() {
@@ -253,7 +253,7 @@ impl AgentRuntime for ClaudeCodeRuntime {
             }
             if !crate::shared::is_rtk_installed() {
                 tracing::warn!(
-                    "RTK requested (--rtk) but rtk binary not found in PATH; running without compression"
+                    "RTK requested (--with-rtk) but rtk binary not found in PATH; running without compression"
                 );
                 break 'rtk_setup;
             }
