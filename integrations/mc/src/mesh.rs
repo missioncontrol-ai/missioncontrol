@@ -292,7 +292,7 @@ pub async fn handle(
     }
 }
 
-fn not_yet(cmd: &str) -> Result<()> {
+fn _not_yet(cmd: &str) -> Result<()> {
     println!("{cmd}: not yet implemented");
     Ok(())
 }
@@ -388,7 +388,7 @@ async fn auto_register_node(config: &McConfig) {
             std::process::Command::new("hostname")
                 .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .map_err(|e| std::env::VarError::NotPresent.into())
+                .map_err(|_| std::env::VarError::NotPresent.into())
         })
         .unwrap_or_else(|_: Box<dyn std::error::Error>| "unknown".to_string());
 
