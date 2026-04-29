@@ -36,6 +36,10 @@ pub fn mgmt_socket_path() -> PathBuf {
     mc_home_dir().join("mc-mesh-mgmt.sock")
 }
 
+pub fn secrets_socket_path() -> PathBuf {
+    mc_home_dir().join("mc-mesh-secrets.sock")
+}
+
 pub fn sync_cache_dir() -> PathBuf {
     mc_home_dir().join("sync")
 }

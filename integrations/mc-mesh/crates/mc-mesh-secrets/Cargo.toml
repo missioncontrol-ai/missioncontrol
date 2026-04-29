@@ -11,6 +11,7 @@ tracing = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
 urlencoding = "2"
+uuid = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

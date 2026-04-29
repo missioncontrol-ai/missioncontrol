@@ -4,6 +4,7 @@ pub mod types;
 pub mod client;
 pub mod redact;
 pub mod resolver;
+pub mod session;
 pub mod token_cache;
 
 #[cfg(target_os = "linux")]
@@ -16,6 +17,7 @@ pub use types::{CredentialSource, CredentialKind, ResolvedCredentials};
 pub use redact::SecretRedactor;
 pub use resolver::{resolve_credentials, resolve_credentials_with_profiles};
 pub use token_cache::TokenCache;
+pub use session::SessionStore;
 
 #[cfg(target_os = "linux")]
 pub use keyring::{

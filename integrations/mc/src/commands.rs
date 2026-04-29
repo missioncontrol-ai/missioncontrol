@@ -283,6 +283,26 @@ pub enum InfisicalProfileCommand {
         /// Profile name to remove.
         name: String,
     },
+    /// Fetch a secret value from Infisical using the active profile.
+    Get {
+        /// Secret name (key) to fetch.
+        secret_name: String,
+        /// Override the profile to use (default: active profile).
+        #[arg(long)]
+        profile: Option<String>,
+        /// Override the project ID (default: profile's default_project_id).
+        #[arg(long)]
+        project_id: Option<String>,
+        /// Override the environment slug (default: profile's default_environment).
+        #[arg(long)]
+        environment: Option<String>,
+        /// Secret path (default: /).
+        #[arg(long, default_value = "/")]
+        path: String,
+        /// Print the raw value without redaction (default: redacted).
+        #[arg(long)]
+        reveal: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1857,6 +1877,47 @@ fn handle_infisical_profiles(command: InfisicalProfileCommand, output_mode: Outp
                 "ok": removed,
                 "name": name,
                 "active": map.active,
+            }));
+        }
+        InfisicalProfileCommand::Get {
+            secret_name,
+            profile,
+            project_id,
+            environment,
+            path,
+            reveal,
+        } => {
+            // Resolve which profile config to use.
+            let cfg = match &profile {
+                Some(n) => map.profiles.get(n).cloned()
+                    .ok_or_else(|| anyhow::anyhow!("profile '{}' not found", n))?,
+                None => map.active_profile().cloned()
+                    .ok_or_else(|| anyhow::anyhow!("no active Infisical profile — run: mc secrets infisical add <name> --activate"))?,
+            };
+
+            let proj = project_id
+                .as_deref()
+                .or(cfg.default_project_id.as_deref())
+                .unwrap_or("")
+                .to_string();
+            let env_slug = environment.unwrap_or_else(|| cfg.default_environment.clone());
+
+            let client = mc_mesh_secrets::InfisicalClient::new(&cfg)?;
+            let rt = tokio::runtime::Handle::current();
+            let value = rt.block_on(client.fetch_secret(&secret_name, &proj, &env_slug, &path))?;
+
+            let display = if reveal || output_mode.is_machine() {
+                value.clone()
+            } else {
+                "***redacted***".to_string()
+            };
+            output::print_value(output_mode, &json!({
+                "ok": true,
+                "secret_name": secret_name,
+                "project_id": proj,
+                "environment": env_slug,
+                "path": path,
+                "value": display,
             }));
         }
     }

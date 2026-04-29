@@ -64,6 +64,8 @@ async fn main() -> anyhow::Result<()> {
 
     let config = AppConfig {
         api_proxy: args.api_proxy.clone(),
+        node_id: args.node_id.unwrap_or(1),
+        advertise_url: args.advertise_url.clone(),
     };
 
     let db = mc_server::db::connect().await?;

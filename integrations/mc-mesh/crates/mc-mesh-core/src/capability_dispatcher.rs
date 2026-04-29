@@ -6,7 +6,7 @@ use mc_mesh_packs::{
     PolicyBundle,
 };
 use mc_mesh_receipts::{Receipt, ReceiptStore};
-use mc_mesh_secrets::{resolve_credentials, InfisicalConfig};
+use mc_mesh_secrets::{resolve_credentials, InfisicalConfig, SessionStore};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -70,6 +70,11 @@ pub struct CapabilityDispatcher {
     infisical_config: Option<InfisicalConfig>,
     policy: PolicyBundle,
     receipt_store: Option<Arc<ReceiptStore>>,
+    /// When set, credentials are delivered via the secrets gateway socket
+    /// instead of being injected directly as env vars. Agents receive
+    /// `MC_SECRETS_SOCKET` and `MC_SECRETS_SESSION` in their environment.
+    session_store: Option<Arc<SessionStore>>,
+    secrets_socket_path: Option<std::path::PathBuf>,
 }
 
 impl CapabilityDispatcher {
@@ -83,12 +88,26 @@ impl CapabilityDispatcher {
             infisical_config,
             policy,
             receipt_store: None,
+            session_store: None,
+            secrets_socket_path: None,
         }
     }
 
     /// Attach a receipt store; receipts will be written after every dispatch.
     pub fn with_receipt_store(mut self, store: Arc<ReceiptStore>) -> Self {
         self.receipt_store = Some(store);
+        self
+    }
+
+    /// Enable the broker pattern: credentials are delivered via the secrets
+    /// gateway socket instead of being injected directly as env vars.
+    pub fn with_session_store(
+        mut self,
+        store: Arc<SessionStore>,
+        socket_path: std::path::PathBuf,
+    ) -> Self {
+        self.session_store = Some(store);
+        self.secrets_socket_path = Some(socket_path);
         self
     }
 
@@ -204,9 +223,28 @@ impl CapabilityDispatcher {
         let timeout = Duration::from_secs(req.timeout_secs.unwrap_or(30));
         let start = Instant::now();
 
+        // Broker pattern: if a session store is wired in, register the resolved
+        // credentials as an ephemeral session and give the agent the socket path
+        // + session ID. Otherwise inject raw values (legacy / dev mode).
+        let (credential_env, session_cleanup) =
+            if let (Some(store), Some(socket)) = (&self.session_store, &self.secrets_socket_path) {
+                let session_id = store.create(credentials.env_vars);
+                let env = vec![
+                    (
+                        "MC_SECRETS_SOCKET".to_string(),
+                        socket.to_string_lossy().to_string(),
+                    ),
+                    ("MC_SECRETS_SESSION".to_string(), session_id.clone()),
+                ];
+                let cleanup = Some((Arc::clone(store), session_id));
+                (env, cleanup)
+            } else {
+                (credentials.into_env_pairs(), None)
+            };
+
         let run_result = match &manifest.backend {
             Backend::Subprocess { command, args } => {
-                run_subprocess(command, args, &req.args, &credentials.into_env_pairs(), timeout)
+                run_subprocess(command, args, &req.args, &credential_env, timeout)
                     .await
             }
             Backend::Builtin { name } => {
@@ -219,6 +257,11 @@ impl CapabilityDispatcher {
         };
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
+
+        // Clean up the credential session now that the subprocess has exited.
+        if let Some((store, sid)) = session_cleanup {
+            store.remove(&sid);
+        }
 
         match run_result {
             Ok((stdout, exit_code)) => {

@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 use crate::attach_gateway;
 use crate::config::DaemonConfig;
 use crate::mgmt_gateway::MgmtGateway;
+use crate::secrets_gateway::SecretsGateway;
 use crate::supervisor::Supervisor;
 use crate::task_loop;
 
@@ -172,6 +173,20 @@ pub async fn run(cli: CliOverrides) -> Result<()> {
         }
     });
 
+    // Create the session store shared between the secrets gateway and the dispatcher.
+    let session_store = Arc::new(mc_mesh_secrets::SessionStore::new());
+    let secrets_socket = paths::secrets_socket_path();
+
+    // Start the secrets gateway (broker for agent credential requests).
+    {
+        let gw = SecretsGateway::new(Arc::clone(&session_store), secrets_socket.clone());
+        tokio::spawn(async move {
+            if let Err(e) = gw.run().await {
+                tracing::error!("secrets gateway error: {e}");
+            }
+        });
+    }
+
     // Start the management gateway (Unix socket + TCP, JSON-RPC 2.0).
     {
         let registry = Arc::new(match PackRegistry::load_builtin() {
@@ -186,7 +201,8 @@ pub async fn run(cli: CliOverrides) -> Result<()> {
             .map_err(|e| anyhow::anyhow!("failed to open receipt store at {}: {e}", receipts_path.display()))?;
         let dispatcher = Arc::new(
             CapabilityDispatcher::new(Arc::clone(&registry), PolicyBundle::allow_all(), None)
-                .with_receipt_store(Arc::new(receipt_store)),
+                .with_receipt_store(Arc::new(receipt_store))
+                .with_session_store(Arc::clone(&session_store), secrets_socket),
         );
         let mgmt_gw = MgmtGateway::new(dispatcher, registry);
         tokio::spawn(async move {
@@ -210,7 +226,8 @@ pub async fn run(cli: CliOverrides) -> Result<()> {
         }
     }
 
-    // Clean up socket on exit.
+    // Clean up sockets on exit.
     let _ = std::fs::remove_file(attach_gateway::socket_path());
+    let _ = std::fs::remove_file(paths::secrets_socket_path());
     Ok(())
 }

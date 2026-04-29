@@ -1329,6 +1329,7 @@ dependencies = [
  "mc-mesh-packs",
  "mc-mesh-receipts",
  "mc-mesh-runtimes",
+ "mc-mesh-secrets",
  "mc-mesh-work",
  "serde",
  "serde_json",
@@ -1439,6 +1440,7 @@ dependencies = [
  "tokio",
  "tracing",
  "urlencoding",
+ "uuid",
 ]
 
 [[package]]
