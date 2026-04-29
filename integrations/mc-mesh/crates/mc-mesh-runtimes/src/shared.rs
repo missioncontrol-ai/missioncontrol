@@ -177,18 +177,16 @@ pub fn is_rtk_installed() -> bool {
 ///
 /// Returns `Ok(true)` if hooks were installed/updated, `Ok(false)` if already present.
 /// Returns `Err` if rtk is not installed or the install command fails.
-pub fn ensure_rtk_hooks(hooks_dir: &std::path::Path) -> anyhow::Result<bool> {
+pub async fn ensure_rtk_hooks(_hooks_dir: &std::path::Path) -> anyhow::Result<bool> {
     if !is_rtk_installed() {
         anyhow::bail!("rtk binary not found in PATH");
     }
 
     // `rtk init --check` exits 0 if hooks are already configured, non-zero otherwise.
-    let check = std::process::Command::new("rtk")
-        .arg("init")
-        .arg("--check")
-        .current_dir(hooks_dir)
+    let check = tokio::process::Command::new("rtk")
+        .args(["init", "--check"])
         .output()
-        .map_err(|e| anyhow::anyhow!("failed to run `rtk init --check`: {e}"))?;
+        .await?;
 
     if check.status.success() {
         // Already configured.
@@ -196,18 +194,14 @@ pub fn ensure_rtk_hooks(hooks_dir: &std::path::Path) -> anyhow::Result<bool> {
     }
 
     // Not configured — run `rtk init` (auto-detects Claude Code).
-    let install = std::process::Command::new("rtk")
+    let install = tokio::process::Command::new("rtk")
         .arg("init")
-        .current_dir(hooks_dir)
         .output()
-        .map_err(|e| anyhow::anyhow!("failed to run `rtk init`: {e}"))?;
+        .await?;
 
     if !install.status.success() {
         let stderr = String::from_utf8_lossy(&install.stderr);
-        anyhow::bail!(
-            "`rtk init` failed (exit {}): {stderr}",
-            install.status
-        );
+        anyhow::bail!("rtk init failed: {}", stderr.trim());
     }
 
     Ok(true)

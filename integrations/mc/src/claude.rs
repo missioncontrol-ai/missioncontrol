@@ -55,7 +55,7 @@ pub async fn run_launch(
     profile: String,
     new: bool,
     _headless: bool,
-    _with_rtk: bool,
+    _rtk: bool,
     _passthrough: Vec<String>,
     config: &McConfig,
 ) -> Result<()> {

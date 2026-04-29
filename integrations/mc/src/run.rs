@@ -78,8 +78,8 @@ pub struct RunArgs {
     pub event: Option<String>,
 
     /// Enable RTK token compression for this agent session (soft: warns if rtk not installed).
-    #[arg(long, default_value_t = false)]
-    pub with_rtk: bool,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub rtk: bool,
 
     /// Args forwarded verbatim to the runtime binary (after --).
     #[arg(last = true)]
@@ -98,7 +98,7 @@ pub async fn run(args: RunArgs, client: &MissionControlClient, config: &McConfig
                 args.headless,
                 args.mission,
                 args.mode,
-                args.with_rtk,
+                args.rtk,
                 args.passthrough,
                 client,
                 config,
@@ -126,7 +126,7 @@ async fn dispatch_launch(
     headless: bool,
     mission: Option<String>,
     mode: RunMode,
-    with_rtk: bool,
+    rtk: bool,
     passthrough: Vec<String>,
     client: &MissionControlClient,
     config: &McConfig,
@@ -219,10 +219,10 @@ async fn dispatch_launch(
 
     // Direct launch — no mesh participation.
     match runtime.as_str() {
-        "claude" => claude::run_launch(profile, new, headless, with_rtk, passthrough, config).await,
-        "codex" => codex::run_launch(profile, new, headless, with_rtk, passthrough, config).await,
-        "gemini" => gemini::run_gemini_compat(Some(profile), with_rtk, passthrough, client, config).await,
-        "goose" => goose::run_launch(profile, new, headless, with_rtk, passthrough, config).await,
+        "claude" => claude::run_launch(profile, new, headless, rtk, passthrough, config).await,
+        "codex" => codex::run_launch(profile, new, headless, rtk, passthrough, config).await,
+        "gemini" => gemini::run_gemini_compat(Some(profile), rtk, passthrough, client, config).await,
+        "goose" => goose::run_launch(profile, new, headless, rtk, passthrough, config).await,
         other => {
             eprintln!("mc: unknown runtime '{}'. Known: claude, codex, gemini, goose", other);
             std::process::exit(1);
