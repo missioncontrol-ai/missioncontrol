@@ -257,20 +257,16 @@ impl AgentRuntime for ClaudeCodeRuntime {
                 );
                 break 'rtk_setup;
             }
-            // The claude hooks dir lives at ~/.claude/hooks/ (global).
-            // We use the global path as the canonical install target for the daemon.
-            let hooks_dir = match dirs::home_dir() {
-                Some(home) => home.join(".claude").join("hooks"),
-                None => {
-                    tracing::warn!("RTK: could not determine home directory; skipping hook setup");
-                    break 'rtk_setup;
-                }
-            };
+            if dirs::home_dir().is_none() {
+                tracing::warn!("RTK: could not determine home directory; skipping hook setup");
+                break 'rtk_setup;
+            }
+            let hooks_dir = dirs::home_dir().unwrap().join(".claude").join("hooks");
             if let Err(e) = std::fs::create_dir_all(&hooks_dir) {
                 tracing::warn!("RTK: could not create hooks dir {}: {e}", hooks_dir.display());
                 break 'rtk_setup;
             }
-            match crate::shared::ensure_rtk_hooks(&hooks_dir).await {
+            match crate::shared::ensure_rtk_hooks().await {
                 Ok(true) => {
                     tracing::info!("RTK hooks installed in {}", hooks_dir.display());
                     self.rtk_hooks_done.set(()).ok();

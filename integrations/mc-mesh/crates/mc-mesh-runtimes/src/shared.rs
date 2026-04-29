@@ -173,11 +173,11 @@ pub fn is_rtk_installed() -> bool {
     which::which("rtk").is_ok()
 }
 
-/// Verifies or installs RTK hooks for a Claude Code profile hooks directory.
+/// Verifies or installs RTK hooks globally via `rtk init`.
 ///
 /// Returns `Ok(true)` if hooks were installed/updated, `Ok(false)` if already present.
 /// Returns `Err` if rtk is not installed or the install command fails.
-pub async fn ensure_rtk_hooks(_hooks_dir: &std::path::Path) -> anyhow::Result<bool> {
+pub async fn ensure_rtk_hooks() -> anyhow::Result<bool> {
     if !is_rtk_installed() {
         anyhow::bail!("rtk binary not found in PATH");
     }
