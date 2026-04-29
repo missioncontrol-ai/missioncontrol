@@ -53,7 +53,7 @@ pub struct TaskSpec {
 }
 
 /// Context passed to `AgentRuntime::launch`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LaunchContext {
     pub agent_id: String,
     pub mission_id: String,
