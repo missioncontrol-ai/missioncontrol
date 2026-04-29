@@ -1,173 +1,160 @@
-# MC / Rust CLI
+# MC — Rust CLI & Daemon Reference
 
-The `mc` binary (previously known as the `missioncontrol-mcp` Python bridge) is the canonical Rust-native local agent gateway.
-It carries the agent context, governance headers, and SSE matrix telemetry in a single binary that can ship to laptops, swarm-style
-queen hosts, or local planners that need an exceptional offline/online experience. `mc` speaks the same FastAPI surface as the
- Python bridge (tools, explorer, governance, sync) while adding the matrix/doctor/booster hardening documented in
- [`docs/REAL-TIME.md`](REAL-TIME.md).
+`mc` is the primary operator and agent interface for MissionControl. It owns all interactivity:
+fleet views, agent launch, capability dispatch, secrets management, and the TUI.
 
-## Why Rust-first
+`mc-mesh` is the headless executor daemon (like kubelet to `mc`'s kubectl). Agents reach it via
+Unix socket; operators never interact with it directly.
 
-- All MCP tooling (tools/explorer/admin/approvals) lives inside a single Rust binary so we can bundle TLS, telemetry, and WASM
-  booster hooks without spawning Python subprocesses on every call.
-- The compiled binary model improves enterprise operability: deterministic deploy artifacts, lower runtime dependency drift,
-  and easier endpoint hardening for security teams.
-- The daemon command keeps a live `/events/stream` connection, features reconnection/backoff, and fans the stream out via
-  SSE/WebSocket so swarm-style teams observe approvals/inbox events without polling.
-- The doctor command (built into the same binary) now doubles as the self-repair and diagnostics entry point for teams that
-  need hardened local deployments.
+`mc-server` is the Axum HTTP server that backs the REST/SSE API.
 
-## Enterprise Security Posture
+## Installation
 
-- `mc` keeps auth/session handling, policy headers, and MCP transport in one audited binary path.
-- MissionControl enforces authorization server-side; agents request actions, they do not own control-plane credentials.
-- Profile/session isolation supports multi-agent and multi-session operation on shared hosts without global config collisions.
-- Publish provenance (ledger + publication records) provides change traceability for security and compliance reviews.
+```bash
+cd integrations/mc && cargo build --release
+cp target/release/mc ~/.local/bin/mc
 
-## Running the CLI
+cd integrations/mc-mesh && cargo build --release
+cp target/release/mc-mesh ~/.local/bin/mc-mesh
 
-1. Configure your environment:
-   1. `export MC_BASE_URL=http://localhost:8008`
-   2. `export MC_TOKEN=<missioncontrol token>`
-   3. (Optional) `export MC_AGENT_ID=<agent identifier for approval traces>`
-   4. (Optional) `export MC_ALLOW_INSECURE=true` when targeting a dev proxy or self-signed TLS endpoint.
-2. Install the binary — prebuilt binaries are the fastest option:
-   Linux / macOS:
-   ```bash
-   bash <(curl -fsSL https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/install-mc.sh)
-   ```
-   Windows PowerShell:
-   ```powershell
-   irm https://raw.githubusercontent.com/missioncontrol-ai/missioncontrol/main/scripts/install-mc.ps1 | iex
-   ```
-   Or build from source: `cd integrations/mc && cargo build --release && cp target/release/mc ~/.local/bin/mc`.
-3. Use the command surface described below for tools, sync, governance, and approvals.
-4. Run `mc daemon --matrix-endpoint /events/stream` alongside your agents so the governance plane and matrix telemetry stay
-   aligned with upstream Mission Control (pass `--mqtt-url` when you already have MQTT inbox wiring).
+cd integrations/mc-server && cargo build --release
+cp target/release/mc-server ~/.local/bin/mc-server
+```
 
-## Configuration & expectations
+## Environment
 
-| Env | Meaning | Default |
-| --- | --- | --- |
-| `MC_BASE_URL` | Mission Control HTTP base URL | `http://localhost:8008` |
-| `MC_TOKEN` | MCP bearer token | unset |
-| `MC_AGENT_ID` | Optional agent identifier (persisted by `mc system doctor --fix`) | unset |
-| `MC_TIMEOUT_SECS` | Outbound timeout for HTTP/SSE calls | `10` |
-| `MC_ALLOW_INSECURE` | Accept self-signed certs (daemon and doctor matrix checks) | `false` |
-| `MC_BOOSTER_WASM` | Path to a custom WASM booster module | embedded default |
-| `MC_DISABLE_BOOSTER` | Skip the booster hook even if configured | `false` |
-| `MC_ALLOW_BOOSTER_SHORT_CIRCUIT` | Allow booster to short-circuit MCP tool execution | `false` |
-| `MC_SCHEMA_PACK_FILE` | Schema pack JSON used to gate `mc data tools call` payloads | `docs/schema-packs/main.json` |
+| Var | Meaning | Default |
+|-----|---------|---------|
+| `MC_BASE_URL` | Backend HTTP base URL | `http://localhost:8008` |
+| `MC_TOKEN` | Bearer token | unset |
 
-Point `MC_SCHEMA_PACK_FILE` at the same `docs/schema-packs/main.json` that the backend uses so the CLI-level booster, matrix doctor,
-and fan-out diagnostics share the same entity expectations. Custom schema packs can live beside your deployment manifests, and the
-daemon will warn and fall back to defaults if the JSON is invalid.
+## Command Surface
 
-When no `MC_AGENT_ID` is provided, `mc` looks for `~/.missioncontrol/agent_id` and `mc system doctor --fix` will seed it and ensure
-`MC_HOME`/`MC_SKILLS_HOME` exist so local swarms keep a stable identity.
+### `mc tui`
 
-## Command surface
+Full-screen terminal UI for fleet management.
 
-### Launch isolation
-- `mc run claude [-p <profile>]` — unified launch for Claude Code with profile-scoped runtime preparation.
-- `mc run codex [-p <profile>]` — unified launch for Codex with profile-scoped `CODEX_HOME`.
-- `mc run gemini [-p <profile>]` — unified launch for Gemini.
-- `mc launch <agent>` remains for `openclaw|custom` and legacy compatibility paths.
+```bash
+mc tui [--server http://localhost:8008] [--token $MC_TOKEN] [--mission <id>]
+```
 
-### Data + admin surface
-- `mc data tools list` / `mc data tools call --tool <tool> --payload '{...}'` map directly to `/mcp/tools` and `/mcp/call`.
-- `mc data explorer tree|node`, `mc admin policy active|versions|events`, and `mc approvals list/create/approve/reject` mirror the FastAPI
-  governance surface that Mission Control exposes.
-- `mc workspace load/heartbeat/fetch-artifact/commit/release` keeps parity with the Python bridge, carrying lease IDs, artifacts, and
-  change sets unchanged.
-- `mc use --kluster-id <id>` is lease-backed and calls `load_kluster_workspace`; it is not a local-only context setter.
-- `mc use --release` and `mc release` call `release_kluster_workspace` to close the active lease.
-- When switching klusters via `mc use --kluster-id <new>`, `mc` prompts before releasing the previous lease unless `--auto-release` or `-y` is set.
-- `mc status --verify-lease` validates the tracked active lease with `heartbeat_workspace_lease`.
-- `mc status` reports attached workspace metadata from the lease-backed state cache (`~/.missioncontrol/active_workspace.json`).
+Screens (press key to switch):
 
-### Local-only utilities
-- `mc config`, `mc logs`, and `mc completion` are local utility commands.
-- These commands do not mutate MissionControl state and are intentionally outside governance policy mutation paths.
+| Key | Screen |
+|-----|--------|
+| `m` | Mission matrix — missions → klusters → tasks |
+| `f` | Agent feed — live SSE event stream |
+| `a` | Approval queue — pending y/n/e/s decisions |
+| `q` | Receipts — capability execution history |
+| `s` | Secrets browser — Infisical folder/secret tree |
+| `?` | Help |
+| Esc | Landing |
+| Ctrl+Q / Ctrl+C | Quit |
 
-### Sync & approvals
-- `mc data sync status|promote` retains the existing payload contracts for skill sync and drift metadata so OpenClaw and similar runtimes can honor
-  the same ledger expectations.
-- Approval commands carry the same `mission_id`, `action`, `request_context`, and decision parameters as before.
+Status bar shows `mc v<version> · <base_url> · node <id> · <role> · connected <ms>ms`.
 
-### Hot paths (doctor + daemon)
-- `mc system doctor [--matrix-endpoint /events/stream] [--matrix-sample-seconds 5] [--fix]` probes `/mcp/health`, `/mcp/tools`, and the
-  matrix SSE feed discussed in [`docs/REAL-TIME.md`](REAL-TIME.md), emitting a structured JSON report with repair hints.
-  `--fix` ensures local directories exist and persists an `agent_id` so future runs keep the same identity.
-- `mc daemon --matrix-endpoint /events/stream [--fanout-port <port>] [--mqtt-url mqtt://host:1884] [--mqtt-topic missioncontrol/inbox]`
-  keeps the SSE stream alive, fans it out to localhost, and can replay MQTT inbox updates so local controller processes see one
-  unified stream.
+### `mc run` — Agent Launch
 
-## Matrix telemetry and swarm continuity
+```bash
+mc run claude              # Claude Code (default profile)
+mc run codex               # Codex
+mc run gemini              # Gemini
+mc run claude -p <profile> --mission <id> --mode solo
+mc run claude doctor [--fix]   # diagnose agent runtime issues
+```
 
-The daemon publishes every event described in [`docs/REAL-TIME.md`](REAL-TIME.md) (the `type`, `mission_id`, `kluster_id`, `agent_id`,
-`status`, `payload`, and rate-limit metadata). Swarm-style teams should run `mc daemon` on their planner host and point dashboards
-at `http://localhost:<fanout-port>/events`. The doc also explains reconnect/backoff, SSE fan-out rate-limiting, and MQTT relay
-expectations so both matrix telemetry and local governance stay in sync.
+### `mc capabilities` — Capability Packs
 
-## WASM booster & doctor alignment
+```bash
+mc capabilities                          # list all packs
+mc capabilities --tag infra              # filter by tag
+mc capabilities describe kubectl.get-pods
+mc exec kubectl.get-pods --json          # always use --json for machine output
+mc receipts last --json
+```
 
-`mc` embeds a WASM booster that runs before every MCP tool call when enabled (`--booster-wasm` or `MC_BOOSTER_WASM`). The default
-module simply asserts that payloads are non-empty, but you can drop in custom Wasm that implements `validate(ptr, len)` for schema
-gating or quick success paths while still emitting matrix telemetry. `mc system doctor` keeps a wire on `/events/stream` and records rate-limit
-headers, TLS failures, and timeouts so dashboards know whether the daemon is healthy.
+### `mc secrets` — Infisical Profiles
 
-## Operational notes
+```bash
+mc secrets infisical add work \
+  --service-token st.xxx \
+  --project-id abc123 \
+  --environment prod \
+  --activate
 
-- `mc system doctor --fix` is the recommended first step for hardened deployments: it caches agent metadata, checks directories, and prints
-  diagnostics before any agent starts consuming LLMs.
-- `mc daemon` is now the canonical hot path for approvals, governance alerts, and matrix telemetry. Other local packages should call
-  `mc daemon` (or connect to its fan-out SSE feed) to share the same governance plane that Mission Control enforces.
-- Capture additional local hooks (matrix schema consumers, booster wires, MQTT sync intents) here so auditors or local controllers understand how
-  they integrate with Mission Control’s policy controls.
+mc secrets infisical list
+mc secrets infisical use work
+mc secrets infisical get MY_SECRET_NAME --reveal
+mc secrets infisical test
+mc secrets infisical rm work
+```
 
-## Operational hardening
+### Fleet Queries
 
-Follow the Rust CLI production checklist whenever you turn up `mc` for production-grade workloads: terminate TLS through a reverse
-proxy, enforce rate limits when you forward `/events/stream`, keep `MC_TOKEN`/OIDC credentials rotated, and expose `/mcp/health`
-together with the matrix stream so orchestrators can probe the daemon. Harden daemon hosts by running inside containers so secrets,
-fan-out ports, and local storage are scoped per host.
+```bash
+mc missions list --json
+mc health --json
+```
 
-## Web UI
+### Machine-Readable Output
 
-The SvelteKit front-end lives in `web/` (see [`web/README.md`](../web/README.md) for full details). Build it with `npm run build` so
-the backend can mount the generated `web/build` assets at `/ui/`, or run `npm run dev` to let the Svelte dev server host it on port 5173
-during development. The interface now surfaces the matrix telemetry, explorer tree, onboarding manifest builder, and governance tabs,
-all while reusing the same SSE contracts documented in [`docs/REAL-TIME.md`](REAL-TIME.md) plus the telemetry/doctor story.
+All subcommands support `--json` for structured output. Always use `--json` when parsing
+programmatically — human-readable output is not a stable interface.
 
-## Next steps
+## mc-mesh Daemon
 
-- Document the SSE schema in [`docs/REAL-TIME.md`](REAL-TIME.md) so `mc daemon` can be wired into dashboards.
-- Add formal WASM booster plumbing in `integrations/mc` that mirrors the schema pack validations in `backend/app/services/schema_pack.py`
-  so quick checks run before every MCP call.
-- Keep expanding the `mc` CLI until every critical Python command has parity and the Rust daemon hosts the matrix + MQTT pipeline for
-  teams who prefer Rust-first tooling.
+Headless work executor. Agents communicate via Unix socket.
 
-## Build status checkpoint (2026-03-15)
+```bash
+mc-mesh run --backend-url http://localhost:8008 --token $MC_TOKEN
+mc-mesh version
+mc-mesh get-secret MY_API_KEY   # inside agent subprocess only
+```
 
-Completed recently:
-- `MC-PROFILE-001`: profile-aware launch + new/resume session flow with persisted runtime session metadata.
-- `MC-PROFILE-003`: MCP-backed profile lifecycle (`publish`, `pull`, `status`, pin conflict checks) with CLI tests.
-- `MC-PROFILE-004`: cleanup/retention integrated with doctor via `mc system doctor --cleanup`.
-- `MC-LAUNCH-001`: launch regression harness landed for supported agent runtimes.
-- `MC-LAUNCH-002`: instance-local config default with explicit `--legacy-global-config` compatibility mode.
+Socket paths (`~/.mc/`):
+- `mc-mesh-mgmt.sock` — JSON-RPC 2.0 management gateway
+- `mc-mesh-secrets.sock` — secrets broker (agents only; injected by mc-mesh)
+- `mc-mesh.sock` — PTY attach gateway
 
-Current next build sequence:
-1. `MC-PROFILE-002`: finish agent/session/profile identity propagation and validate concurrent multi-agent launches.
-2. `MC-MCP-BOOST-001`: default booster behavior must fall through to authoritative MCP backend paths.
-3. `MC-MCP-003`: publish REST vs MCP parity matrix and track remaining gaps (see [`docs/MCP-PARITY-MATRIX.md`](MCP-PARITY-MATRIX.md)).
-4. `MC-MCP-004`: close remaining create-flow parity gaps (`create_kluster` + critical creates) with E2E coverage.
-5. `MC-MCP-005`: standardize MCP response/error envelope and compatibility assertions before release gating.
+### Secrets Broker (inside agent subprocesses)
 
-Open launch parity gap to close:
-- none (Claude and Codex have completed dedicated command-family cutovers).
+mc-mesh injects `MC_SECRETS_SOCKET` and `MC_SECRETS_SESSION` instead of raw credentials.
 
-Post-cutover follow-ups:
-- `MC-PERSIST-002`: implement full GitHub App installation-token lease flow (server-side) for mission-scoped publish providers.
-- `MC-PERSIST-003`: add publish idempotency/concurrency guardrails for mission-scoped routed publishes.
-- `MC-PERSIST-004`: extend API/MCP E2E coverage for persistence provisioning, route planning, and publication status/error paths.
+```bash
+VALUE=$(mc-mesh get-secret MY_API_KEY)
+```
+
+Or speak the protocol directly:
+
+```bash
+echo '{"op":"get","session":"'$MC_SECRETS_SESSION'","name":"MY_API_KEY"}' \
+  | nc -U "$MC_SECRETS_SOCKET"
+```
+
+## mc-server
+
+Axum HTTP server. Backs `mc` REST/SSE calls and proxies to the Python backend for routes not
+yet natively implemented.
+
+```bash
+mc-server --serve --bind 0.0.0.0:8008 [--api-proxy http://legacy:8000]
+curl http://localhost:8008/health
+curl http://localhost:8008/raft/status
+```
+
+Native routes: `/health`, `/raft/status`, `/missions`, `/klusters`, `/tasks`, `/agents`.
+Everything else proxies to `--api-proxy` with full header forwarding and streaming (SSE-safe).
+
+## Build & Test
+
+```bash
+cd integrations/mc     && cargo check -p mc
+cd integrations/mc     && cargo build
+cd integrations/mc     && cargo test -- --test-threads=1
+
+cd integrations/mc-mesh && cargo check
+cd integrations/mc-mesh && cargo build
+cd integrations/mc-mesh && cargo test
+
+cd integrations/mc-server && cargo build
+```

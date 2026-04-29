@@ -38,6 +38,7 @@ pub struct App {
     pub version: String,
     pub should_quit: bool,
     pub status_extra: Option<String>,
+    pub raft: Option<crate::data::RaftStatus>,
 
     // Per-screen state
     pub matrix: MissionMatrixState,
@@ -67,8 +68,9 @@ impl App {
         };
 
         let pool = WorkPool::new();
-        // Ping on startup to populate status bar connectivity indicator
+        // Ping + raft status on startup to populate the status bar.
         pool.dispatch(client.clone(), WorkRequest::Ping { job_id: next_job_id() });
+        pool.dispatch(client.clone(), WorkRequest::FetchRaftStatus { job_id: next_job_id() });
 
         Self {
             screen,
@@ -77,6 +79,7 @@ impl App {
             version,
             should_quit: false,
             status_extra: None,
+            raft: None,
             matrix,
             agent_feed: AgentFeedState::new(),
             approval_queue: ApprovalQueueState::default(),
@@ -92,11 +95,17 @@ impl App {
         while let Ok(result) = self.pool.result_rx.try_recv() {
             match result {
                 WorkResult::Pinged { ok, latency_ms, .. } => {
-                    self.status_extra = Some(if ok {
-                        format!("connected {latency_ms}ms")
-                    } else {
-                        "backend unreachable".to_string()
-                    });
+                    self.update_status_bar(ok, latency_ms);
+                }
+                WorkResult::RaftStatusFetched { status, .. } => {
+                    self.raft = Some(status);
+                    // Recomposite: if ping already ran, weave in raft node info.
+                    if let Some(extra) = &self.status_extra {
+                        let conn = extra.clone();
+                        if let Some(r) = &self.raft {
+                            self.status_extra = Some(format!("node {} · {} · {}", r.node_id, r.role, conn));
+                        }
+                    }
                 }
                 WorkResult::MissionsListed { missions, error, .. } => {
                     if let Some(e) = error {
@@ -207,6 +216,18 @@ impl App {
             self.matrix.loading_missions = true;
             self.pool.dispatch(self.client.clone(), WorkRequest::ListMissions { job_id: next_job_id() });
         }
+    }
+
+    fn update_status_bar(&mut self, ok: bool, latency_ms: u64) {
+        let conn = if ok {
+            format!("connected {latency_ms}ms")
+        } else {
+            "backend unreachable".to_string()
+        };
+        self.status_extra = Some(match &self.raft {
+            Some(r) => format!("node {} · {} · {}", r.node_id, r.role, conn),
+            None => conn,
+        });
     }
 
     fn switch_to_secrets(&mut self) {

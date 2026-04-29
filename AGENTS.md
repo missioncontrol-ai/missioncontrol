@@ -1,22 +1,108 @@
-# Codex Repo Instructions
+# Agent Instructions — MissionControl
 
-## Python test/runtime environment
-- The project Python environment is at repo root: `.venv` (not `backend/.venv`).
-- For backend tests, run from `backend/` using `uv` with the parent venv interpreter:
-  - `cd backend && uv run --python ../.venv/bin/python -m unittest -q ...`
-- Do not assume global `python`/`pytest` has required dependencies.
+## Build & Check
 
-## Quick checks
-- Backend syntax check:
-  - `cd backend && uv run --python ../.venv/bin/python -m py_compile app/main.py`
-- Web build check:
-  - `cd web && npm run build`
-- Rust `mc` check:
-  - `cd integrations/mc && cargo check -p mc`
+The primary surface is the Rust `mc` CLI and `mc-mesh` daemon.
 
-## Agent launch defaults (mc)
-- Launch any agent runtime: `mc run claude`, `mc run codex`, `mc run gemini`.
-- Pass a profile with `-p <name>` or `--profile <name>`.
-- For mesh-visible runs: `mc run claude --mission <id> --mode solo`.
-- Diagnostics: `mc run claude doctor [--fix]`, `mc run codex doctor [--fix]`, `mc run codex status`.
-- `mc launch` remains for `openclaw|custom`.
+```bash
+# Quick syntax/type check (no linking)
+cd integrations/mc && cargo check -p mc
+cd integrations/mc-mesh && cargo check
+
+# Full build
+cd integrations/mc && cargo build
+cd integrations/mc-mesh && cargo build
+
+# Tests
+cd integrations/mc && cargo test -- --test-threads=1
+cd integrations/mc-mesh && cargo test
+cd integrations/mc-server && cargo build
+```
+
+The Python FastAPI backend at `backend/` is still present for legacy proxy use but
+is not the primary development target. The Rust `mc-server` (Axum) is the active
+server implementation.
+
+## Agent Launch
+
+```bash
+mc run claude              # Claude Code agent (default profile)
+mc run codex               # Codex agent
+mc run gemini              # Gemini agent
+
+mc run claude -p <profile> --mission <id> --mode solo
+mc run claude doctor [--fix]   # diagnose agent runtime issues
+```
+
+## Capabilities (mc exec)
+
+```bash
+mc capabilities                          # list all packs
+mc capabilities --tag infra              # filter by tag
+mc capabilities describe kubectl.get-pods
+mc exec kubectl.get-pods --json          # run; always use --json for machine output
+mc receipts last --json                  # last execution result
+```
+
+## Secrets — Infisical Profiles
+
+```bash
+mc secrets infisical add work \
+  --service-token st.xxx \
+  --project-id abc123 \
+  --environment prod \
+  --activate
+
+mc secrets infisical list
+mc secrets infisical use work
+mc secrets infisical get MY_SECRET_NAME --reveal
+mc secrets infisical test
+```
+
+## Secrets — Broker (inside agent subprocesses)
+
+When mc-mesh launches a capability subprocess it injects `MC_SECRETS_SOCKET` and
+`MC_SECRETS_SESSION` instead of raw credential values. Use the helper to fetch:
+
+```bash
+VALUE=$(mc-mesh get-secret MY_API_KEY)
+```
+
+Or speak the socket protocol directly:
+```bash
+echo '{"op":"get","session":"'$MC_SECRETS_SESSION'","name":"MY_API_KEY"}' \
+  | nc -U "$MC_SECRETS_SOCKET"
+```
+
+## mc-mesh Daemon
+
+```bash
+mc-mesh run --backend-url http://localhost:8008 --token $MC_TOKEN
+mc-mesh version
+```
+
+Socket locations (`~/.mc/`):
+- `mc-mesh-mgmt.sock` — JSON-RPC 2.0 management gateway
+- `mc-mesh-secrets.sock` — secrets broker (agents only)
+- `mc-mesh.sock` — PTY attach gateway
+
+## Server (mc-server)
+
+```bash
+mc-server --serve --bind 0.0.0.0:8008 [--api-proxy http://legacy:8000]
+curl http://localhost:8008/health
+curl http://localhost:8008/raft/status
+```
+
+## Machine-Readable Output
+
+All `mc` subcommands support `--json` for structured output:
+
+```bash
+mc health --json
+mc missions list --json
+mc exec <cap> --json
+mc receipts last --json
+```
+
+Always use `--json` when parsing output programmatically.

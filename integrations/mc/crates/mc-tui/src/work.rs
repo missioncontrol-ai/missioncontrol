@@ -21,6 +21,8 @@ pub enum WorkRequest {
     ListTasks { kluster_id: String, job_id: JobId },
     /// Health-ping the backend; used for the status bar.
     Ping { job_id: JobId },
+    /// Fetch raft/node status for the status bar.
+    FetchRaftStatus { job_id: JobId },
     /// Subscribe to the agent-feed SSE endpoint. The spawned thread streams
     /// events until the result channel closes or the connection drops.
     SubscribeFeed { base_url: String, token: Option<String> },
@@ -67,6 +69,11 @@ pub enum WorkResult {
         ok: bool,
         latency_ms: u64,
     },
+    RaftStatusFetched {
+        job_id: JobId,
+        status: crate::data::RaftStatus,
+        error: Option<String>,
+    },
     /// An individual SSE event from the agent-feed stream.
     FeedEvent(crate::screens::agent_feed::FeedEvent),
     /// The feed SSE connection is established (or re-established).
@@ -112,6 +119,20 @@ impl WorkPool {
                         ok,
                         latency_ms: start.elapsed().as_millis() as u64,
                     });
+                }
+                WorkRequest::FetchRaftStatus { job_id } => {
+                    match handle.block_on(client.raft_status()) {
+                        Ok(status) => {
+                            let _ = tx.send(WorkResult::RaftStatusFetched { job_id, status, error: None });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(WorkResult::RaftStatusFetched {
+                                job_id,
+                                status: crate::data::RaftStatus::default(),
+                                error: Some(e.to_string()),
+                            });
+                        }
+                    }
                 }
                 WorkRequest::ListMissions { job_id } => {
                     match handle.block_on(client.list_missions()) {

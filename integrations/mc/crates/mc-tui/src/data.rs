@@ -31,11 +31,35 @@ pub struct TaskSummary {
     pub description: String,
 }
 
+// ─── raft status ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RaftStatus {
+    pub node_id: u64,
+    pub role: String,
+    pub term: u64,
+    pub leader_id: Option<u64>,
+    pub advertise_url: Option<String>,
+}
+
+impl Default for RaftStatus {
+    fn default() -> Self {
+        Self {
+            node_id: 1,
+            role: "standalone".to_string(),
+            term: 0,
+            leader_id: None,
+            advertise_url: None,
+        }
+    }
+}
+
 // ─── trait ───────────────────────────────────────────────────────────────────
 
 #[async_trait::async_trait]
 pub trait DataClient: Send + Sync {
     async fn ping(&self) -> Result<()>;
+    async fn raft_status(&self) -> Result<RaftStatus>;
     async fn list_missions(&self) -> Result<Vec<MissionSummary>>;
     async fn list_klusters(&self, mission_id: &str) -> Result<Vec<KlusterSummary>>;
     async fn list_tasks(&self, kluster_id: &str) -> Result<Vec<TaskSummary>>;
@@ -51,6 +75,10 @@ pub struct FixtureDataClient {
 #[async_trait::async_trait]
 impl DataClient for FixtureDataClient {
     async fn ping(&self) -> Result<()> { Ok(()) }
+
+    async fn raft_status(&self) -> Result<RaftStatus> {
+        Ok(RaftStatus::default())
+    }
 
     async fn list_missions(&self) -> Result<Vec<MissionSummary>> {
         Ok(self.missions.clone())
@@ -104,6 +132,10 @@ impl DataClient for RemoteDataClient {
     async fn ping(&self) -> Result<()> {
         self.get::<serde_json::Value>("/health").await?;
         Ok(())
+    }
+
+    async fn raft_status(&self) -> Result<RaftStatus> {
+        self.get("/raft/status").await
     }
 
     async fn list_missions(&self) -> Result<Vec<MissionSummary>> {
