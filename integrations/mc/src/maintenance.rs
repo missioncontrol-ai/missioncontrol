@@ -390,6 +390,21 @@ async fn run_matrix_check(
 
 async fn run_tailscale_check() -> DoctorCheck {
     let start = std::time::Instant::now();
+    let mut check = tokio::task::spawn_blocking(tailscale_check_sync)
+        .await
+        .unwrap_or_else(|_| DoctorCheck {
+            name: "tailscale".into(),
+            ok: false,
+            detail: "tailscale check panicked".into(),
+            duration_ms: 0,
+            payload: None,
+            repair_hint: None,
+        });
+    check.duration_ms = start.elapsed().as_millis();
+    check
+}
+
+fn tailscale_check_sync() -> DoctorCheck {
     let name = "tailscale".to_string();
 
     // Check if tailscale binary is present.
@@ -398,7 +413,7 @@ async fn run_tailscale_check() -> DoctorCheck {
             name,
             ok: false,
             detail: "tailscale not found in PATH".into(),
-            duration_ms: start.elapsed().as_millis(),
+            duration_ms: 0,
             payload: None,
             repair_hint: Some("Install at https://tailscale.com/download".into()),
         };
@@ -415,7 +430,7 @@ async fn run_tailscale_check() -> DoctorCheck {
                 name,
                 ok: false,
                 detail: format!("tailscale status failed: {err}"),
-                duration_ms: start.elapsed().as_millis(),
+                duration_ms: 0,
                 payload: None,
                 repair_hint: Some("Ensure tailscaled is running: sudo systemctl start tailscaled".into()),
             };
@@ -425,11 +440,16 @@ async fn run_tailscale_check() -> DoctorCheck {
     let status_json: serde_json::Value = match serde_json::from_slice(&output.stdout) {
         Ok(v) => v,
         Err(_) => {
+            let detail = if output.stdout.is_empty() {
+                "tailscale daemon not responding (no output from status --json)".into()
+            } else {
+                "tailscale status --json returned unparseable output".into()
+            };
             return DoctorCheck {
                 name,
                 ok: false,
-                detail: "tailscale status --json returned unparseable output".into(),
-                duration_ms: start.elapsed().as_millis(),
+                detail,
+                duration_ms: 0,
                 payload: None,
                 repair_hint: Some("Check tailscaled health: sudo systemctl status tailscaled".into()),
             };
@@ -457,12 +477,16 @@ async fn run_tailscale_check() -> DoctorCheck {
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let detail = format!("Connected | {dns_name} | {ts_ip}");
+            let detail = if dns_name.is_empty() {
+                format!("Connected | {ts_ip}")
+            } else {
+                format!("Connected | {dns_name} | {ts_ip}")
+            };
             DoctorCheck {
                 name,
                 ok: true,
                 detail,
-                duration_ms: start.elapsed().as_millis(),
+                duration_ms: 0,
                 payload: Some(status_json),
                 repair_hint: None,
             }
@@ -471,7 +495,7 @@ async fn run_tailscale_check() -> DoctorCheck {
             name,
             ok: false,
             detail: "Tailscale needs login".into(),
-            duration_ms: start.elapsed().as_millis(),
+            duration_ms: 0,
             payload: Some(status_json),
             repair_hint: Some("tailscale up --authkey <key>".into()),
         },
@@ -479,7 +503,7 @@ async fn run_tailscale_check() -> DoctorCheck {
             name,
             ok: false,
             detail: "Tailscale daemon is stopped".into(),
-            duration_ms: start.elapsed().as_millis(),
+            duration_ms: 0,
             payload: Some(status_json),
             repair_hint: Some("sudo systemctl start tailscaled".into()),
         },
@@ -487,7 +511,7 @@ async fn run_tailscale_check() -> DoctorCheck {
             name,
             ok: false,
             detail: format!("Unexpected BackendState: {other}"),
-            duration_ms: start.elapsed().as_millis(),
+            duration_ms: 0,
             payload: Some(status_json),
             repair_hint: Some("Check tailscale status for details".into()),
         },
