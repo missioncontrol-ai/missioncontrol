@@ -31,6 +31,23 @@ pub struct TaskSummary {
     pub description: String,
 }
 
+// ─── approval types ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalSummary {
+    pub id: i64,
+    #[serde(default)]
+    pub mission_id: Option<String>,
+    pub action: String,
+    #[serde(default)]
+    pub channel: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub requested_by: Option<String>,
+    pub status: String,
+}
+
 // ─── raft status ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +80,8 @@ pub trait DataClient: Send + Sync {
     async fn list_missions(&self) -> Result<Vec<MissionSummary>>;
     async fn list_klusters(&self, mission_id: &str) -> Result<Vec<KlusterSummary>>;
     async fn list_tasks(&self, kluster_id: &str) -> Result<Vec<TaskSummary>>;
+    async fn list_approvals(&self, mission_id: &str) -> Result<Vec<ApprovalSummary>>;
+    async fn respond_approval(&self, approval_id: i64, approve: bool) -> Result<()>;
 }
 
 // ─── fixture client (test / offline use) ─────────────────────────────────────
@@ -90,6 +109,14 @@ impl DataClient for FixtureDataClient {
 
     async fn list_tasks(&self, _kluster_id: &str) -> Result<Vec<TaskSummary>> {
         Ok(vec![])
+    }
+
+    async fn list_approvals(&self, _mission_id: &str) -> Result<Vec<ApprovalSummary>> {
+        Ok(vec![])
+    }
+
+    async fn respond_approval(&self, _approval_id: i64, _approve: bool) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -148,5 +175,24 @@ impl DataClient for RemoteDataClient {
 
     async fn list_tasks(&self, kluster_id: &str) -> Result<Vec<TaskSummary>> {
         self.get(&format!("/klusters/{kluster_id}/t")).await
+    }
+
+    async fn list_approvals(&self, mission_id: &str) -> Result<Vec<ApprovalSummary>> {
+        self.get(&format!("/approvals?mission_id={mission_id}&status=pending")).await
+    }
+
+    async fn respond_approval(&self, approval_id: i64, approve: bool) -> Result<()> {
+        let action = if approve { "approve" } else { "reject" };
+        let path = format!("/approvals/{approval_id}/{action}");
+        let mut req = self.client.post(self.url(&path));
+        if let Some(tok) = &self.token {
+            req = req.bearer_auth(tok);
+        }
+        let resp = req.send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("backend returned {status} for POST {path}");
+        }
+        Ok(())
     }
 }

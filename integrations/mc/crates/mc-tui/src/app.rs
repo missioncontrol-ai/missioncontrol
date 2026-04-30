@@ -148,6 +148,60 @@ impl App {
                         tree.deliver_names(job_id, names, error);
                     }
                 }
+                WorkResult::ApprovalsLoaded { mission_id, approvals, error, .. } => {
+                    // Only apply if this is still the selected mission.
+                    if self.matrix.selected_mission_id.as_deref() == Some(&mission_id) || mission_id.is_empty() {
+                        self.approval_queue.loading = false;
+                        if let Some(e) = error {
+                            self.approval_queue.last_error = Some(e);
+                        } else {
+                            self.approval_queue.last_error = None;
+                            self.approval_queue.pending = approvals
+                                .into_iter()
+                                .map(|a| crate::screens::approval_queue::ApprovalRequest {
+                                    id: a.id,
+                                    mission_id: a.mission_id,
+                                    action: a.action,
+                                    channel: a.channel,
+                                    reason: a.reason,
+                                    requested_by: a.requested_by,
+                                    status: a.status,
+                                })
+                                .collect();
+                            // Clamp selection in case list shrank.
+                            if self.approval_queue.selection >= self.approval_queue.pending.len()
+                                && !self.approval_queue.pending.is_empty()
+                            {
+                                self.approval_queue.selection =
+                                    self.approval_queue.pending.len() - 1;
+                            }
+                        }
+                    }
+                }
+                WorkResult::ApprovalResponded { approval_id, ok, error, .. } => {
+                    if ok {
+                        // Optimistically move the item to history, then refresh.
+                        if let Some(pos) = self.approval_queue.pending.iter().position(|r| r.id == approval_id) {
+                            let req = self.approval_queue.pending.remove(pos);
+                            self.approval_queue.history.push((req.action, "responded".to_string()));
+                            if self.approval_queue.selection > 0
+                                && self.approval_queue.selection >= self.approval_queue.pending.len()
+                            {
+                                self.approval_queue.selection -= 1;
+                            }
+                        }
+                        // Refresh the list from backend.
+                        if let Some(mid) = self.matrix.selected_mission_id.clone() {
+                            self.approval_queue.loading = true;
+                            self.pool.dispatch(
+                                self.client.clone(),
+                                WorkRequest::LoadApprovals { mission_id: mid, job_id: next_job_id() },
+                            );
+                        }
+                    } else if let Some(e) = error {
+                        self.approval_queue.last_error = Some(e);
+                    }
+                }
             }
         }
     }
@@ -167,7 +221,16 @@ impl App {
                 c
             }
             Screen::AgentFeed => self.agent_feed.handle_key(key.code),
-            Screen::ApprovalQueue => self.approval_queue.handle_key(key.code),
+            Screen::ApprovalQueue => {
+                let consumed = self.approval_queue.handle_key(key.code);
+                if let Some((approval_id, approve)) = self.approval_queue.pending_response.take() {
+                    self.pool.dispatch(
+                        self.client.clone(),
+                        WorkRequest::RespondApproval { approval_id, approve, job_id: next_job_id() },
+                    );
+                }
+                consumed
+            }
             Screen::Receipts => self.receipts.handle_key(key.code),
             Screen::Secrets => {
                 let reqs = self.secrets.handle_key(key.code);
@@ -186,7 +249,7 @@ impl App {
     fn handle_global_nav(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('m') => self.switch_to_matrix(),
-            KeyCode::Char('a') => self.screen = Screen::ApprovalQueue,
+            KeyCode::Char('a') => self.switch_to_approvals(),
             KeyCode::Char('f') => self.switch_to_feed(),
             KeyCode::Char('q') => self.screen = Screen::Receipts,
             KeyCode::Char('s') => self.switch_to_secrets(),
@@ -215,6 +278,19 @@ impl App {
         if self.matrix.missions.is_empty() && !self.matrix.loading_missions {
             self.matrix.loading_missions = true;
             self.pool.dispatch(self.client.clone(), WorkRequest::ListMissions { job_id: next_job_id() });
+        }
+    }
+
+    fn switch_to_approvals(&mut self) {
+        self.screen = Screen::ApprovalQueue;
+        if let Some(mission_id) = self.matrix.selected_mission_id.clone() {
+            if !self.approval_queue.loading {
+                self.approval_queue.loading = true;
+                self.pool.dispatch(
+                    self.client.clone(),
+                    WorkRequest::LoadApprovals { mission_id, job_id: next_job_id() },
+                );
+            }
         }
     }
 
