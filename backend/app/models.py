@@ -664,6 +664,8 @@ class RuntimeNode(SQLModel, table=True):
     capabilities_json: str = Field(default="[]", sa_column=Column(Text))
     runtime_version: str = Field(default="")
     bootstrap_token_prefix: str = Field(default="")
+    tailscale_ip: Optional[str] = Field(default=None)
+    tailscale_fqdn: Optional[str] = Field(default=None)
     last_heartbeat_at: Optional[datetime] = None
     registered_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

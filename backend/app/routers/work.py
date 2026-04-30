@@ -116,6 +116,8 @@ class AgentMachineInfo(BaseModel):
     disk_free_gb: Optional[float] = None
     working_dir: Optional[str] = None
     installed_tools: Optional[list] = None  # [{name, version}]
+    tailscale_ip: Optional[str] = None
+    tailscale_fqdn: Optional[str] = None
 
 
 class AgentRuntimeInfo(BaseModel):
@@ -848,6 +850,8 @@ def get_mission_roster(mission_id: str):
                 "capabilities": caps,
                 "hostname": machine.get("hostname"),
                 "os": machine.get("os"),
+                "tailscale_ip": machine.get("tailscale_ip"),
+                "tailscale_fqdn": machine.get("tailscale_fqdn"),
             })
         return roster
 

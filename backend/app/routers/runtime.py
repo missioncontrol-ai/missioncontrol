@@ -61,6 +61,8 @@ class NodeRegister(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     runtime_version: str = ""
     bootstrap_token: str = ""
+    tailscale_ip: Optional[str] = None
+    tailscale_fqdn: Optional[str] = None
 
 
 class NodeHeartbeat(BaseModel):
@@ -69,6 +71,8 @@ class NodeHeartbeat(BaseModel):
     capacity: Optional[dict[str, object]] = None
     capabilities: Optional[list[str]] = None
     runtime_version: Optional[str] = None
+    tailscale_ip: Optional[str] = None
+    tailscale_fqdn: Optional[str] = None
 
 
 class JoinTokenCreate(BaseModel):
@@ -429,6 +433,8 @@ def _node_payload(node: RuntimeNode) -> dict:
         "capacity": json.loads(node.capacity_json or "{}"),
         "capabilities": json.loads(node.capabilities_json or "[]"),
         "runtime_version": node.runtime_version,
+        "tailscale_ip": node.tailscale_ip,
+        "tailscale_fqdn": node.tailscale_fqdn,
         "last_heartbeat_at": node.last_heartbeat_at,
         "registered_at": node.registered_at,
         "updated_at": node.updated_at,
@@ -741,6 +747,8 @@ def register_node(body: NodeRegister, request: Request):
             capabilities_json=_json_dump(body.capabilities),
             runtime_version=body.runtime_version.strip() or token.desired_version,
             bootstrap_token_prefix=body.bootstrap_token[:8],
+            tailscale_ip=body.tailscale_ip,
+            tailscale_fqdn=body.tailscale_fqdn,
             status="online",
             last_heartbeat_at=now,
             registered_at=now,
@@ -795,6 +803,10 @@ def heartbeat_node(node_id: str, body: NodeHeartbeat, request: Request):
             node.capabilities_json = _json_dump(body.capabilities)
         if body.runtime_version is not None:
             node.runtime_version = body.runtime_version
+        if body.tailscale_ip is not None:
+            node.tailscale_ip = body.tailscale_ip
+        if body.tailscale_fqdn is not None:
+            node.tailscale_fqdn = body.tailscale_fqdn
         _ensure_node_spec(db, subject, node)
         db.add(node)
         db.add(NodeEvent(node_id=node_id, event_type="node.heartbeat", payload_json=_json_dump(body.model_dump())))
