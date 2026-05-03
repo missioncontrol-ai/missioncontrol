@@ -3,12 +3,14 @@ pub mod approvals;
 pub mod artifacts;
 pub mod auth;
 pub mod budgets;
+pub mod chat_integrations;
 pub mod docs;
 pub mod event_triggers;
 pub mod feedback;
 pub mod governance;
 pub mod health;
 pub mod hooks;
+pub mod ingestion;
 pub mod klusters;
 pub mod mission_packs;
 pub mod missions;
@@ -22,6 +24,7 @@ pub mod runs;
 pub mod runtime;
 pub mod scheduled_jobs;
 pub mod schema_pack;
+pub mod search;
 pub mod tasks;
 pub mod work;
 
@@ -56,7 +59,10 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(artifacts::router())
         .merge(docs::router())
         .merge(persistence::router())
-        .merge(schema_pack::router());
+        .merge(schema_pack::router())
+        .merge(chat_integrations::router())
+        .merge(ingestion::router())
+        .merge(search::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }
