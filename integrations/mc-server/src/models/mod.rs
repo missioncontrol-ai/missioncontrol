@@ -3,6 +3,7 @@ pub mod approval;
 pub mod auth;
 pub mod kluster;
 pub mod mission;
+pub mod run;
 pub mod task;
 
 pub use agent::{Agent, AgentMessage, AgentSession, TaskAssignment};

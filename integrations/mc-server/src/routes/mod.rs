@@ -6,6 +6,7 @@ pub mod klusters;
 pub mod missions;
 pub mod proxy;
 pub mod raft;
+pub mod runs;
 pub mod tasks;
 
 use axum::Router;
@@ -22,7 +23,8 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(agents::router())
         .merge(klusters::router())
         .merge(tasks::router())
-        .merge(approvals::router());
+        .merge(approvals::router())
+        .merge(runs::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }

@@ -38,6 +38,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/auth/sessions/refresh", post(refresh_session))
         .route("/auth/sessions/current", delete(revoke_session))
         .route("/auth/me", get(whoami))
+        .route("/auth/whoami", get(whoami))
         .route(
             "/auth/service-accounts",
             get(list_service_accounts).post(create_service_account),
