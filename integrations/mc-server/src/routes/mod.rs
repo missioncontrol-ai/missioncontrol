@@ -3,12 +3,14 @@ pub mod approvals;
 pub mod auth;
 pub mod governance;
 pub mod health;
+pub mod hooks;
 pub mod klusters;
 pub mod missions;
 pub mod profiles;
 pub mod proxy;
 pub mod raft;
 pub mod runs;
+pub mod scheduled_jobs;
 pub mod tasks;
 
 use axum::Router;
@@ -28,7 +30,9 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(approvals::router())
         .merge(runs::router())
         .merge(governance::router())
-        .merge(profiles::router());
+        .merge(profiles::router())
+        .merge(hooks::router())
+        .merge(scheduled_jobs::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }
