@@ -1,10 +1,14 @@
 pub mod agents;
 pub mod approvals;
 pub mod auth;
+pub mod budgets;
+pub mod event_triggers;
+pub mod feedback;
 pub mod governance;
 pub mod health;
 pub mod hooks;
 pub mod klusters;
+pub mod mission_packs;
 pub mod missions;
 pub mod profiles;
 pub mod proxy;
@@ -36,7 +40,11 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(hooks::router())
         .merge(scheduled_jobs::router())
         .merge(work::router())
-        .merge(runtime::router());
+        .merge(runtime::router())
+        .merge(budgets::router())
+        .merge(event_triggers::router())
+        .merge(feedback::router())
+        .merge(mission_packs::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }
