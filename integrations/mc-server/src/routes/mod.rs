@@ -1,7 +1,9 @@
 pub mod agents;
 pub mod approvals;
+pub mod artifacts;
 pub mod auth;
 pub mod budgets;
+pub mod docs;
 pub mod event_triggers;
 pub mod feedback;
 pub mod governance;
@@ -11,6 +13,7 @@ pub mod klusters;
 pub mod mission_packs;
 pub mod missions;
 pub mod onboarding;
+pub mod persistence;
 pub mod profiles;
 pub mod proxy;
 pub mod raft;
@@ -18,6 +21,7 @@ pub mod remotectl;
 pub mod runs;
 pub mod runtime;
 pub mod scheduled_jobs;
+pub mod schema_pack;
 pub mod tasks;
 pub mod work;
 
@@ -48,7 +52,11 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(feedback::router())
         .merge(mission_packs::router())
         .merge(onboarding::router())
-        .merge(remotectl::router());
+        .merge(remotectl::router())
+        .merge(artifacts::router())
+        .merge(docs::router())
+        .merge(persistence::router())
+        .merge(schema_pack::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }
