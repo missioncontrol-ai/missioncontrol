@@ -25,6 +25,7 @@ pub mod runtime;
 pub mod scheduled_jobs;
 pub mod schema_pack;
 pub mod search;
+pub mod skills;
 pub mod tasks;
 pub mod work;
 
@@ -62,7 +63,8 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(schema_pack::router())
         .merge(chat_integrations::router())
         .merge(ingestion::router())
-        .merge(search::router());
+        .merge(search::router())
+        .merge(skills::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }
