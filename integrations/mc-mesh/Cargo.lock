@@ -1433,6 +1433,7 @@ name = "mc-mesh-secrets"
 version = "0.3.0"
 dependencies = [
  "keyring",
+ "once_cell",
  "reqwest",
  "serde",
  "serde_json",

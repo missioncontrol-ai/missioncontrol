@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod approvals;
 pub mod health;
 pub mod klusters;
 pub mod missions;
@@ -18,7 +19,8 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(missions::router())
         .merge(agents::router())
         .merge(klusters::router())
-        .merge(tasks::router());
+        .merge(tasks::router())
+        .merge(approvals::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }

@@ -36,6 +36,14 @@ pub struct ApprovalQueueState {
     pub selection: usize,
     pub loading: bool,
     pub last_error: Option<String>,
+    /// Set when a key action was taken; cleared after dispatch.
+    pub pending_action: Option<ApprovalAction>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApprovalAction {
+    pub approval_id: String,
+    pub decision: String, // "approve" or "reject"
 }
 
 impl Default for Focus {
@@ -61,8 +69,38 @@ impl ApprovalQueueState {
                 if self.selection + 1 < self.pending.len() { self.selection += 1; }
                 true
             }
+            Char('y') | Char('Y') => {
+                if let Some(req) = self.pending.get(self.selection) {
+                    self.pending_action = Some(ApprovalAction {
+                        approval_id: req.id.clone(),
+                        decision: "approve".to_string(),
+                    });
+                }
+                true
+            }
+            Char('n') | Char('N') => {
+                if let Some(req) = self.pending.get(self.selection) {
+                    self.pending_action = Some(ApprovalAction {
+                        approval_id: req.id.clone(),
+                        decision: "reject".to_string(),
+                    });
+                }
+                true
+            }
+            Char('s') | Char('S') => {
+                // Skip: advance selection without acting
+                if self.selection + 1 < self.pending.len() {
+                    self.selection += 1;
+                }
+                true
+            }
             _ => false,
         }
+    }
+
+    /// Take and clear the pending action (called by app.rs after dispatching).
+    pub fn take_action(&mut self) -> Option<ApprovalAction> {
+        self.pending_action.take()
     }
 
     pub fn selected(&self) -> Option<&ApprovalRequest> {

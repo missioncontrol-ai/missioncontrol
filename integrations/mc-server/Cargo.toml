@@ -30,6 +30,9 @@ sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chron
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 hex = "0.4"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
 
 [dev-dependencies]
 axum-test = "20"

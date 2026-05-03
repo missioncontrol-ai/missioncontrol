@@ -1,8 +1,14 @@
 use mc::config::{load_server_list, write_servers_file};
+use std::sync::Mutex;
 use tempfile::tempdir;
+
+/// All tests that mutate process-wide env vars must hold this lock.
+/// Prevents races when cargo runs tests in parallel threads.
+static ENV: Mutex<()> = Mutex::new(());
 
 #[test]
 fn test_write_servers_file_creates_file() {
+    let _guard = ENV.lock().unwrap_or_else(|p| p.into_inner());
     let dir = tempdir().unwrap();
     unsafe { std::env::set_var("MC_HOME", dir.path().to_str().unwrap()) };
 
@@ -22,6 +28,7 @@ fn test_write_servers_file_creates_file() {
 
 #[test]
 fn test_write_servers_file_overwrites_existing() {
+    let _guard = ENV.lock().unwrap_or_else(|p| p.into_inner());
     let dir = tempdir().unwrap();
     unsafe { std::env::set_var("MC_HOME", dir.path().to_str().unwrap()) };
 
@@ -37,6 +44,7 @@ fn test_write_servers_file_overwrites_existing() {
 
 #[test]
 fn test_load_server_list_reads_mc_servers_env() {
+    let _guard = ENV.lock().unwrap_or_else(|p| p.into_inner());
     unsafe { std::env::set_var("MC_SERVERS", "https://a:8008,https://b:8008") };
     let servers = load_server_list();
     assert_eq!(servers, vec!["https://a:8008", "https://b:8008"]);
@@ -45,6 +53,7 @@ fn test_load_server_list_reads_mc_servers_env() {
 
 #[test]
 fn test_load_server_list_reads_servers_file() {
+    let _guard = ENV.lock().unwrap_or_else(|p| p.into_inner());
     let dir = tempdir().unwrap();
     unsafe {
         std::env::remove_var("MC_SERVERS");
@@ -60,6 +69,7 @@ fn test_load_server_list_reads_servers_file() {
 
 #[test]
 fn test_load_server_list_falls_back_to_mc_base_url() {
+    let _guard = ENV.lock().unwrap_or_else(|p| p.into_inner());
     let dir = tempdir().unwrap();
     unsafe {
         std::env::set_var("MC_HOME", dir.path().to_str().unwrap());

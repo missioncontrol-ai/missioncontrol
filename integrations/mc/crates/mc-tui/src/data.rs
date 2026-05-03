@@ -54,6 +54,21 @@ impl Default for RaftStatus {
     }
 }
 
+// ─── approvals ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalSummary {
+    pub id: serde_json::Value, // int from backend, kept as Value to avoid parse issues
+    pub mission_id: String,
+    pub action: String,
+    pub channel: String,
+    pub reason: String,
+    pub status: String,
+    pub requested_by: String,
+    #[serde(default)]
+    pub decision_note: String,
+}
+
 // ─── trait ───────────────────────────────────────────────────────────────────
 
 #[async_trait::async_trait]
@@ -63,6 +78,8 @@ pub trait DataClient: Send + Sync {
     async fn list_missions(&self) -> Result<Vec<MissionSummary>>;
     async fn list_klusters(&self, mission_id: &str) -> Result<Vec<KlusterSummary>>;
     async fn list_tasks(&self, kluster_id: &str) -> Result<Vec<TaskSummary>>;
+    async fn list_approvals(&self, mission_id: Option<&str>) -> Result<Vec<ApprovalSummary>>;
+    async fn respond_approval(&self, approval_id: &str, decision: &str, note: Option<&str>) -> Result<()>;
 }
 
 // ─── fixture client (test / offline use) ─────────────────────────────────────
@@ -90,6 +107,14 @@ impl DataClient for FixtureDataClient {
 
     async fn list_tasks(&self, _kluster_id: &str) -> Result<Vec<TaskSummary>> {
         Ok(vec![])
+    }
+
+    async fn list_approvals(&self, _mission_id: Option<&str>) -> Result<Vec<ApprovalSummary>> {
+        Ok(vec![])
+    }
+
+    async fn respond_approval(&self, _approval_id: &str, _decision: &str, _note: Option<&str>) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -148,5 +173,29 @@ impl DataClient for RemoteDataClient {
 
     async fn list_tasks(&self, kluster_id: &str) -> Result<Vec<TaskSummary>> {
         self.get(&format!("/klusters/{kluster_id}/t")).await
+    }
+
+    async fn list_approvals(&self, mission_id: Option<&str>) -> Result<Vec<ApprovalSummary>> {
+        let path = if let Some(mid) = mission_id {
+            format!("/approvals?mission_id={mid}&status=pending")
+        } else {
+            "/approvals/requests?status=pending".to_string()
+        };
+        self.get(&path).await
+    }
+
+    async fn respond_approval(&self, approval_id: &str, decision: &str, note: Option<&str>) -> Result<()> {
+        let mut req = self.client.post(self.url(&format!("/approvals/{approval_id}/respond")));
+        if let Some(tok) = &self.token {
+            req = req.bearer_auth(tok);
+        }
+        let body = serde_json::json!({"decision": decision, "note": note.unwrap_or("")});
+        let resp = req.json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("respond_approval returned {status}: {text}");
+        }
+        Ok(())
     }
 }

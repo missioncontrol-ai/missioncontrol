@@ -19,6 +19,12 @@ pub enum SecretsError {
 
     #[error("Secret not found: {0}")]
     SecretNotFound(String),
+
+    #[error("Authentication error: {0}")]
+    Auth(String),
+
+    #[error("Configuration error: {0}")]
+    Config(String),
 }
 
 pub type Result<T> = std::result::Result<T, SecretsError>;

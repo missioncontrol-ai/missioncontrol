@@ -10,6 +10,11 @@ pub struct AppConfig {
     pub api_proxy: Option<String>,
     pub node_id: u64,
     pub advertise_url: Option<String>,
+    /// Raft server mode enabled (HTTP API + distributed state).
+    /// Full consensus is not yet implemented; this flag is accepted and logged.
+    pub serve: bool,
+    pub bootstrap: bool,
+    pub join: Vec<String>,
 }
 
 pub fn build_app(db: PgPool, config: AppConfig) -> Router {

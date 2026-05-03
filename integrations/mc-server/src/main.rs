@@ -62,10 +62,17 @@ async fn main() -> anyhow::Result<()> {
         "mc-server starting",
     );
 
+    if args.serve {
+        tracing::warn!("--serve: Raft consensus not yet implemented — running in standalone mode");
+    }
+
     let config = AppConfig {
         api_proxy: args.api_proxy.clone(),
         node_id: args.node_id.unwrap_or(1),
         advertise_url: args.advertise_url.clone(),
+        serve: args.serve,
+        bootstrap: args.bootstrap,
+        join: args.join.clone(),
     };
 
     let db = mc_server::db::connect().await?;

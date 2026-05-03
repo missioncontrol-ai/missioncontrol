@@ -42,6 +42,10 @@ pub enum WorkRequest {
         path: String,
         cfg: mc_mesh_secrets::InfisicalConfig,
     },
+    /// Fetch pending approvals for a mission (or all if mission_id is None).
+    FetchApprovals { job_id: JobId, mission_id: Option<String> },
+    /// Respond to a pending approval with "approve" or "reject".
+    RespondApproval { job_id: JobId, approval_id: String, decision: String, note: Option<String> },
 }
 
 // ─── results ─────────────────────────────────────────────────────────────────
@@ -84,6 +88,14 @@ pub enum WorkResult {
     SecretFoldersLoaded { job_id: JobId, folders: Vec<String>, error: Option<String> },
     /// Secret names returned for a path.
     SecretNamesLoaded { job_id: JobId, names: Vec<String>, error: Option<String> },
+    /// Pending approvals fetched.
+    ApprovalsListed {
+        job_id: JobId,
+        approvals: Vec<crate::data::ApprovalSummary>,
+        error: Option<String>,
+    },
+    /// Approval respond call completed.
+    ApprovalResponded { job_id: JobId, approval_id: String, ok: bool, error: Option<String> },
 }
 
 // ─── pool ────────────────────────────────────────────────────────────────────
@@ -215,6 +227,28 @@ impl WorkPool {
                             }
                         }
                     }
+                }
+                WorkRequest::FetchApprovals { job_id, mission_id } => {
+                    match handle.block_on(client.list_approvals(mission_id.as_deref())) {
+                        Ok(approvals) => {
+                            let _ = tx.send(WorkResult::ApprovalsListed { job_id, approvals, error: None });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(WorkResult::ApprovalsListed {
+                                job_id, approvals: vec![], error: Some(e.to_string()),
+                            });
+                        }
+                    }
+                }
+                WorkRequest::RespondApproval { job_id, approval_id, decision, note } => {
+                    let res = handle.block_on(
+                        client.respond_approval(&approval_id, &decision, note.as_deref())
+                    );
+                    let (ok, error) = match res {
+                        Ok(()) => (true, None),
+                        Err(e) => (false, Some(e.to_string())),
+                    };
+                    let _ = tx.send(WorkResult::ApprovalResponded { job_id, approval_id, ok, error });
                 }
             }
         });
