@@ -10,9 +10,11 @@ pub mod hooks;
 pub mod klusters;
 pub mod mission_packs;
 pub mod missions;
+pub mod onboarding;
 pub mod profiles;
 pub mod proxy;
 pub mod raft;
+pub mod remotectl;
 pub mod runs;
 pub mod runtime;
 pub mod scheduled_jobs;
@@ -44,7 +46,9 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(budgets::router())
         .merge(event_triggers::router())
         .merge(feedback::router())
-        .merge(mission_packs::router());
+        .merge(mission_packs::router())
+        .merge(onboarding::router())
+        .merge(remotectl::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }
