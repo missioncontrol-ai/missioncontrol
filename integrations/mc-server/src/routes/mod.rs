@@ -10,8 +10,10 @@ pub mod profiles;
 pub mod proxy;
 pub mod raft;
 pub mod runs;
+pub mod runtime;
 pub mod scheduled_jobs;
 pub mod tasks;
+pub mod work;
 
 use axum::Router;
 use std::sync::Arc;
@@ -32,7 +34,9 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(governance::router())
         .merge(profiles::router())
         .merge(hooks::router())
-        .merge(scheduled_jobs::router());
+        .merge(scheduled_jobs::router())
+        .merge(work::router())
+        .merge(runtime::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }
