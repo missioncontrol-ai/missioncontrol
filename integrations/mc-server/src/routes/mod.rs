@@ -5,6 +5,8 @@ pub mod auth;
 pub mod budgets;
 pub mod chat_integrations;
 pub mod docs;
+pub mod explorer;
+pub mod google_chat_integrations;
 pub mod event_triggers;
 pub mod feedback;
 pub mod governance;
@@ -27,6 +29,7 @@ pub mod schema_pack;
 pub mod search;
 pub mod skills;
 pub mod tasks;
+pub mod teams_integrations;
 pub mod work;
 
 use axum::Router;
@@ -64,7 +67,10 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(chat_integrations::router())
         .merge(ingestion::router())
         .merge(search::router())
-        .merge(skills::router());
+        .merge(skills::router())
+        .merge(google_chat_integrations::router())
+        .merge(teams_integrations::router())
+        .merge(explorer::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }
