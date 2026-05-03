@@ -18,6 +18,8 @@ async fn test_proxy_forwards_unknown_route() {
 
     let config = AppConfig {
         api_proxy: Some(mock_backend.uri()),
+        node_id: 1,
+        advertise_url: None,
     };
     let app = build_app(test_pool(), config);
     let server = TestServer::new(app);
@@ -30,6 +32,8 @@ async fn test_proxy_forwards_unknown_route() {
 async fn test_proxy_does_not_override_health() {
     let config = AppConfig {
         api_proxy: Some("http://127.0.0.1:1".to_string()),
+        node_id: 1,
+        advertise_url: None,
     };
     let app = build_app(test_pool(), config);
     let server = TestServer::new(app);
@@ -44,6 +48,8 @@ async fn test_proxy_does_not_override_health() {
 async fn test_proxy_returns_502_when_upstream_unreachable() {
     let config = AppConfig {
         api_proxy: Some("http://127.0.0.1:1".to_string()),
+        node_id: 1,
+        advertise_url: None,
     };
     let app = build_app(test_pool(), config);
     let server = TestServer::new(app);

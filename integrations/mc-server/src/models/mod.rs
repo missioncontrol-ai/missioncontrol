@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod approval;
+pub mod auth;
 pub mod kluster;
 pub mod mission;
 pub mod task;
