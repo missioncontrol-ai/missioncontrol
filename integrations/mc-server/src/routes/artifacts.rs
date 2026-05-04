@@ -608,11 +608,49 @@ async fn get_artifact_content(
 }
 
 async fn get_artifact_download_url(
-    State(_state): State<Arc<AppState>>,
-    _principal: Principal,
-    Path(_artifact_id): Path<i32>,
+    State(state): State<Arc<AppState>>,
+    principal: Principal,
+    Path(artifact_id): Path<i32>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    StatusCode::NOT_IMPLEMENTED.into_response()
+    let row = sqlx::query("SELECT * FROM artifact WHERE id=$1")
+        .bind(artifact_id).fetch_optional(&state.db).await;
+    let row = match row {
+        Ok(Some(r)) => r,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"detail": "Artifact not found"}))).into_response(),
+        Err(e) => { tracing::error!("get_artifact_download_url: {e}"); return StatusCode::INTERNAL_SERVER_ERROR.into_response(); }
+    };
+
+    let kluster_id: String = row.get("kluster_id");
+    let mission_id: Option<String> = sqlx::query_scalar("SELECT mission_id FROM kluster WHERE id=$1")
+        .bind(&kluster_id).fetch_optional(&state.db).await.unwrap_or(None).flatten();
+    if let Some(ref mid) = mission_id {
+        if !can_read_mission(&state.db, &principal, mid).await {
+            return (StatusCode::FORBIDDEN, Json(serde_json::json!({"detail": "Forbidden"}))).into_response();
+        }
+    } else if !principal.is_admin {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"detail": "Forbidden"}))).into_response();
+    }
+
+    let storage_backend: String = row.try_get("storage_backend").unwrap_or_default();
+    let uri: String = row.try_get("uri").unwrap_or_default();
+    let expires_seconds: i64 = q.get("expires_seconds").and_then(|v| v.parse().ok()).unwrap_or(60).min(3600).max(1);
+
+    if storage_backend == "s3" {
+        // S3 presigning requires AWS SDK — not available in mc-server; return 409 with the URI
+        return (StatusCode::CONFLICT, Json(serde_json::json!({
+            "detail": "S3 presigning requires the Python API",
+            "artifact_id": artifact_id,
+            "uri": uri,
+        }))).into_response();
+    }
+
+    Json(serde_json::json!({
+        "artifact_id": artifact_id,
+        "uri": uri,
+        "expires_seconds": expires_seconds,
+        "download_url": uri,
+    })).into_response()
 }
 
 async fn update_artifact(

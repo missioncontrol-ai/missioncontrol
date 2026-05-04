@@ -23,6 +23,10 @@ pub fn router() -> Router<Arc<AppState>> {
             "/missions/{mission_id}/k/{kluster_id}/t/{task_id}",
             get(get_task).patch(update_task).delete(delete_task),
         )
+        .route(
+            "/missions/{mission_id}/k/{kluster_id}/t/{task_id}/overlaps",
+            get(list_overlaps),
+        )
 }
 
 fn not_found(msg: &str) -> axum::response::Response {
@@ -229,4 +233,43 @@ async fn delete_task(
 
     let deleted_id = if task.public_id.is_empty() { task.id.to_string() } else { task.public_id.clone() };
     Json(serde_json::json!({"ok": true, "deleted_id": deleted_id})).into_response()
+}
+
+async fn list_overlaps(
+    State(state): State<Arc<AppState>>,
+    principal: Principal,
+    Path((mission_id, kluster_id, task_id)): Path<(String, String, String)>,
+    Query(q): Query<ListQuery>,
+) -> impl IntoResponse {
+    if let Err(r) = mission_access(&state, &mission_id, &kluster_id, &principal, false, false).await { return r; }
+
+    let task_row = if let Ok(numeric_id) = task_id.parse::<i64>() {
+        sqlx::query_as::<_, Task>("SELECT * FROM task WHERE id=$1 AND kluster_id=$2")
+            .bind(numeric_id).bind(&kluster_id).fetch_optional(&state.db).await
+    } else {
+        sqlx::query_as::<_, Task>("SELECT * FROM task WHERE public_id=$1 AND kluster_id=$2")
+            .bind(&task_id).bind(&kluster_id).fetch_optional(&state.db).await
+    };
+    let task = match task_row {
+        Ok(Some(t)) => t,
+        Ok(None) => return not_found("Task not found"),
+        Err(e) => { tracing::error!("list_overlaps fetch task: {e}"); return StatusCode::INTERNAL_SERVER_ERROR.into_response(); }
+    };
+
+    let limit = q.limit.unwrap_or(20).min(100);
+    match sqlx::query(
+        "SELECT * FROM overlapsuggestion WHERE task_id=$1 ORDER BY score DESC LIMIT $2"
+    )
+    .bind(task.id).bind(limit)
+    .fetch_all(&state.db).await {
+        Ok(rows) => Json(rows.iter().map(|r| serde_json::json!({
+            "id": r.get::<i32,_>("id"),
+            "task_id": r.get::<i32,_>("task_id"),
+            "candidate_task_id": r.get::<i32,_>("candidate_task_id"),
+            "score": r.get::<Option<f64>,_>("score"),
+            "reason": r.get::<Option<String>,_>("reason"),
+            "created_at": r.get::<chrono::NaiveDateTime,_>("created_at"),
+        })).collect::<Vec<_>>()).into_response(),
+        Err(e) => { tracing::error!("list_overlaps: {e}"); StatusCode::INTERNAL_SERVER_ERROR.into_response() }
+    }
 }

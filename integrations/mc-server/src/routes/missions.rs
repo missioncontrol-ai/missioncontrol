@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get},
+    routing::{delete, get, post},
     Json, Router,
 };
 use chrono::Utc;
@@ -21,6 +21,7 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/missions", get(list_missions).post(create_mission))
         .route("/missions/{mission_id}", get(get_mission).patch(update_mission).delete(delete_mission))
+        .route("/missions/{mission_id}/owner", post(transfer_owner))
         .route("/missions/{mission_id}/roles", get(list_roles).post(upsert_role))
         .route("/missions/{mission_id}/roles/{subject}", delete(delete_role))
 }
@@ -326,6 +327,31 @@ async fn upsert_role(
     match result {
         Ok(row) => Json(row_to_role(&row)).into_response(),
         Err(e) => { tracing::error!("upsert_role insert: {e}"); StatusCode::INTERNAL_SERVER_ERROR.into_response() }
+    }
+}
+
+async fn transfer_owner(
+    State(state): State<Arc<AppState>>,
+    principal: Principal,
+    Path(mission_id): Path<String>,
+    Json(payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if !principal.is_admin {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"detail": "admin required"}))).into_response();
+    }
+    let new_owner = match payload.get("new_owner").and_then(|v| v.as_str()) {
+        Some(o) if !o.is_empty() => o.to_string(),
+        _ => return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({"detail": "new_owner is required"}))).into_response(),
+    };
+    let now = chrono::Utc::now().naive_utc();
+    match sqlx::query(
+        "UPDATE mission SET owners=$2, updated_at=$3 WHERE id=$1 RETURNING *"
+    )
+    .bind(&mission_id).bind(&new_owner).bind(now)
+    .fetch_optional(&state.db).await {
+        Ok(Some(row)) => Json(row_to_mission(&row)).into_response(),
+        Ok(None) => not_found("Mission not found"),
+        Err(e) => { tracing::error!("transfer_owner: {e}"); StatusCode::INTERNAL_SERVER_ERROR.into_response() }
     }
 }
 
