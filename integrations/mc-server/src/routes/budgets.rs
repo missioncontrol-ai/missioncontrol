@@ -30,6 +30,8 @@ struct BudgetPolicyCreate {
     window_type: String,
     hard_cap_cents: i32,
     soft_cap_cents: Option<i32>,
+    token_hard_cap: Option<i32>,
+    token_soft_cap: Option<i32>,
     #[serde(default = "default_alert_only")]
     action_on_breach: String,
 }
@@ -98,6 +100,8 @@ fn row_to_policy(row: &sqlx::postgres::PgRow) -> serde_json::Value {
         "window_type": row.get::<String, _>("window_type"),
         "hard_cap_cents": row.get::<i32, _>("hard_cap_cents"),
         "soft_cap_cents": row.get::<Option<i32>, _>("soft_cap_cents"),
+        "token_hard_cap": row.get::<Option<i32>, _>("token_hard_cap"),
+        "token_soft_cap": row.get::<Option<i32>, _>("token_soft_cap"),
         "action_on_breach": row.get::<String, _>("action_on_breach"),
         "active": row.get::<bool, _>("active"),
         "created_at": row.get::<chrono::NaiveDateTime, _>("created_at"),
@@ -129,8 +133,8 @@ async fn create_budget_policy(
     let result = sqlx::query(
         "INSERT INTO budgetpolicy \
          (id, owner_subject, scope_type, scope_id, window_type, hard_cap_cents, soft_cap_cents, \
-          action_on_breach, active, created_at, updated_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,$9,$9) RETURNING *",
+          token_hard_cap, token_soft_cap, action_on_breach, active, created_at, updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,$11,$11) RETURNING *",
     )
     .bind(&policy_id)
     .bind(&principal.subject)
@@ -139,6 +143,8 @@ async fn create_budget_policy(
     .bind(&body.window_type)
     .bind(body.hard_cap_cents)
     .bind(body.soft_cap_cents)
+    .bind(body.token_hard_cap)
+    .bind(body.token_soft_cap)
     .bind(&body.action_on_breach)
     .bind(now)
     .fetch_one(&state.db)

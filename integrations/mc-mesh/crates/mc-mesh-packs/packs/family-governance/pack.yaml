@@ -1,0 +1,5 @@
+name: family-governance
+version: 1
+description: Family safety controls — age profiles, access windows, token caps
+profiles:
+  - family

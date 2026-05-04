@@ -964,8 +964,28 @@ class BudgetPolicy(SQLModel, table=True):
     window_type: str  # day|week|month|rolling_24h
     hard_cap_cents: int
     soft_cap_cents: Optional[int] = Field(default=None)
+    token_hard_cap: Optional[int] = Field(default=None)
+    token_soft_cap: Optional[int] = Field(default=None)
     action_on_breach: str = Field(default="alert_only")  # pause|require_approval|alert_only
     active: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class FamilyMember(SQLModel, table=True):
+    __tablename__ = "familymember"
+
+    id: Optional[str] = Field(default=None, primary_key=True)
+    subject: str = Field(index=True, unique=True)  # MC subject identifier
+    display_name: str
+    age_group: str  # child_7yr|child_10yr|teen_14yr|parent
+    goose_mode: str = Field(default="chat")  # chat|approve|smart-approve|auto
+    model_allowlist_json: str = Field(default="[]")  # JSON list of allowed model IDs
+    token_daily_cap: Optional[int] = Field(default=None)
+    allowed_hours_start: Optional[str] = Field(default=None)  # "HH:MM" 24h
+    allowed_hours_end: Optional[str] = Field(default=None)    # "HH:MM" 24h
+    allowed_hours_tz: str = Field(default="America/New_York")
+    next_review_date: Optional[str] = Field(default=None)     # ISO date, remind parents to revisit
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

@@ -28,6 +28,7 @@ from app.services.schema_pack import load_schema_pack
 from app.services.governance import ensure_governance_policy_seed
 import app.ai_console.registry  # noqa: F401 — bootstraps adapter registry at import time
 
+from app.routers import family_governance
 from app.routers import (
     klusters,
     missions,
@@ -713,6 +714,7 @@ app.include_router(google_chat_integrations.router)
 app.include_router(teams_integrations.router)
 app.include_router(profiles.router)
 app.include_router(evolve.router)
+app.include_router(family_governance.router)
 app.include_router(ai.router)
 app.include_router(scheduled_jobs.router)
 app.include_router(event_triggers.router, prefix="/event-triggers", tags=["event-triggers"])

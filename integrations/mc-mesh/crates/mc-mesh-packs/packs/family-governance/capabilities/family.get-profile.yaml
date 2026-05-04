@@ -1,0 +1,15 @@
+name: family.get-profile
+version: 1
+description: Retrieve a family member's governance profile
+backend:
+  type: remote
+  url: "{{MC_API_URL}}/family/members/{{subject}}"
+risk: low
+sideEffectClass: none
+inputSchema:
+  type: object
+  properties:
+    subject:
+      type: string
+      description: MC subject identifier for the family member
+  required: [subject]
