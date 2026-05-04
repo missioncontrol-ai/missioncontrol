@@ -234,6 +234,7 @@ impl McDispatch {
 // JSON-RPC transport helpers
 // ---------------------------------------------------------------------------
 
+#[cfg(unix)]
 async fn send_jsonrpc_unix(
     socket_path: &str,
     method: &str,
@@ -246,6 +247,15 @@ async fn send_jsonrpc_unix(
         .with_context(|| format!("connect to unix socket {socket_path}"))?;
 
     send_jsonrpc_over_stream(stream, method, params).await
+}
+
+#[cfg(not(unix))]
+async fn send_jsonrpc_unix(
+    _socket_path: &str,
+    _method: &str,
+    _params: Value,
+) -> Result<Value> {
+    anyhow::bail!("Unix socket routing is not supported on Windows")
 }
 
 async fn send_jsonrpc_tcp(
@@ -408,6 +418,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn send_jsonrpc_unix_round_trip() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

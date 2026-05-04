@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Pull secrets from Infisical
-        uses: infisical/secrets-action@v1
+        uses: infisical/secrets-action@v1.0.16
         with:
           method: "oidc"
           env-slug: "prod"
@@ -24,7 +24,7 @@ jobs:
           secret-path: "/ghcr"
 
       - name: Pull missioncontrol secrets from Infisical
-        uses: infisical/secrets-action@v1
+        uses: infisical/secrets-action@v1.0.16
         with:
           method: "oidc"
           env-slug: "prod"
