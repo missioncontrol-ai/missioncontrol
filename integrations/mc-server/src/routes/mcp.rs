@@ -1207,30 +1207,376 @@ async fn dispatch(
             }
         }
 
-        // ── Still Python-only ─────────────────────────────────────────────────
+        // ── Ledger events ─────────────────────────────────────────────────────
+
+        "list_pending_ledger_events" => {
+            let mission_id = str_arg(args, "mission_id");
+            let limit = int_arg(args, "limit").unwrap_or(100).min(500);
+            let rows = if mission_id.is_empty() {
+                sqlx::query("SELECT * FROM ledgerevent WHERE state='pending' ORDER BY created_at ASC LIMIT $1")
+                    .bind(limit).fetch_all(&state.db).await
+            } else {
+                sqlx::query("SELECT * FROM ledgerevent WHERE state='pending' AND mission_id=$1 ORDER BY created_at ASC LIMIT $2")
+                    .bind(&mission_id).bind(limit).fetch_all(&state.db).await
+            };
+            match rows {
+                Ok(rows) => ok_result(json!(rows.iter().map(|r| json!({
+                    "id": r.get::<i32,_>("id"),
+                    "event_id": r.get::<String,_>("event_id"),
+                    "mission_id": r.get::<Option<String>,_>("mission_id"),
+                    "entity_type": r.get::<String,_>("entity_type"),
+                    "entity_id": r.get::<String,_>("entity_id"),
+                    "action": r.get::<String,_>("action"),
+                    "payload_json": r.get::<Option<String>,_>("payload_json"),
+                    "state": r.get::<String,_>("state"),
+                    "created_by_subject": r.get::<Option<String>,_>("created_by_subject"),
+                    "created_at": r.get::<chrono::NaiveDateTime,_>("created_at"),
+                })).collect::<Vec<_>>())),
+                Err(e) => { tracing::error!("mcp list_pending_ledger_events: {e}"); err_result("database_error") }
+            }
+        }
+
+        "get_entity_history" => {
+            let mission_id = str_arg(args, "mission_id");
+            let entity_type = str_arg(args, "entity_type");
+            let entity_id = str_arg(args, "entity_id");
+            let limit = int_arg(args, "limit").unwrap_or(200).min(500);
+            if entity_type.is_empty() || entity_id.is_empty() {
+                return err_result("entity_type and entity_id are required");
+            }
+            let rows = if mission_id.is_empty() {
+                sqlx::query("SELECT * FROM ledgerevent WHERE entity_type=$1 AND entity_id=$2 ORDER BY created_at DESC LIMIT $3")
+                    .bind(&entity_type).bind(&entity_id).bind(limit).fetch_all(&state.db).await
+            } else {
+                sqlx::query("SELECT * FROM ledgerevent WHERE mission_id=$1 AND entity_type=$2 AND entity_id=$3 ORDER BY created_at DESC LIMIT $4")
+                    .bind(&mission_id).bind(&entity_type).bind(&entity_id).bind(limit).fetch_all(&state.db).await
+            };
+            match rows {
+                Ok(rows) => ok_result(json!(rows.iter().map(|r| json!({
+                    "id": r.get::<i32,_>("id"),
+                    "event_id": r.get::<String,_>("event_id"),
+                    "mission_id": r.get::<Option<String>,_>("mission_id"),
+                    "entity_type": r.get::<String,_>("entity_type"),
+                    "entity_id": r.get::<String,_>("entity_id"),
+                    "action": r.get::<String,_>("action"),
+                    "payload_json": r.get::<Option<String>,_>("payload_json"),
+                    "state": r.get::<String,_>("state"),
+                    "created_by_subject": r.get::<Option<String>,_>("created_by_subject"),
+                    "created_at": r.get::<chrono::NaiveDateTime,_>("created_at"),
+                })).collect::<Vec<_>>())),
+                Err(e) => { tracing::error!("mcp get_entity_history: {e}"); err_result("database_error") }
+            }
+        }
+
+        // ── Publication ───────────────────────────────────────────────────────
+
+        "resolve_publish_plan" => {
+            let mission_id = str_arg(args, "mission_id");
+            let entity_kind = str_arg(args, "entity_kind");
+            let event_kind = str_arg(args, "event_kind");
+            if mission_id.is_empty() || entity_kind.is_empty() {
+                return err_result("mission_id and entity_kind are required");
+            }
+            let row = sqlx::query(
+                "SELECT r.id AS route_id, r.format, r.branch, r.rel_path_template, \
+                 b.id AS binding_id, b.name AS binding_name, \
+                 c.id AS conn_id, c.provider, c.host, c.repo_path \
+                 FROM missionpersistenceroute r \
+                 JOIN repobinding b ON b.id = r.binding_id \
+                 JOIN repoconnection c ON c.id = b.connection_id \
+                 WHERE r.mission_id=$1 AND r.entity_kind=$2 AND r.active=true \
+                 AND (r.event_kind=$3 OR r.event_kind='') \
+                 ORDER BY r.event_kind DESC LIMIT 1"
+            )
+            .bind(&mission_id).bind(&entity_kind).bind(&event_kind)
+            .fetch_optional(&state.db).await;
+            match row {
+                Ok(Some(r)) => ok_result(json!({
+                    "binding_id": r.get::<i32,_>("binding_id"),
+                    "binding_name": r.get::<String,_>("binding_name"),
+                    "connection_id": r.get::<i32,_>("conn_id"),
+                    "provider": r.get::<String,_>("provider"),
+                    "host": r.get::<Option<String>,_>("host"),
+                    "repo_path": r.get::<String,_>("repo_path"),
+                    "branch": r.get::<Option<String>,_>("branch"),
+                    "rel_path": r.get::<Option<String>,_>("rel_path_template"),
+                    "format": r.get::<Option<String>,_>("format"),
+                })),
+                Ok(None) => err_result("no_publish_plan_found"),
+                Err(e) => { tracing::error!("mcp resolve_publish_plan: {e}"); err_result("database_error") }
+            }
+        }
+
+        "get_publication_status" => {
+            let mission_id = str_arg(args, "mission_id");
+            let limit = int_arg(args, "limit").unwrap_or(20).min(200);
+            let rows = if mission_id.is_empty() {
+                sqlx::query("SELECT * FROM publicationrecord WHERE owner_subject=$1 ORDER BY created_at DESC LIMIT $2")
+                    .bind(&principal.subject).bind(limit).fetch_all(&state.db).await
+            } else {
+                sqlx::query("SELECT * FROM publicationrecord WHERE owner_subject=$1 AND mission_id=$2 ORDER BY created_at DESC LIMIT $3")
+                    .bind(&principal.subject).bind(&mission_id).bind(limit).fetch_all(&state.db).await
+            };
+            match rows {
+                Ok(rows) => ok_result(json!(rows.iter().map(|r| json!({
+                    "id": r.get::<i32,_>("id"),
+                    "owner_subject": r.get::<String,_>("owner_subject"),
+                    "mission_id": r.get::<Option<String>,_>("mission_id"),
+                    "entity_kind": r.get::<String,_>("entity_kind"),
+                    "entity_id": r.get::<String,_>("entity_id"),
+                    "event_kind": r.get::<Option<String>,_>("event_kind"),
+                    "binding_id": r.get::<Option<i32>,_>("binding_id"),
+                    "status": r.get::<String,_>("status"),
+                    "error": r.get::<Option<String>,_>("error"),
+                    "commit_sha": r.get::<Option<String>,_>("commit_sha"),
+                    "created_at": r.get::<chrono::NaiveDateTime,_>("created_at"),
+                    "updated_at": r.get::<chrono::NaiveDateTime,_>("updated_at"),
+                })).collect::<Vec<_>>())),
+                Err(e) => { tracing::error!("mcp get_publication_status: {e}"); err_result("database_error") }
+            }
+        }
+
+        // ── Skill sync state ──────────────────────────────────────────────────
+
+        "get_skill_sync_status" => {
+            let mission_id = str_arg(args, "mission_id");
+            let kluster_id = str_arg(args, "kluster_id");
+            let agent_id = str_arg(args, "agent_id");
+            if mission_id.is_empty() { return err_result("mission_id is required"); }
+            let row = sqlx::query(
+                "SELECT * FROM skilllocalstate WHERE actor_subject=$1 AND mission_id=$2 \
+                 AND ($3='' OR kluster_id=$3) AND ($4='' OR agent_id=$4) LIMIT 1"
+            )
+            .bind(&principal.subject).bind(&mission_id).bind(&kluster_id).bind(&agent_id)
+            .fetch_optional(&state.db).await;
+            match row {
+                Ok(Some(r)) => ok_result(json!({
+                    "mission_id": r.get::<String,_>("mission_id"),
+                    "kluster_id": r.get::<Option<String>,_>("kluster_id"),
+                    "actor_subject": r.get::<String,_>("actor_subject"),
+                    "agent_id": r.get::<Option<String>,_>("agent_id"),
+                    "last_snapshot_id": r.get::<Option<String>,_>("last_snapshot_id"),
+                    "last_snapshot_sha256": r.get::<Option<String>,_>("last_snapshot_sha256"),
+                    "local_overlay_sha256": r.get::<Option<String>,_>("local_overlay_sha256"),
+                    "degraded_offline": r.get::<Option<bool>,_>("degraded_offline"),
+                    "drift_flag": r.get::<Option<bool>,_>("drift_flag"),
+                    "drift_details": r.get::<Option<String>,_>("drift_details"),
+                    "last_sync_at": r.get::<Option<chrono::NaiveDateTime>,_>("last_sync_at"),
+                })),
+                Ok(None) => ok_result(json!({"mission_id": mission_id, "status": "no_record"})),
+                Err(e) => { tracing::error!("mcp get_skill_sync_status: {e}"); err_result("database_error") }
+            }
+        }
+
+        "ack_skill_sync" => {
+            let mission_id = str_arg(args, "mission_id");
+            let kluster_id = str_arg(args, "kluster_id");
+            let agent_id = str_arg(args, "agent_id");
+            let snapshot_id = str_arg(args, "snapshot_id");
+            let snapshot_sha256 = str_arg(args, "snapshot_sha256");
+            let local_overlay_sha256 = str_arg(args, "local_overlay_sha256");
+            let degraded = args.get("degraded_offline").and_then(|v| v.as_bool()).unwrap_or(false);
+            let drift_flag = args.get("drift_flag").and_then(|v| v.as_bool()).unwrap_or(false);
+            let drift_details = args.get("drift_details").map(|v| v.to_string());
+            if mission_id.is_empty() || kluster_id.is_empty() {
+                return err_result("mission_id and kluster_id are required");
+            }
+            let result = sqlx::query(
+                "INSERT INTO skilllocalstate \
+                 (actor_subject, mission_id, kluster_id, agent_id, last_snapshot_id, last_snapshot_sha256, \
+                  local_overlay_sha256, degraded_offline, drift_flag, drift_details, last_sync_at) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW()) \
+                 ON CONFLICT (actor_subject, mission_id, kluster_id, agent_id) DO UPDATE SET \
+                 last_snapshot_id=$5, last_snapshot_sha256=$6, local_overlay_sha256=$7, \
+                 degraded_offline=$8, drift_flag=$9, drift_details=$10, last_sync_at=NOW() \
+                 RETURNING *"
+            )
+            .bind(&principal.subject).bind(&mission_id).bind(&kluster_id)
+            .bind(if agent_id.is_empty() { None } else { Some(agent_id.clone()) })
+            .bind(if snapshot_id.is_empty() { None } else { Some(snapshot_id) })
+            .bind(if snapshot_sha256.is_empty() { None } else { Some(snapshot_sha256) })
+            .bind(if local_overlay_sha256.is_empty() { None } else { Some(local_overlay_sha256) })
+            .bind(degraded).bind(drift_flag).bind(drift_details)
+            .fetch_one(&state.db).await;
+            match result {
+                Ok(r) => ok_result(json!({
+                    "mission_id": r.get::<String,_>("mission_id"),
+                    "kluster_id": r.get::<Option<String>,_>("kluster_id"),
+                    "actor_subject": r.get::<String,_>("actor_subject"),
+                    "last_snapshot_id": r.get::<Option<String>,_>("last_snapshot_id"),
+                    "drift_flag": r.get::<Option<bool>,_>("drift_flag"),
+                    "last_sync_at": r.get::<Option<chrono::NaiveDateTime>,_>("last_sync_at"),
+                })),
+                Err(e) => { tracing::error!("mcp ack_skill_sync: {e}"); err_result("database_error") }
+            }
+        }
+
+        "promote_local_skill_overlay" => {
+            let mission_id = str_arg(args, "mission_id");
+            let kluster_id = str_arg(args, "kluster_id");
+            let agent_id = str_arg(args, "agent_id");
+            let sha256 = str_arg(args, "local_overlay_sha256");
+            let note = str_arg(args, "note");
+            if mission_id.is_empty() || kluster_id.is_empty() || sha256.is_empty() {
+                return err_result("mission_id, kluster_id, local_overlay_sha256 are required");
+            }
+            let drift_details = json!({"promoted": true, "note": note}).to_string();
+            let result = sqlx::query(
+                "INSERT INTO skilllocalstate \
+                 (actor_subject, mission_id, kluster_id, agent_id, local_overlay_sha256, drift_details, last_sync_at) \
+                 VALUES ($1,$2,$3,$4,$5,$6,NOW()) \
+                 ON CONFLICT (actor_subject, mission_id, kluster_id, agent_id) DO UPDATE SET \
+                 local_overlay_sha256=$5, drift_details=$6, last_sync_at=NOW() \
+                 RETURNING *"
+            )
+            .bind(&principal.subject).bind(&mission_id).bind(&kluster_id)
+            .bind(if agent_id.is_empty() { None } else { Some(agent_id) })
+            .bind(&sha256).bind(&drift_details)
+            .fetch_one(&state.db).await;
+            match result {
+                Ok(r) => ok_result(json!({
+                    "mission_id": r.get::<String,_>("mission_id"),
+                    "kluster_id": r.get::<Option<String>,_>("kluster_id"),
+                    "actor_subject": r.get::<String,_>("actor_subject"),
+                    "local_overlay_sha256": r.get::<Option<String>,_>("local_overlay_sha256"),
+                    "drift_details": drift_details,
+                    "last_sync_at": r.get::<Option<chrono::NaiveDateTime>,_>("last_sync_at"),
+                })),
+                Err(e) => { tracing::error!("mcp promote_local_skill_overlay: {e}"); err_result("database_error") }
+            }
+        }
+
+        // ── Profile pin ───────────────────────────────────────────────────────
+
+        "pin_profile_version" => {
+            let name = str_arg(args, "name");
+            let sha256 = str_arg(args, "sha256");
+            if name.is_empty() || sha256.is_empty() { return err_result("name and sha256 are required"); }
+            let row = sqlx::query(
+                "SELECT name, sha256 FROM userprofile WHERE owner_subject=$1 AND name=$2"
+            )
+            .bind(&principal.subject).bind(&name)
+            .fetch_optional(&state.db).await;
+            match row {
+                Ok(Some(r)) => {
+                    let remote_sha: Option<String> = r.get("sha256");
+                    let matches = remote_sha.as_deref() == Some(sha256.as_str());
+                    ok_result(json!({"name": name, "pinned_sha256": sha256, "remote_sha256": remote_sha, "matches": matches}))
+                }
+                Ok(None) => err_result("profile_not_found"),
+                Err(e) => { tracing::error!("mcp pin_profile_version: {e}"); err_result("database_error") }
+            }
+        }
+
+        // ── Mission packs (list only; export/install need Python) ─────────────
+
+        "list_mission_packs" => {
+            let limit = int_arg(args, "limit").unwrap_or(50).min(200);
+            let rows = sqlx::query(
+                "SELECT id, name, version, sha256, created_at FROM missionpack \
+                 WHERE owner_subject=$1 ORDER BY created_at DESC LIMIT $2"
+            )
+            .bind(&principal.subject).bind(limit).fetch_all(&state.db).await;
+            match rows {
+                Ok(rows) => ok_result(json!(rows.iter().map(|r| json!({
+                    "id": r.get::<String,_>("id"),
+                    "name": r.get::<String,_>("name"),
+                    "version": r.get::<Option<String>,_>("version"),
+                    "sha256": r.get::<Option<String>,_>("sha256").map(|s| s[..8.min(s.len())].to_string()),
+                    "created_at": r.get::<chrono::NaiveDateTime,_>("created_at"),
+                })).collect::<Vec<_>>())),
+                Err(e) => { tracing::error!("mcp list_mission_packs: {e}"); err_result("database_error") }
+            }
+        }
+
+        // ── Remote launch ─────────────────────────────────────────────────────
+
+        "create_remote_launch" => {
+            let target_id = str_arg(args, "target_id");
+            let target_host = str_arg(args, "target_host");
+            let transport = str_arg_or(args, "transport", "ssh");
+            let agent_kind = str_arg_or(args, "agent_kind", "generic");
+            let agent_profile = str_arg(args, "agent_profile");
+            let capability_scope = str_arg_or(args, "capability_scope", "");
+            let ttl_hours = int_arg(args, "ttl_hours").unwrap_or(8);
+            if target_host.is_empty() && target_id.is_empty() {
+                return err_result("target_host or target_id is required");
+            }
+            let (session_id, raw_token) = match issue_mcp_session(
+                &state.db, &principal.subject, ttl_hours, &capability_scope
+            ).await {
+                Ok(v) => v,
+                Err(e) => { tracing::error!("mcp create_remote_launch session: {e}"); return err_result("database_error"); }
+            };
+            let launch_id = format!("rl-{}", hex::encode(&uuid::Uuid::new_v4().as_bytes()[..4]));
+            let result = sqlx::query(
+                "INSERT INTO remotelaunchrecord \
+                 (id, owner_subject, transport, target_id, target_host, agent_kind, agent_profile, \
+                  capability_scope, session_token_id, status, created_at, updated_at) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'launching',$10,$10) RETURNING *"
+            )
+            .bind(&launch_id).bind(&principal.subject).bind(&transport)
+            .bind(if target_id.is_empty() { None } else { Some(target_id) })
+            .bind(if target_host.is_empty() { None } else { Some(target_host) })
+            .bind(&agent_kind).bind(if agent_profile.is_empty() { None } else { Some(agent_profile) })
+            .bind(&capability_scope).bind(session_id).bind(now)
+            .fetch_one(&state.db).await;
+            match result {
+                Ok(r) => ok_result(json!({
+                    "launch_id": r.get::<String,_>("id"),
+                    "owner_subject": r.get::<String,_>("owner_subject"),
+                    "transport": r.get::<String,_>("transport"),
+                    "agent_kind": r.get::<String,_>("agent_kind"),
+                    "status": r.get::<String,_>("status"),
+                    "session_token_id": r.get::<i32,_>("session_token_id"),
+                    "session_token": raw_token,
+                    "created_at": r.get::<chrono::NaiveDateTime,_>("created_at"),
+                })),
+                Err(e) => { tracing::error!("mcp create_remote_launch: {e}"); err_result("database_error") }
+            }
+        }
+
+        "kill_remote_launch" => {
+            let launch_id = str_arg(args, "launch_id");
+            if launch_id.is_empty() { return err_result("launch_id is required"); }
+            let row = sqlx::query(
+                "SELECT id, owner_subject, session_token_id FROM remotelaunchrecord WHERE id=$1"
+            )
+            .bind(&launch_id).fetch_optional(&state.db).await;
+            let row = match row {
+                Ok(Some(r)) => r,
+                Ok(None) => return err_result("launch_not_found"),
+                Err(e) => { tracing::error!("mcp kill_remote_launch fetch: {e}"); return err_result("database_error"); }
+            };
+            let owner: String = row.get("owner_subject");
+            if owner != principal.subject && !principal.is_admin {
+                return err_result("forbidden");
+            }
+            let session_token_id: Option<i32> = row.get("session_token_id");
+            if let Some(sid) = session_token_id {
+                let _ = sqlx::query("UPDATE usersession SET revoked=true WHERE id=$1")
+                    .bind(sid).execute(&state.db).await;
+            }
+            let _ = sqlx::query(
+                "UPDATE remotelaunchrecord SET status='failed', error_message='killed by owner', updated_at=$2 WHERE id=$1"
+            )
+            .bind(&launch_id).bind(now).execute(&state.db).await;
+            ok_result(json!({"killed": launch_id}))
+        }
+
+        // ── Still Python-only (tarball/S3/git ops) ────────────────────────────
         "get_artifact_download_url"
         | "load_kluster_workspace"
         | "heartbeat_workspace_lease"
         | "fetch_workspace_artifact"
         | "commit_kluster_workspace"
         | "release_kluster_workspace"
-        | "list_pending_ledger_events"
         | "publish_pending_ledger_events"
         | "provision_mission_persistence"
-        | "resolve_publish_plan"
-        | "get_publication_status"
-        | "get_entity_history"
         | "resolve_skill_snapshot"
         | "download_skill_snapshot"
-        | "get_skill_sync_status"
-        | "ack_skill_sync"
-        | "promote_local_skill_overlay"
         | "publish_profile"
         | "download_profile"
-        | "pin_profile_version"
-        | "create_remote_launch"
-        | "kill_remote_launch"
-        | "list_mission_packs"
         | "export_mission_pack"
         | "install_mission_pack" => not_impl(),
 
@@ -1239,6 +1585,32 @@ async fn dispatch(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+async fn issue_mcp_session(
+    db: &sqlx::PgPool,
+    subject: &str,
+    ttl_hours: i64,
+    capability_scope: &str,
+) -> Result<(i32, String), sqlx::Error> {
+    use rand::RngCore;
+    use sha2::{Digest, Sha256};
+    let mut raw_bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut raw_bytes);
+    let raw_token = format!("mcs_{}", hex::encode(&raw_bytes));
+    let token_hash = hex::encode(Sha256::new().chain_update(raw_token.as_bytes()).finalize());
+    let token_prefix = &raw_token[..8.min(raw_token.len())];
+    let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(ttl_hours);
+    let now = chrono::Utc::now().naive_utc();
+    let session_id: i32 = sqlx::query_scalar(
+        "INSERT INTO usersession \
+         (subject, token_hash, token_prefix, expires_at, created_at, last_used_at, user_agent, revoked, capability_scope) \
+         VALUES ($1,$2,$3,$4,$5,$5,'mc-mcp',false,$6) RETURNING id",
+    )
+    .bind(subject).bind(&token_hash).bind(token_prefix)
+    .bind(expires_at).bind(now).bind(capability_scope)
+    .fetch_one(db).await?;
+    Ok((session_id, raw_token))
+}
 
 fn str_arg<'a>(args: &'a Value, key: &str) -> String {
     args.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
