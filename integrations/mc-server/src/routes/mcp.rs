@@ -1564,21 +1564,750 @@ async fn dispatch(
             ok_result(json!({"killed": launch_id}))
         }
 
-        // ── Still Python-only (tarball/S3/git ops) ────────────────────────────
+        // ── Skill snapshots ───────────────────────────────────────────────────
+
+        "resolve_skill_snapshot" => {
+            let mission_id = str_arg(args, "mission_id");
+            let kluster_id = str_arg(args, "kluster_id");
+            if mission_id.is_empty() { return err_result("mission_id is required"); }
+            // Try kluster-specific first, then fall back to mission-level
+            let row = if !kluster_id.is_empty() {
+                let r = sqlx::query(
+                    "SELECT * FROM skillsnapshot WHERE mission_id=$1 AND kluster_id=$2 \
+                     ORDER BY created_at DESC LIMIT 1"
+                )
+                .bind(&mission_id).bind(&kluster_id)
+                .fetch_optional(&state.db).await;
+                match r {
+                    Ok(Some(r)) => Some(r),
+                    Ok(None) => sqlx::query(
+                        "SELECT * FROM skillsnapshot WHERE mission_id=$1 AND kluster_id='' \
+                         ORDER BY created_at DESC LIMIT 1"
+                    )
+                    .bind(&mission_id).fetch_optional(&state.db).await.unwrap_or(None),
+                    Err(e) => { tracing::error!("mcp resolve_skill_snapshot: {e}"); return err_result("database_error"); }
+                }
+            } else {
+                sqlx::query(
+                    "SELECT * FROM skillsnapshot WHERE mission_id=$1 AND kluster_id='' \
+                     ORDER BY created_at DESC LIMIT 1"
+                )
+                .bind(&mission_id).fetch_optional(&state.db).await.unwrap_or(None)
+            };
+            match row {
+                Some(r) => {
+                    let manifest_json: String = r.try_get("manifest_json").unwrap_or_default();
+                    let manifest: serde_json::Value = serde_json::from_str(&manifest_json).unwrap_or(json!({}));
+                    ok_result(json!({"snapshot": {
+                        "id": r.get::<String,_>("id"),
+                        "mission_id": r.get::<String,_>("mission_id"),
+                        "kluster_id": r.get::<String,_>("kluster_id"),
+                        "effective_version": r.get::<String,_>("effective_version"),
+                        "mission_bundle_id": r.get::<String,_>("mission_bundle_id"),
+                        "kluster_bundle_id": r.get::<String,_>("kluster_bundle_id"),
+                        "sha256": r.get::<String,_>("sha256"),
+                        "size_bytes": r.get::<i32,_>("size_bytes"),
+                        "manifest": manifest,
+                    }}))
+                }
+                None => err_result("no_snapshot_found"),
+            }
+        }
+
+        "download_skill_snapshot" => {
+            let snapshot_id = str_arg(args, "snapshot_id");
+            if snapshot_id.is_empty() { return err_result("snapshot_id is required"); }
+            match sqlx::query("SELECT * FROM skillsnapshot WHERE id=$1")
+                .bind(&snapshot_id).fetch_optional(&state.db).await
+            {
+                Ok(Some(r)) => {
+                    let manifest_json: String = r.try_get("manifest_json").unwrap_or_default();
+                    let manifest: serde_json::Value = serde_json::from_str(&manifest_json).unwrap_or(json!({}));
+                    ok_result(json!({"snapshot": {
+                        "id": r.get::<String,_>("id"),
+                        "sha256": r.get::<String,_>("sha256"),
+                        "size_bytes": r.get::<i32,_>("size_bytes"),
+                        "tarball_b64": r.get::<String,_>("tarball_b64"),
+                        "manifest": manifest,
+                    }}))
+                }
+                Ok(None) => err_result("not_found"),
+                Err(e) => { tracing::error!("mcp download_skill_snapshot: {e}"); err_result("database_error") }
+            }
+        }
+
+        // ── Profiles ──────────────────────────────────────────────────────────
+
+        "publish_profile" => {
+            use sha2::{Digest, Sha256};
+            use base64::Engine;
+            let name = str_arg(args, "name");
+            let tarball_b64 = str_arg(args, "tarball_b64");
+            if name.is_empty() || tarball_b64.is_empty() {
+                return err_result("name and tarball_b64 are required");
+            }
+            let expected_sha = str_arg(args, "expected_sha256");
+            let description = str_arg(args, "description");
+            let is_default = args.get("is_default").and_then(|v| v.as_bool()).unwrap_or(false);
+            let manifest_json = args.get("manifest")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "[]".into());
+
+            let raw = match base64::engine::general_purpose::STANDARD.decode(tarball_b64.as_bytes()) {
+                Ok(b) => b,
+                Err(_) => return err_result("tarball_b64 is not valid base64"),
+            };
+            let computed_sha = hex::encode(Sha256::new().chain_update(&raw).finalize());
+            let size_bytes = raw.len() as i32;
+
+            // Check expected_sha conflict
+            if !expected_sha.is_empty() {
+                let current: Option<String> = sqlx::query_scalar(
+                    "SELECT sha256 FROM userprofile WHERE owner_subject=$1 AND name=$2"
+                )
+                .bind(&principal.subject).bind(&name)
+                .fetch_optional(&state.db).await.unwrap_or(None).flatten();
+                if let Some(cur) = current {
+                    if cur != expected_sha {
+                        return ok_result(json!({"error": "profile_sha_mismatch",
+                            "expected_sha256": expected_sha, "current_sha256": cur, "name": name}));
+                    }
+                }
+            }
+
+            let row = sqlx::query(
+                "INSERT INTO userprofile \
+                 (name, owner_subject, description, is_default, manifest_json, tarball_b64, \
+                  sha256, size_bytes, created_at, updated_at) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) \
+                 ON CONFLICT (owner_subject, name) DO UPDATE SET \
+                 description=$3, is_default=$4, manifest_json=$5, tarball_b64=$6, \
+                 sha256=$7, size_bytes=$8, updated_at=$9 \
+                 RETURNING *"
+            )
+            .bind(&name).bind(&principal.subject).bind(&description)
+            .bind(is_default).bind(&manifest_json).bind(&tarball_b64)
+            .bind(&computed_sha).bind(size_bytes).bind(now)
+            .fetch_one(&state.db).await;
+
+            match row {
+                Ok(r) => {
+                    // Clear is_default from other profiles if needed
+                    if is_default {
+                        let _ = sqlx::query(
+                            "UPDATE userprofile SET is_default=false, updated_at=$3 \
+                             WHERE owner_subject=$1 AND name<>$2 AND is_default=true"
+                        )
+                        .bind(&principal.subject).bind(&name).bind(now)
+                        .execute(&state.db).await;
+                    }
+                    ok_result(json!({"profile": profile_row_to_json(&r)}))
+                }
+                Err(e) => { tracing::error!("mcp publish_profile: {e}"); err_result("database_error") }
+            }
+        }
+
+        "download_profile" => {
+            let name = str_arg(args, "name");
+            if name.is_empty() { return err_result("name is required"); }
+            let if_sha256 = str_arg(args, "if_sha256");
+            match sqlx::query(
+                "SELECT * FROM userprofile WHERE owner_subject=$1 AND name=$2"
+            )
+            .bind(&principal.subject).bind(&name)
+            .fetch_optional(&state.db).await
+            {
+                Ok(Some(r)) => {
+                    let current_sha: String = r.try_get("sha256").unwrap_or_default();
+                    if !if_sha256.is_empty() && if_sha256 != current_sha {
+                        return ok_result(json!({"error": "profile_sha_mismatch",
+                            "expected_sha256": if_sha256, "current_sha256": current_sha, "name": name}));
+                    }
+                    let tarball_b64: String = r.try_get("tarball_b64").unwrap_or_default();
+                    ok_result(json!({"profile": profile_row_to_json(&r), "tarball_b64": tarball_b64}))
+                }
+                Ok(None) => err_result("not_found"),
+                Err(e) => { tracing::error!("mcp download_profile: {e}"); err_result("database_error") }
+            }
+        }
+
+        // ── Mission packs ─────────────────────────────────────────────────────
+
+        "export_mission_pack" => {
+            use sha2::{Digest, Sha256};
+            use base64::Engine;
+            use flate2::write::GzEncoder;
+            use flate2::Compression;
+            let mission_id = str_arg(args, "mission_id");
+            if mission_id.is_empty() { return err_result("mission_id is required"); }
+
+            let mission = sqlx::query("SELECT * FROM mission WHERE id=$1")
+                .bind(&mission_id).fetch_optional(&state.db).await;
+            let mission = match mission {
+                Ok(Some(r)) => r,
+                Ok(None) => return err_result("mission not found"),
+                Err(e) => { tracing::error!("mcp export_mission_pack: {e}"); return err_result("database_error"); }
+            };
+
+            let klusters = sqlx::query("SELECT * FROM kluster WHERE mission_id=$1")
+                .bind(&mission_id).fetch_all(&state.db).await.unwrap_or_default();
+            let skill_bundles = sqlx::query(
+                "SELECT * FROM skillbundle WHERE scope_type='mission' AND scope_id=$1"
+            )
+            .bind(&mission_id).fetch_all(&state.db).await.unwrap_or_default();
+            let budget_policies = sqlx::query(
+                "SELECT * FROM budgetpolicy WHERE scope_type='mission' AND scope_id=$1 \
+                 AND owner_subject=$2 AND active=true"
+            )
+            .bind(&mission_id).bind(&principal.subject)
+            .fetch_all(&state.db).await.unwrap_or_default();
+
+            // Build tar.gz in memory
+            let buf = Vec::new();
+            let enc = GzEncoder::new(buf, Compression::default());
+            let mut tar = tar::Builder::new(enc);
+
+            let mission_name: String = mission.get("name");
+            let mission_desc: String = mission.try_get("description").unwrap_or_default();
+            let exported_at = chrono::Utc::now().to_rfc3339();
+
+            let manifest = json!({
+                "version": 1,
+                "mission_id": mission_id,
+                "mission_name": mission_name,
+                "kluster_count": klusters.len(),
+                "skill_count": skill_bundles.len(),
+                "budget_count": budget_policies.len(),
+                "exported_at": exported_at,
+            });
+
+            fn add_json_entry(tar: &mut tar::Builder<GzEncoder<Vec<u8>>>, name: &str, v: &serde_json::Value) -> std::io::Result<()> {
+                let content = serde_json::to_vec_pretty(v).unwrap_or_default();
+                let mut header = tar::Header::new_gnu();
+                header.set_size(content.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                tar.append_data(&mut header, name, content.as_slice())
+            }
+
+            if let Err(e) = add_json_entry(&mut tar, "mission.json", &json!({
+                "id": mission_id, "name": mission_name, "description": mission_desc,
+            })) { tracing::error!("mcp export tar mission.json: {e}"); return err_result("tar_error"); }
+
+            for k in &klusters {
+                let kid: String = k.get("id");
+                let kname: String = k.get("name");
+                let kdesc: String = k.try_get("description").unwrap_or_default();
+                let path = format!("klusters/{kid}.json");
+                if let Err(e) = add_json_entry(&mut tar, &path, &json!({"id": kid, "name": kname, "description": kdesc})) {
+                    tracing::error!("mcp export tar {path}: {e}"); return err_result("tar_error");
+                }
+            }
+            for sb in &skill_bundles {
+                let sid: String = sb.get("id");
+                let sver: i32 = sb.try_get("version").unwrap_or(1);
+                let starball: String = sb.try_get("tarball_b64").unwrap_or_default();
+                let ssha: String = sb.try_get("sha256").unwrap_or_default();
+                let path = format!("skills/{sid}.json");
+                if let Err(e) = add_json_entry(&mut tar, &path, &json!({"id": sid, "version": sver, "tarball_b64": starball, "sha256": ssha})) {
+                    tracing::error!("mcp export tar {path}: {e}"); return err_result("tar_error");
+                }
+            }
+            for bp in &budget_policies {
+                let bid: String = bp.get("id");
+                let path = format!("budgets/{bid}.json");
+                let v = json!({
+                    "scope_type": bp.get::<String,_>("scope_type"),
+                    "window_type": bp.get::<String,_>("window_type"),
+                    "hard_cap_cents": bp.get::<i32,_>("hard_cap_cents"),
+                    "soft_cap_cents": bp.get::<Option<i32>,_>("soft_cap_cents"),
+                    "action_on_breach": bp.get::<String,_>("action_on_breach"),
+                });
+                if let Err(e) = add_json_entry(&mut tar, &path, &v) {
+                    tracing::error!("mcp export tar {path}: {e}"); return err_result("tar_error");
+                }
+            }
+            if let Err(e) = add_json_entry(&mut tar, "manifest.json", &manifest) {
+                tracing::error!("mcp export tar manifest.json: {e}"); return err_result("tar_error");
+            }
+
+            let enc = match tar.into_inner() { Ok(e) => e, Err(e) => { tracing::error!("mcp export tar finish: {e}"); return err_result("tar_error"); } };
+            let tarball_bytes = match enc.finish() { Ok(b) => b, Err(e) => { tracing::error!("mcp export gz finish: {e}"); return err_result("tar_error"); } };
+            let tarball_b64 = base64::engine::general_purpose::STANDARD.encode(&tarball_bytes);
+            let sha256 = hex::encode(Sha256::new().chain_update(&tarball_bytes).finalize());
+            let manifest_json = manifest.to_string();
+            let pack_id = uuid::Uuid::new_v4().to_string();
+
+            match sqlx::query(
+                "INSERT INTO missionpack (id, owner_subject, name, version, sha256, tarball_b64, manifest_json, created_at, updated_at) \
+                 VALUES ($1,$2,$3,1,$4,$5,$6,$7,$7) RETURNING id, name, sha256"
+            )
+            .bind(&pack_id).bind(&principal.subject).bind(&mission_name)
+            .bind(&sha256).bind(&tarball_b64).bind(&manifest_json).bind(now)
+            .fetch_one(&state.db).await {
+                Ok(r) => ok_result(json!({"pack_id": r.get::<String,_>("id"), "name": r.get::<String,_>("name"), "sha256": r.get::<String,_>("sha256")})),
+                Err(e) => { tracing::error!("mcp export_mission_pack insert: {e}"); err_result("database_error") }
+            }
+        }
+
+        "install_mission_pack" => {
+            use base64::Engine;
+            let pack_id = str_arg(args, "pack_id");
+            if pack_id.is_empty() { return err_result("pack_id is required"); }
+            let target_mission_id = str_arg(args, "target_mission_id");
+
+            let pack_row = sqlx::query(
+                "SELECT * FROM missionpack WHERE id=$1 AND owner_subject=$2"
+            )
+            .bind(&pack_id).bind(&principal.subject)
+            .fetch_optional(&state.db).await;
+            let pack_row = match pack_row {
+                Ok(Some(r)) => r,
+                Ok(None) => return err_result("pack not found"),
+                Err(e) => { tracing::error!("mcp install_mission_pack: {e}"); return err_result("database_error"); }
+            };
+
+            let tarball_b64: String = pack_row.get("tarball_b64");
+            let tarball_bytes = match base64::engine::general_purpose::STANDARD.decode(tarball_b64.as_bytes()) {
+                Ok(b) => b,
+                Err(_) => return err_result("pack tarball is corrupt (invalid base64)"),
+            };
+
+            // Extract tar in memory
+            use std::io::Read;
+            let cursor = std::io::Cursor::new(tarball_bytes);
+            let gz = flate2::read::GzDecoder::new(cursor);
+            let mut archive = tar::Archive::new(gz);
+
+            let entries: Vec<(String, Vec<u8>)> = match archive.entries() {
+                Ok(entries) => {
+                    let mut out = Vec::new();
+                    for e in entries {
+                        if let Ok(mut entry) = e {
+                            if let Ok(path) = entry.path() {
+                                let name = path.to_string_lossy().into_owned();
+                                let mut buf = Vec::new();
+                                let _ = entry.read_to_end(&mut buf);
+                                out.push((name, buf));
+                            }
+                        }
+                    }
+                    out
+                }
+                Err(e) => { tracing::error!("mcp install_mission_pack tar: {e}"); return err_result("pack tarball is corrupt"); }
+            };
+
+            // Parse manifest + mission
+            let manifest: serde_json::Value = entries.iter()
+                .find(|(n,_)| n == "manifest.json")
+                .and_then(|(_,b)| serde_json::from_slice(b).ok())
+                .unwrap_or(json!({}));
+            let mission_spec: serde_json::Value = entries.iter()
+                .find(|(n,_)| n == "mission.json")
+                .and_then(|(_,b)| serde_json::from_slice(b).ok())
+                .unwrap_or(json!({}));
+
+            let mut created_missions: Vec<String> = vec![];
+            let mut created_klusters: Vec<String> = vec![];
+            let mut created_skills: Vec<String> = vec![];
+            let mut created_budgets: Vec<String> = vec![];
+
+            // Find or create mission
+            let mission_id = if !target_mission_id.is_empty() {
+                let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM mission WHERE id=$1")
+                    .bind(&target_mission_id).fetch_optional(&state.db).await.unwrap_or(None);
+                if exists.is_none() { return err_result("target mission not found"); }
+                target_mission_id.clone()
+            } else {
+                let new_id = uuid::Uuid::new_v4().to_string();
+                let pack_name: String = pack_row.get("name");
+                let mission_name = format!("{pack_name} (from pack)");
+                let desc = mission_spec.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                sqlx::query(
+                    "INSERT INTO mission (id, owners, name, description, created_at, updated_at) \
+                     VALUES ($1,$2,$3,$4,$5,$5)"
+                )
+                .bind(&new_id).bind(&principal.subject).bind(&mission_name)
+                .bind(desc).bind(now)
+                .execute(&state.db).await
+                .map_err(|e| tracing::error!("mcp install mission create: {e}")).ok();
+                created_missions.push(new_id.clone());
+                new_id
+            };
+
+            // Insert klusters
+            for (name, body) in entries.iter().filter(|(n,_)| n.starts_with("klusters/") && n.ends_with(".json")) {
+                let spec: serde_json::Value = match serde_json::from_slice(body) { Ok(v) => v, Err(_) => continue };
+                let kname = spec.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                if kname.is_empty() { continue; }
+                let exists: Option<String> = sqlx::query_scalar(
+                    "SELECT id FROM kluster WHERE mission_id=$1 AND name=$2"
+                )
+                .bind(&mission_id).bind(kname).fetch_optional(&state.db).await.unwrap_or(None);
+                if exists.is_none() {
+                    let kid = uuid::Uuid::new_v4().to_string();
+                    let kdesc = spec.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                    let _ = sqlx::query(
+                        "INSERT INTO kluster (id, mission_id, name, description, owners, created_at, updated_at) \
+                         VALUES ($1,$2,$3,$4,$5,$6,$6)"
+                    )
+                    .bind(&kid).bind(&mission_id).bind(kname).bind(kdesc)
+                    .bind(&principal.subject).bind(now)
+                    .execute(&state.db).await;
+                    created_klusters.push(kid);
+                }
+                let _ = name; // suppress warning
+            }
+
+            // Insert skill bundles
+            for (name, body) in entries.iter().filter(|(n,_)| n.starts_with("skills/") && n.ends_with(".json")) {
+                let spec: serde_json::Value = match serde_json::from_slice(body) { Ok(v) => v, Err(_) => continue };
+                let sha = spec.get("sha256").and_then(|v| v.as_str()).unwrap_or("");
+                if sha.is_empty() { continue; }
+                let exists: Option<String> = sqlx::query_scalar(
+                    "SELECT id FROM skillbundle WHERE scope_type='mission' AND scope_id=$1 AND sha256=$2"
+                )
+                .bind(&mission_id).bind(sha).fetch_optional(&state.db).await.unwrap_or(None);
+                if exists.is_none() {
+                    let sbid = uuid::Uuid::new_v4().to_string();
+                    let tarball = spec.get("tarball_b64").and_then(|v| v.as_str()).unwrap_or("");
+                    let ver = spec.get("version").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+                    let _ = sqlx::query(
+                        "INSERT INTO skillbundle (id, scope_type, scope_id, mission_id, version, tarball_b64, sha256, created_at, updated_at) \
+                         VALUES ($1,'mission',$2,$2,$3,$4,$5,$6,$6)"
+                    )
+                    .bind(&sbid).bind(&mission_id).bind(ver).bind(tarball).bind(sha).bind(now)
+                    .execute(&state.db).await;
+                    created_skills.push(sbid);
+                }
+                let _ = name;
+            }
+
+            // Insert budget policies
+            for (name, body) in entries.iter().filter(|(n,_)| n.starts_with("budgets/") && n.ends_with(".json")) {
+                let spec: serde_json::Value = match serde_json::from_slice(body) { Ok(v) => v, Err(_) => continue };
+                let window_type = spec.get("window_type").and_then(|v| v.as_str()).unwrap_or("day");
+                let hard_cap = spec.get("hard_cap_cents").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let soft_cap = spec.get("soft_cap_cents").and_then(|v| v.as_i64()).map(|v| v as i32);
+                let action = spec.get("action_on_breach").and_then(|v| v.as_str()).unwrap_or("alert_only");
+                let bpid = uuid::Uuid::new_v4().to_string();
+                let _ = sqlx::query(
+                    "INSERT INTO budgetpolicy (id, owner_subject, scope_type, scope_id, window_type, \
+                     hard_cap_cents, soft_cap_cents, action_on_breach, active, created_at, updated_at) \
+                     VALUES ($1,$2,'mission',$3,$4,$5,$6,$7,true,$8,$8)"
+                )
+                .bind(&bpid).bind(&principal.subject).bind(&mission_id)
+                .bind(window_type).bind(hard_cap).bind(soft_cap).bind(action).bind(now)
+                .execute(&state.db).await;
+                created_budgets.push(bpid);
+                let _ = name;
+            }
+
+            ok_result(json!({
+                "pack_id": pack_id,
+                "mission_id": mission_id,
+                "created": {"missions": created_missions, "klusters": created_klusters, "skills": created_skills, "budgets": created_budgets},
+                "manifest": manifest,
+            }))
+        }
+
+        // ── Provision persistence ─────────────────────────────────────────────
+
+        "provision_mission_persistence" => {
+            let mission_id = str_arg(args, "mission_id");
+            if mission_id.is_empty() { return err_result("mission_id is required"); }
+
+            let conn_input = args.get("connection").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+            let bind_input = args.get("binding").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+            let routes_input = args.get("routes").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+            let conn_name = conn_input.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let repo_path = conn_input.get("repo_path").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if conn_name.is_empty() || repo_path.is_empty() {
+                return err_result("connection.name and connection.repo_path are required");
+            }
+            let provider = conn_input.get("provider").and_then(|v| v.as_str()).unwrap_or("github_app").to_string();
+            let host = conn_input.get("host").and_then(|v| v.as_str()).unwrap_or("github.com").to_string();
+            let default_branch = conn_input.get("default_branch").and_then(|v| v.as_str()).unwrap_or("main").to_string();
+            let credential_ref = conn_input.get("credential_ref").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let options_json = conn_input.get("options").map(|v| v.to_string()).unwrap_or_else(|| "{}".into());
+
+            // Upsert RepoConnection
+            let conn_row = sqlx::query(
+                "INSERT INTO repoconnection (owner_subject, name, provider, host, repo_path, default_branch, credential_ref, options_json, created_at, updated_at) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) \
+                 ON CONFLICT (owner_subject, name) DO UPDATE SET \
+                 provider=$3, host=$4, repo_path=$5, default_branch=$6, credential_ref=$7, options_json=$8, updated_at=$9 \
+                 RETURNING *"
+            )
+            .bind(&principal.subject).bind(&conn_name).bind(&provider).bind(&host)
+            .bind(&repo_path).bind(&default_branch).bind(&credential_ref).bind(&options_json).bind(now)
+            .fetch_one(&state.db).await;
+            let conn_row = match conn_row {
+                Ok(r) => r,
+                Err(e) => { tracing::error!("mcp provision conn: {e}"); return err_result("database_error"); }
+            };
+            let conn_id: i32 = conn_row.get("id");
+
+            // Upsert RepoBinding
+            let bind_name = bind_input.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if bind_name.is_empty() { return err_result("binding.name is required"); }
+            let branch_override = bind_input.get("branch_override").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let base_path = bind_input.get("base_path").and_then(|v| v.as_str()).unwrap_or("missions").trim_matches('/').to_string();
+            let bind_active = bind_input.get("active").and_then(|v| v.as_bool()).unwrap_or(true);
+
+            let bind_row = sqlx::query(
+                "INSERT INTO repobinding (owner_subject, name, connection_id, branch_override, base_path, active, created_at, updated_at) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$7) \
+                 ON CONFLICT (owner_subject, name) DO UPDATE SET \
+                 connection_id=$3, branch_override=$4, base_path=$5, active=$6, updated_at=$7 \
+                 RETURNING *"
+            )
+            .bind(&principal.subject).bind(&bind_name).bind(conn_id)
+            .bind(&branch_override).bind(&base_path).bind(bind_active).bind(now)
+            .fetch_one(&state.db).await;
+            let bind_row = match bind_row {
+                Ok(r) => r,
+                Err(e) => { tracing::error!("mcp provision binding: {e}"); return err_result("database_error"); }
+            };
+            let bind_id: i32 = bind_row.get("id");
+
+            // Upsert MissionPersistencePolicy
+            let fallback_mode = str_arg_or(args, "fallback_mode", "fail_closed");
+            let require_approval = args.get("require_approval").and_then(|v| v.as_bool()).unwrap_or(false);
+            let _ = sqlx::query(
+                "INSERT INTO missionpersistencepolicy (mission_id, default_binding_id, fallback_mode, require_approval, created_at, updated_at) \
+                 VALUES ($1,$2,$3,$4,$5,$5) \
+                 ON CONFLICT (mission_id) DO UPDATE SET \
+                 default_binding_id=$2, fallback_mode=$3, require_approval=$4, updated_at=$5"
+            )
+            .bind(&mission_id).bind(bind_id).bind(&fallback_mode).bind(require_approval).bind(now)
+            .execute(&state.db).await;
+
+            // Replace routes
+            let _ = sqlx::query("DELETE FROM missionpersistenceroute WHERE mission_id=$1")
+                .bind(&mission_id).execute(&state.db).await;
+
+            for route in &routes_input {
+                let target_name = route.get("binding_name")
+                    .and_then(|v| v.as_str()).unwrap_or(&bind_name);
+                let target_id: Option<i32> = if target_name == bind_name {
+                    Some(bind_id)
+                } else {
+                    sqlx::query_scalar("SELECT id FROM repobinding WHERE owner_subject=$1 AND name=$2")
+                        .bind(&principal.subject).bind(target_name)
+                        .fetch_optional(&state.db).await.unwrap_or(None)
+                };
+                let Some(tid) = target_id else { continue; };
+                let entity_kind = route.get("entity_kind").and_then(|v| v.as_str()).unwrap_or("");
+                if entity_kind.is_empty() { continue; }
+                let event_kind = route.get("event_kind").and_then(|v| v.as_str()).unwrap_or("");
+                let route_branch = route.get("branch_override").and_then(|v| v.as_str()).unwrap_or("");
+                let path_tpl = route.get("path_template").and_then(|v| v.as_str())
+                    .unwrap_or("missions/{mission_id}/{entity_kind}/{entity_id}.json");
+                let format = route.get("format").and_then(|v| v.as_str()).unwrap_or("json_v1");
+                let active = route.get("active").and_then(|v| v.as_bool()).unwrap_or(true);
+                let _ = sqlx::query(
+                    "INSERT INTO missionpersistenceroute \
+                     (mission_id, entity_kind, event_kind, binding_id, branch_override, path_template, format, active, created_at, updated_at) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)"
+                )
+                .bind(&mission_id).bind(entity_kind).bind(event_kind).bind(tid)
+                .bind(route_branch).bind(path_tpl).bind(format).bind(active).bind(now)
+                .execute(&state.db).await;
+            }
+
+            let routes = sqlx::query(
+                "SELECT * FROM missionpersistenceroute WHERE mission_id=$1 AND active=true ORDER BY id ASC"
+            )
+            .bind(&mission_id).fetch_all(&state.db).await.unwrap_or_default();
+
+            ok_result(json!({
+                "ok": true,
+                "mission_id": mission_id,
+                "connection": {
+                    "id": conn_row.get::<i32,_>("id"),
+                    "owner_subject": conn_row.get::<String,_>("owner_subject"),
+                    "name": conn_row.get::<String,_>("name"),
+                    "provider": conn_row.get::<String,_>("provider"),
+                    "host": conn_row.get::<String,_>("host"),
+                    "repo_path": conn_row.get::<String,_>("repo_path"),
+                    "default_branch": conn_row.get::<String,_>("default_branch"),
+                    "credential_ref": conn_row.get::<String,_>("credential_ref"),
+                    "created_at": conn_row.get::<chrono::NaiveDateTime,_>("created_at"),
+                    "updated_at": conn_row.get::<chrono::NaiveDateTime,_>("updated_at"),
+                },
+                "binding": {
+                    "id": bind_row.get::<i32,_>("id"),
+                    "owner_subject": bind_row.get::<String,_>("owner_subject"),
+                    "name": bind_row.get::<String,_>("name"),
+                    "connection_id": bind_row.get::<i32,_>("connection_id"),
+                    "branch_override": bind_row.get::<String,_>("branch_override"),
+                    "base_path": bind_row.get::<String,_>("base_path"),
+                    "active": bind_row.get::<bool,_>("active"),
+                    "created_at": bind_row.get::<chrono::NaiveDateTime,_>("created_at"),
+                    "updated_at": bind_row.get::<chrono::NaiveDateTime,_>("updated_at"),
+                },
+                "routes": routes.iter().map(|r| json!({
+                    "id": r.get::<i32,_>("id"),
+                    "mission_id": r.get::<String,_>("mission_id"),
+                    "entity_kind": r.get::<String,_>("entity_kind"),
+                    "event_kind": r.get::<String,_>("event_kind"),
+                    "binding_id": r.get::<i32,_>("binding_id"),
+                    "branch_override": r.get::<String,_>("branch_override"),
+                    "path_template": r.get::<String,_>("path_template"),
+                    "format": r.get::<String,_>("format"),
+                    "active": r.get::<bool,_>("active"),
+                })).collect::<Vec<_>>(),
+            }))
+        }
+
+        // ── Git ledger publish ────────────────────────────────────────────────
+
+        "publish_pending_ledger_events" => {
+            let mission_id = str_arg(args, "mission_id");
+            if mission_id.is_empty() { return err_result("mission_id is required"); }
+
+            // Fetch pending events
+            let events = sqlx::query(
+                "SELECT * FROM ledgerevent WHERE mission_id=$1 AND state='pending' \
+                 ORDER BY created_at ASC LIMIT 500"
+            )
+            .bind(&mission_id).fetch_all(&state.db).await;
+            let events = match events {
+                Ok(e) => e,
+                Err(e) => { tracing::error!("mcp publish_ledger fetch: {e}"); return err_result("database_error"); }
+            };
+            if events.is_empty() {
+                return ok_result(json!({"published_count": 0, "commit_sha": "", "branch": "", "repo_url": ""}));
+            }
+
+            // Get routing: binding + connection
+            let route = sqlx::query(
+                "SELECT r.path_template, r.format, r.event_kind, \
+                 b.branch_override, b.base_path, \
+                 c.host, c.repo_path, c.default_branch, c.credential_ref, c.provider \
+                 FROM missionpersistenceroute r \
+                 JOIN repobinding b ON b.id = r.binding_id \
+                 JOIN repoconnection c ON c.id = b.connection_id \
+                 WHERE r.mission_id=$1 AND r.active=true \
+                 ORDER BY r.id ASC LIMIT 1"
+            )
+            .bind(&mission_id).fetch_optional(&state.db).await;
+            let route = match route {
+                Ok(Some(r)) => r,
+                Ok(None) => return err_result("no publish route configured for mission"),
+                Err(e) => { tracing::error!("mcp publish_ledger route: {e}"); return err_result("database_error"); }
+            };
+
+            let host: String = route.get("host");
+            let repo_path: String = route.get("repo_path");
+            let default_branch: String = route.get("default_branch");
+            let credential_ref: String = route.get("credential_ref");
+            let branch: String = route.try_get("branch_override")
+                .ok().filter(|s: &String| !s.is_empty())
+                .unwrap_or_else(|| default_branch.clone());
+            let path_tpl: String = route.get("path_template");
+
+            // Resolve credential: "env:VAR_NAME" → token from env
+            let token = if credential_ref.starts_with("env:") {
+                std::env::var(&credential_ref[4..]).unwrap_or_default()
+            } else {
+                std::env::var("GIT_PUBLISH_TOKEN").unwrap_or_default()
+            };
+
+            let repo_url = if token.is_empty() {
+                format!("https://{host}/{repo_path}")
+            } else {
+                format!("https://x-access-token:{token}@{host}/{repo_path}")
+            };
+
+            // Clone to tempdir and write files
+            let tmpdir = match tempfile::TempDir::new() {
+                Ok(d) => d,
+                Err(e) => { tracing::error!("mcp publish_ledger tempdir: {e}"); return err_result("internal_error"); }
+            };
+            let repo_dir = tmpdir.path().to_string_lossy().to_string();
+
+            let clone_out = std::process::Command::new("git")
+                .args(["clone", "--depth=1", "--branch", &branch, &repo_url, &repo_dir])
+                .output();
+            if let Err(e) = clone_out { tracing::error!("mcp publish_ledger clone: {e}"); return err_result("git_clone_failed"); }
+
+            // Write entity files
+            for event in &events {
+                let entity_type: String = event.get("entity_type");
+                let entity_id: String = event.get("entity_id");
+                let payload: String = event.try_get("payload_json").unwrap_or_default();
+                let rel = path_tpl
+                    .replace("{mission_id}", &mission_id)
+                    .replace("{entity_kind}", &entity_type)
+                    .replace("{entity_id}", &entity_id);
+                let full_path = std::path::Path::new(&repo_dir).join(&rel);
+                if let Some(parent) = full_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&full_path, payload.as_bytes());
+                let _ = std::process::Command::new("git")
+                    .args(["-C", &repo_dir, "add", &rel])
+                    .output();
+            }
+
+            // Commit and push
+            let commit_msg = format!("mc-server: publish {} ledger events for {}", events.len(), mission_id);
+            let _ = std::process::Command::new("git")
+                .args(["-C", &repo_dir, "config", "user.email", "mc-server@missioncontrol.ai"])
+                .output();
+            let _ = std::process::Command::new("git")
+                .args(["-C", &repo_dir, "config", "user.name", "mc-server"])
+                .output();
+            let commit_out = std::process::Command::new("git")
+                .args(["-C", &repo_dir, "commit", "--allow-empty", "-m", &commit_msg])
+                .output();
+            let commit_sha = if let Ok(_out) = commit_out {
+                // Extract SHA from "git rev-parse HEAD"
+                std::process::Command::new("git")
+                    .args(["-C", &repo_dir, "rev-parse", "HEAD"])
+                    .output()
+                    .ok()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let push_out = std::process::Command::new("git")
+                .args(["-C", &repo_dir, "push", "origin", &branch])
+                .output();
+            if let Err(e) = push_out { tracing::error!("mcp publish_ledger push: {e}"); }
+
+            // Update ledger events state
+            let published_count = events.len() as i64;
+            for event in &events {
+                let eid: i32 = event.get("id");
+                let entity_type: String = event.get("entity_type");
+                let entity_id: String = event.get("entity_id");
+                let rel = path_tpl
+                    .replace("{mission_id}", &mission_id)
+                    .replace("{entity_kind}", &entity_type)
+                    .replace("{entity_id}", &entity_id);
+                let _ = sqlx::query(
+                    "UPDATE ledgerevent SET state='published', git_commit=$2, git_path=$3, published_at=$4, updated_at=$4 WHERE id=$1"
+                )
+                .bind(eid).bind(&commit_sha).bind(&rel).bind(now)
+                .execute(&state.db).await;
+            }
+
+            let clean_repo_url = format!("https://{host}/{repo_path}");
+            ok_result(json!({"published_count": published_count, "commit_sha": commit_sha, "branch": branch, "repo_url": clean_repo_url}))
+        }
+
+        // ── Workspace / S3-dependent (still need external service) ────────────
         "get_artifact_download_url"
         | "load_kluster_workspace"
         | "heartbeat_workspace_lease"
         | "fetch_workspace_artifact"
         | "commit_kluster_workspace"
-        | "release_kluster_workspace"
-        | "publish_pending_ledger_events"
-        | "provision_mission_persistence"
-        | "resolve_skill_snapshot"
-        | "download_skill_snapshot"
-        | "publish_profile"
-        | "download_profile"
-        | "export_mission_pack"
-        | "install_mission_pack" => not_impl(),
+        | "release_kluster_workspace" => not_impl(),
 
         _ => err_result("unknown_tool"),
     }
@@ -1623,6 +2352,26 @@ fn str_arg_or<'a>(args: &'a Value, key: &str, default: &str) -> String {
 
 fn int_arg(args: &Value, key: &str) -> Option<i64> {
     args.get(key).and_then(|v| v.as_i64())
+}
+
+fn profile_row_to_json(r: &sqlx::postgres::PgRow) -> Value {
+    let manifest_json: String = r.try_get("manifest_json").unwrap_or_default();
+    let manifest: Value = serde_json::from_str(&manifest_json).unwrap_or(json!([]));
+    json!({
+        "id": r.get::<i32,_>("id"),
+        "name": r.get::<String,_>("name"),
+        "owner_subject": r.get::<String,_>("owner_subject"),
+        "description": r.try_get::<String,_>("description").unwrap_or_default(),
+        "is_default": r.try_get::<bool,_>("is_default").unwrap_or(false),
+        "manifest": manifest,
+        "sha256": r.try_get::<String,_>("sha256").unwrap_or_default(),
+        "size_bytes": r.try_get::<i32,_>("size_bytes").unwrap_or(0),
+        "mirror_uri": r.try_get::<String,_>("mirror_uri").unwrap_or_default(),
+        "mirror_sha256": r.try_get::<String,_>("mirror_sha256").unwrap_or_default(),
+        "mirror_size_bytes": r.try_get::<i32,_>("mirror_size_bytes").unwrap_or(0),
+        "created_at": r.get::<chrono::NaiveDateTime,_>("created_at"),
+        "updated_at": r.get::<chrono::NaiveDateTime,_>("updated_at"),
+    })
 }
 
 fn task_row_to_json(r: &sqlx::postgres::PgRow) -> Value {
