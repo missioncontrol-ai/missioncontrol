@@ -2301,13 +2301,307 @@ async fn dispatch(
             ok_result(json!({"published_count": published_count, "commit_sha": commit_sha, "branch": branch, "repo_url": clean_repo_url}))
         }
 
-        // ── Workspace / S3-dependent (still need external service) ────────────
-        "get_artifact_download_url"
-        | "load_kluster_workspace"
-        | "heartbeat_workspace_lease"
-        | "fetch_workspace_artifact"
-        | "commit_kluster_workspace"
-        | "release_kluster_workspace" => not_impl(),
+        // ── get_artifact_download_url (S3 presigning — Python only) ─────────────
+        "get_artifact_download_url" => not_impl(),
+
+        // ── Workspace leases ──────────────────────────────────────────────────
+
+        "load_kluster_workspace" => {
+            let kluster_id = str_arg(args, "kluster_id");
+            if kluster_id.is_empty() { return err_result("kluster_id is required"); }
+            let lease_seconds = int_arg(args, "lease_seconds").unwrap_or(900).clamp(60, 3600) as i32;
+            let workspace_label = str_arg(args, "workspace_label");
+            let agent_id = str_arg(args, "agent_id");
+
+            // Verify kluster exists and get its mission_id
+            let kluster = sqlx::query("SELECT id, mission_id FROM kluster WHERE id=$1")
+                .bind(&kluster_id).fetch_optional(&state.db).await;
+            let kluster = match kluster {
+                Ok(Some(r)) => r,
+                Ok(None) => return err_result("Kluster not found"),
+                Err(e) => { tracing::error!("mcp load_kluster_workspace kluster: {e}"); return err_result("database_error"); }
+            };
+            let mission_id: Option<String> = kluster.get("mission_id");
+            let mission_id = match mission_id {
+                Some(m) if !m.is_empty() => m,
+                _ => return err_result("Kluster is not linked to a mission"),
+            };
+
+            // Build workspace snapshot from DB
+            let snapshot = build_workspace_snapshot(&state.db, &mission_id, &kluster_id).await;
+
+            // Create lease
+            let lease_id = format!("wl-{}", &uuid::Uuid::new_v4().to_string().replace('-', "")[..12]);
+            let expires_at = now + chrono::Duration::seconds(lease_seconds as i64);
+            let snapshot_index = serde_json::to_string(&snapshot.get("index").cloned().unwrap_or(json!({}))).unwrap_or_default();
+
+            let lease = sqlx::query(
+                "INSERT INTO workspacelease \
+                 (id, mission_id, kluster_id, actor_subject, agent_id, workspace_label, \
+                  status, base_snapshot_json, lease_seconds, last_heartbeat_at, expires_at, \
+                  release_reason, created_at, updated_at) \
+                 VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,'',$9,$9) RETURNING *"
+            )
+            .bind(&lease_id).bind(&mission_id).bind(&kluster_id)
+            .bind(&principal.subject).bind(&agent_id).bind(&workspace_label)
+            .bind(&snapshot_index).bind(lease_seconds).bind(now).bind(expires_at)
+            .fetch_one(&state.db).await;
+
+            match lease {
+                Ok(r) => ok_result(json!({
+                    "lease": lease_row_to_json(&r),
+                    "workspace_snapshot": snapshot,
+                })),
+                Err(e) => { tracing::error!("mcp load_kluster_workspace insert: {e}"); err_result("database_error") }
+            }
+        }
+
+        "heartbeat_workspace_lease" => {
+            let lease_id = str_arg(args, "lease_id");
+            if lease_id.is_empty() { return err_result("lease_id is required"); }
+
+            let lease = sqlx::query("SELECT * FROM workspacelease WHERE id=$1")
+                .bind(&lease_id).fetch_optional(&state.db).await;
+            let lease = match lease {
+                Ok(Some(r)) => r,
+                Ok(None) => return err_result("Workspace lease not found"),
+                Err(e) => { tracing::error!("mcp heartbeat lease: {e}"); return err_result("database_error"); }
+            };
+
+            let owner: String = lease.get("actor_subject");
+            if owner != principal.subject && !principal.is_admin { return err_result("forbidden"); }
+            let status: String = lease.get("status");
+            if status != "active" { return err_result("Workspace lease is not active"); }
+            let lease_seconds: i32 = lease.try_get("lease_seconds").unwrap_or(900);
+            let new_expires = now + chrono::Duration::seconds(lease_seconds as i64);
+
+            match sqlx::query(
+                "UPDATE workspacelease SET last_heartbeat_at=$2, expires_at=$3, updated_at=$2 WHERE id=$1 RETURNING *"
+            )
+            .bind(&lease_id).bind(now).bind(new_expires)
+            .fetch_one(&state.db).await {
+                Ok(r) => ok_result(json!({"lease": {
+                    "id": r.get::<String,_>("id"),
+                    "status": r.get::<String,_>("status"),
+                    "last_heartbeat_at": r.get::<chrono::NaiveDateTime,_>("last_heartbeat_at"),
+                    "expires_at": r.get::<chrono::NaiveDateTime,_>("expires_at"),
+                }})),
+                Err(e) => { tracing::error!("mcp heartbeat update: {e}"); err_result("database_error") }
+            }
+        }
+
+        "fetch_workspace_artifact" => {
+            let lease_id = str_arg(args, "lease_id");
+            let artifact_id = int_arg(args, "artifact_id").unwrap_or(0) as i32;
+            let mode = str_arg_or(args, "mode", "content");
+            if lease_id.is_empty() { return err_result("lease_id is required"); }
+            if artifact_id <= 0 { return err_result("artifact_id is required"); }
+
+            let lease = sqlx::query("SELECT * FROM workspacelease WHERE id=$1")
+                .bind(&lease_id).fetch_optional(&state.db).await;
+            let lease = match lease {
+                Ok(Some(r)) => r,
+                Ok(None) => return err_result("Workspace lease not found"),
+                Err(e) => { tracing::error!("mcp fetch_workspace_artifact lease: {e}"); return err_result("database_error"); }
+            };
+            let owner: String = lease.get("actor_subject");
+            if owner != principal.subject && !principal.is_admin { return err_result("forbidden"); }
+            let lease_status: String = lease.get("status");
+            if lease_status != "active" { return err_result("Workspace lease is not active"); }
+            let lease_kluster: String = lease.get("kluster_id");
+
+            let artifact = sqlx::query("SELECT * FROM artifact WHERE id=$1")
+                .bind(artifact_id).fetch_optional(&state.db).await;
+            let artifact = match artifact {
+                Ok(Some(r)) => r,
+                Ok(None) => return err_result("Artifact not found"),
+                Err(e) => { tracing::error!("mcp fetch_workspace_artifact artifact: {e}"); return err_result("database_error"); }
+            };
+            let art_kluster: String = artifact.get("kluster_id");
+            if art_kluster != lease_kluster { return err_result("Artifact is outside lease kluster scope"); }
+
+            let storage_backend: String = artifact.try_get("storage_backend").unwrap_or_default();
+            let content_b64: Option<String> = artifact.try_get("content_b64").ok().flatten();
+            let _uri: String = artifact.try_get("uri").unwrap_or_default();
+            let mime_type: String = artifact.try_get("mime_type").unwrap_or_default();
+
+            if mode == "content" {
+                if storage_backend == "s3" {
+                    return err_result("S3 artifact content fetch requires Python API");
+                }
+                match content_b64 {
+                    Some(b64) if !b64.is_empty() => {
+                        use base64::Engine;
+                        let size = base64::engine::general_purpose::STANDARD.decode(b64.as_bytes())
+                            .map(|b| b.len()).unwrap_or(0);
+                        ok_result(json!({
+                            "artifact_id": artifact_id,
+                            "mode": "content",
+                            "mime_type": mime_type,
+                            "size_bytes": size,
+                            "content_b64": b64,
+                        }))
+                    }
+                    _ => err_result("Artifact does not have retrievable inline content"),
+                }
+            } else {
+                // download_url mode
+                if storage_backend != "s3" {
+                    return err_result("Artifact is not S3-backed — use content mode or Python API for download URL");
+                }
+                err_result("S3 presigned URL generation requires Python API")
+            }
+        }
+
+        "commit_kluster_workspace" => {
+            let lease_id = str_arg(args, "lease_id");
+            if lease_id.is_empty() { return err_result("lease_id is required"); }
+            let changes = match args.get("change_set").and_then(|v| v.as_array()) {
+                Some(c) if !c.is_empty() => c.clone(),
+                _ => return err_result("change_set must be a non-empty array"),
+            };
+
+            let lease = sqlx::query("SELECT * FROM workspacelease WHERE id=$1")
+                .bind(&lease_id).fetch_optional(&state.db).await;
+            let lease = match lease {
+                Ok(Some(r)) => r,
+                Ok(None) => return err_result("Workspace lease not found"),
+                Err(e) => { tracing::error!("mcp commit_workspace lease: {e}"); return err_result("database_error"); }
+            };
+            let owner: String = lease.get("actor_subject");
+            if owner != principal.subject && !principal.is_admin { return err_result("forbidden"); }
+            let lease_status: String = lease.get("status");
+            if lease_status != "active" { return err_result("Workspace lease is not active"); }
+            let kluster_id: String = lease.get("kluster_id");
+            let mission_id: String = lease.get("mission_id");
+
+            let mut applied_count = 0i64;
+            let mut applied: Vec<serde_json::Value> = vec![];
+
+            for change in &changes {
+                let entity_type = change.get("entity_type").and_then(|v| v.as_str()).unwrap_or("");
+                let entity_id = change.get("entity_id").and_then(|v| v.as_str()).unwrap_or("");
+
+                match entity_type {
+                    "doc" => {
+                        let doc_id: i32 = match entity_id.parse() { Ok(v) => v, Err(_) => continue };
+                        let doc = sqlx::query("SELECT * FROM doc WHERE id=$1 AND kluster_id=$2")
+                            .bind(doc_id).bind(&kluster_id).fetch_optional(&state.db).await;
+                        let doc = match doc { Ok(Some(r)) => r, _ => continue };
+                        let mut sets: Vec<String> = vec![];
+                        let mut new_title: Option<String> = None;
+                        let mut new_body: Option<String> = None;
+                        let mut new_doc_type: Option<String> = None;
+                        let mut new_status: Option<String> = None;
+                        if let Some(v) = change.get("content").and_then(|v| v.as_str()) {
+                            new_body = Some(v.to_string()); sets.push("body=$IDX".to_string());
+                        }
+                        if let Some(v) = change.get("title").and_then(|v| v.as_str()) {
+                            new_title = Some(v.to_string()); sets.push("title=$IDX".to_string());
+                        }
+                        if let Some(v) = change.get("doc_type").and_then(|v| v.as_str()) {
+                            new_doc_type = Some(v.to_string()); sets.push("doc_type=$IDX".to_string());
+                        }
+                        if let Some(v) = change.get("status").and_then(|v| v.as_str()) {
+                            new_status = Some(v.to_string()); sets.push("status=$IDX".to_string());
+                        }
+                        if sets.is_empty() { continue; }
+                        let cur_version: i32 = doc.try_get("version").unwrap_or(1);
+                        let sql = format!(
+                            "UPDATE doc SET version={}, updated_at=$1, {} WHERE id=$2",
+                            cur_version + 1,
+                            sets.iter().enumerate().map(|(i, s)| s.replace("$IDX", &format!("${}", i + 3))).collect::<Vec<_>>().join(", ")
+                        );
+                        let mut q = sqlx::query(&sql).bind(now).bind(doc_id);
+                        if let Some(v) = &new_body  { q = q.bind(v); }
+                        if let Some(v) = &new_title { q = q.bind(v); }
+                        if let Some(v) = &new_doc_type { q = q.bind(v); }
+                        if let Some(v) = &new_status { q = q.bind(v); }
+                        let _ = q.execute(&state.db).await;
+                        applied.push(json!({"entity_type": "doc", "entity_id": doc_id, "version": cur_version + 1}));
+                        applied_count += 1;
+                    }
+                    "artifact" => {
+                        let art_id: i32 = match entity_id.parse() { Ok(v) => v, Err(_) => continue };
+                        let art = sqlx::query("SELECT * FROM artifact WHERE id=$1 AND kluster_id=$2")
+                            .bind(art_id).bind(&kluster_id).fetch_optional(&state.db).await;
+                        let art = match art { Ok(Some(r)) => r, _ => continue };
+                        let cur_version: i32 = art.try_get("version").unwrap_or(1);
+                        // Only field updates — skip S3 content_b64 upload
+                        let fields = change.get("fields").and_then(|v| v.as_object());
+                        let mut parts: Vec<String> = vec![];
+                        let mut vals: Vec<String> = vec![];
+                        for key in ["name","artifact_type","uri","storage_backend","content_sha256","mime_type","status","provenance"] {
+                            if let Some(v) = fields.and_then(|f| f.get(key)).and_then(|v| v.as_str()) {
+                                parts.push(format!("{}=$IDX", key));
+                                vals.push(v.to_string());
+                            }
+                        }
+                        let sql = format!(
+                            "UPDATE artifact SET version={}, updated_at=$1, {} WHERE id=$2",
+                            cur_version + 1,
+                            parts.iter().enumerate().map(|(i, s)| s.replace("$IDX", &format!("${}", i + 3))).collect::<Vec<_>>().join(", ")
+                        );
+                        if !parts.is_empty() {
+                            let mut q = sqlx::query(&sql).bind(now).bind(art_id);
+                            for v in &vals { q = q.bind(v); }
+                            let _ = q.execute(&state.db).await;
+                        }
+                        applied.push(json!({"entity_type": "artifact", "entity_id": art_id, "version": cur_version + 1}));
+                        applied_count += 1;
+                    }
+                    _ => {}
+                }
+
+                // Enqueue ledger event
+                let event_id = format!("le-{}", &uuid::Uuid::new_v4().to_string().replace('-', "")[..12]);
+                let _ = sqlx::query(
+                    "INSERT INTO ledgerevent (event_id, mission_id, kluster_id, entity_type, entity_id, \
+                     action, payload_json, state, created_by_subject, created_at, updated_at) \
+                     VALUES ($1,$2,$3,$4,$5,'workspace_commit','{}'::text,'pending',$6,$7,$7)"
+                )
+                .bind(&event_id).bind(&mission_id).bind(&kluster_id)
+                .bind(entity_type).bind(entity_id).bind(&principal.subject).bind(now)
+                .execute(&state.db).await;
+            }
+
+            let snapshot = build_workspace_snapshot(&state.db, &mission_id, &kluster_id).await;
+            ok_result(json!({"applied_count": applied_count, "applied": applied, "workspace_snapshot": snapshot}))
+        }
+
+        "release_kluster_workspace" => {
+            let lease_id = str_arg(args, "lease_id");
+            let reason = str_arg(args, "reason");
+            if lease_id.is_empty() { return err_result("lease_id is required"); }
+
+            let lease = sqlx::query("SELECT * FROM workspacelease WHERE id=$1")
+                .bind(&lease_id).fetch_optional(&state.db).await;
+            let lease = match lease {
+                Ok(Some(r)) => r,
+                Ok(None) => return err_result("Workspace lease not found"),
+                Err(e) => { tracing::error!("mcp release_workspace lease: {e}"); return err_result("database_error"); }
+            };
+            let owner: String = lease.get("actor_subject");
+            if owner != principal.subject && !principal.is_admin { return err_result("forbidden"); }
+            let current_status: String = lease.get("status");
+            if current_status == "released" || current_status == "expired" {
+                return ok_result(json!({"lease": lease_row_to_json(&lease)}));
+            }
+
+            match sqlx::query(
+                "UPDATE workspacelease SET status='released', release_reason=$2, released_at=$3, updated_at=$3 WHERE id=$1 RETURNING *"
+            )
+            .bind(&lease_id).bind(&reason).bind(now)
+            .fetch_one(&state.db).await {
+                Ok(r) => ok_result(json!({"lease": {
+                    "id": r.get::<String,_>("id"),
+                    "status": r.get::<String,_>("status"),
+                    "release_reason": r.get::<String,_>("release_reason"),
+                    "released_at": r.get::<Option<chrono::NaiveDateTime>,_>("released_at"),
+                }})),
+                Err(e) => { tracing::error!("mcp release_workspace update: {e}"); err_result("database_error") }
+            }
+        }
 
         _ => err_result("unknown_tool"),
     }
@@ -2352,6 +2646,87 @@ fn str_arg_or<'a>(args: &'a Value, key: &str, default: &str) -> String {
 
 fn int_arg(args: &Value, key: &str) -> Option<i64> {
     args.get(key).and_then(|v| v.as_i64())
+}
+
+fn lease_row_to_json(r: &sqlx::postgres::PgRow) -> Value {
+    json!({
+        "id": r.get::<String,_>("id"),
+        "mission_id": r.get::<String,_>("mission_id"),
+        "kluster_id": r.get::<String,_>("kluster_id"),
+        "actor_subject": r.get::<String,_>("actor_subject"),
+        "agent_id": r.get::<String,_>("agent_id"),
+        "workspace_label": r.get::<String,_>("workspace_label"),
+        "status": r.get::<String,_>("status"),
+        "lease_seconds": r.get::<i32,_>("lease_seconds"),
+        "last_heartbeat_at": r.get::<chrono::NaiveDateTime,_>("last_heartbeat_at"),
+        "expires_at": r.get::<chrono::NaiveDateTime,_>("expires_at"),
+    })
+}
+
+async fn build_workspace_snapshot(db: &sqlx::PgPool, mission_id: &str, kluster_id: &str) -> Value {
+    let tasks = sqlx::query(
+        "SELECT id, public_id, title, description, status, owner, priority, labels, updated_at \
+         FROM task WHERE kluster_id=$1 AND status NOT IN ('done','cancelled') ORDER BY updated_at DESC LIMIT 200"
+    )
+    .bind(kluster_id).fetch_all(db).await.unwrap_or_default();
+
+    let docs = sqlx::query(
+        "SELECT id, title, doc_type, status, version, updated_at FROM doc WHERE kluster_id=$1 ORDER BY updated_at DESC LIMIT 100"
+    )
+    .bind(kluster_id).fetch_all(db).await.unwrap_or_default();
+
+    let artifacts = sqlx::query(
+        "SELECT id, name, artifact_type, uri, storage_backend, mime_type, size_bytes, status, version, updated_at \
+         FROM artifact WHERE kluster_id=$1 ORDER BY updated_at DESC LIMIT 100"
+    )
+    .bind(kluster_id).fetch_all(db).await.unwrap_or_default();
+
+    // Build version index for conflict detection (stored in base_snapshot_json)
+    let mut index = serde_json::Map::new();
+    for r in &docs {
+        let id: i32 = r.get("id");
+        let ver: i32 = r.try_get("version").unwrap_or(1);
+        index.insert(format!("doc:{id}"), json!(ver));
+    }
+    for r in &artifacts {
+        let id: i32 = r.get("id");
+        let ver: i32 = r.try_get("version").unwrap_or(1);
+        index.insert(format!("artifact:{id}"), json!(ver));
+    }
+
+    json!({
+        "mission_id": mission_id,
+        "kluster_id": kluster_id,
+        "tasks": tasks.iter().map(|r| json!({
+            "id": r.get::<i32,_>("id"),
+            "public_id": r.try_get::<String,_>("public_id").unwrap_or_default(),
+            "title": r.get::<String,_>("title"),
+            "description": r.try_get::<String,_>("description").unwrap_or_default(),
+            "status": r.get::<String,_>("status"),
+            "owner": r.try_get::<String,_>("owner").unwrap_or_default(),
+            "updated_at": r.get::<chrono::NaiveDateTime,_>("updated_at"),
+        })).collect::<Vec<_>>(),
+        "docs": docs.iter().map(|r| json!({
+            "id": r.get::<i32,_>("id"),
+            "title": r.get::<String,_>("title"),
+            "doc_type": r.get::<String,_>("doc_type"),
+            "status": r.get::<String,_>("status"),
+            "version": r.try_get::<i32,_>("version").unwrap_or(1),
+            "updated_at": r.get::<chrono::NaiveDateTime,_>("updated_at"),
+        })).collect::<Vec<_>>(),
+        "artifacts": artifacts.iter().map(|r| json!({
+            "id": r.get::<i32,_>("id"),
+            "name": r.get::<String,_>("name"),
+            "artifact_type": r.try_get::<String,_>("artifact_type").unwrap_or_default(),
+            "storage_backend": r.try_get::<String,_>("storage_backend").unwrap_or_default(),
+            "mime_type": r.try_get::<String,_>("mime_type").unwrap_or_default(),
+            "size_bytes": r.try_get::<i32,_>("size_bytes").unwrap_or(0),
+            "status": r.try_get::<String,_>("status").unwrap_or_default(),
+            "version": r.try_get::<i32,_>("version").unwrap_or(1),
+            "updated_at": r.get::<chrono::NaiveDateTime,_>("updated_at"),
+        })).collect::<Vec<_>>(),
+        "index": index,
+    })
 }
 
 fn profile_row_to_json(r: &sqlx::postgres::PgRow) -> Value {

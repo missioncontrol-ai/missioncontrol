@@ -25,8 +25,6 @@ class BudgetPolicyCreate(BaseModel):
     window_type: Literal["day", "week", "month", "rolling_24h"]
     hard_cap_cents: int
     soft_cap_cents: Optional[int] = None
-    token_hard_cap: Optional[int] = None
-    token_soft_cap: Optional[int] = None
     action_on_breach: Literal["pause", "require_approval", "alert_only"] = "alert_only"
 
 
@@ -38,8 +36,6 @@ class BudgetPolicyRead(BaseModel):
     window_type: str
     hard_cap_cents: int
     soft_cap_cents: Optional[int]
-    token_hard_cap: Optional[int]
-    token_soft_cap: Optional[int]
     action_on_breach: str
     active: bool
     created_at: datetime

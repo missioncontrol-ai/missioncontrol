@@ -1,6 +1,0 @@
-name: family
-version: 1
-description: Capabilities available to family governance agents
-capabilities:
-  - family.check-access
-  - family.get-profile
