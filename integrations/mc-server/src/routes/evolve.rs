@@ -30,6 +30,7 @@ struct EvolveSpec {
 #[derive(Deserialize)]
 struct EvolveRunRequest {
     runtime_kind: String,
+    #[allow(dead_code)]
     agent: String,
     #[allow(dead_code)]
     policy: Option<serde_json::Value>,

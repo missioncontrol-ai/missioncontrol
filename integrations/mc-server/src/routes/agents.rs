@@ -218,15 +218,12 @@ async fn list_assignments(
     if !params.is_empty() { sql = format!("{} AND {}", sql, params.join(" AND ")); }
     sql = format!("{} ORDER BY updated_at DESC LIMIT $1", sql);
 
-    // Simple approach: fetch all then filter in Rust (acceptable for small datasets)
-    match sqlx::query_as::<_, TaskAssignment>("SELECT * FROM taskassignment ORDER BY updated_at DESC LIMIT $1")
-        .bind(limit).fetch_all(&state.db).await {
-        Ok(mut rows) => {
-            if let Some(aid) = q.agent_id { rows.retain(|r| r.agent_id == aid); }
-            if let Some(tid) = q.task_id  { rows.retain(|r| r.task_id == tid); }
-            if let Some(s) = &q.status    { rows.retain(|r| r.status == *s); }
-            Json(rows).into_response()
-        }
+    let mut q_builder = sqlx::query_as::<_, TaskAssignment>(&sql).bind(limit);
+    if let Some(aid) = q.agent_id { q_builder = q_builder.bind(aid); }
+    if let Some(tid) = q.task_id  { q_builder = q_builder.bind(tid); }
+    if let Some(s)   = q.status   { q_builder = q_builder.bind(s); }
+    match q_builder.fetch_all(&state.db).await {
+        Ok(rows) => Json(rows).into_response(),
         Err(e) => { tracing::error!("list_assignments: {e}"); StatusCode::INTERNAL_SERVER_ERROR.into_response() }
     }
 }

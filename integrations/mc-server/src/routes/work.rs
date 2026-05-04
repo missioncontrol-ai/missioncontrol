@@ -184,6 +184,7 @@ struct CompleteBody {
 #[derive(serde::Deserialize, Default)]
 struct FailBody {
     #[serde(default)]
+    #[allow(dead_code)]
     error: String,
     claim_lease_id: Option<String>,
 }
@@ -244,6 +245,7 @@ fn default_human() -> String { "human".to_string() }
 struct GateResolve {
     decision: String,
     #[serde(default)]
+    #[allow(dead_code)]
     notes: String,
 }
 
