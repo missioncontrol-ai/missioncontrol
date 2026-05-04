@@ -1,10 +1,14 @@
 use axum::{
     extract::{Path, Query, State},
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::{header, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
+use std::collections::HashMap;
+use std::sync::OnceLock;
+use tokio::sync::{broadcast, Mutex as TokioMutex};
 use base64::Engine;
 use chrono::Utc;
 use sqlx::Row;
@@ -512,7 +516,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route(
             "/runtime/execution-sessions/{session_id}/pty",
-            get(execution_session_pty_stub),
+            get(execution_session_pty),
         )
 }
 
@@ -2027,6 +2031,115 @@ async fn attach_execution_session(
     Json(row_to_execution_session(&updated)).into_response()
 }
 
-async fn execution_session_pty_stub() -> impl IntoResponse {
-    StatusCode::NOT_IMPLEMENTED
+// ── PTY WebSocket relay ───────────────────────────────────────────────────────
+// Per-session broadcast channel registry: session_id → (sender, conn_id_of_sender)
+
+type PtyRegistry = TokioMutex<HashMap<String, broadcast::Sender<(String, String)>>>;
+
+static PTY_REGISTRY: OnceLock<PtyRegistry> = OnceLock::new();
+
+fn pty_registry() -> &'static PtyRegistry {
+    PTY_REGISTRY.get_or_init(|| TokioMutex::new(HashMap::new()))
+}
+
+async fn execution_session_pty(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    // Token from query param or skip (auth is best-effort for WS upgrades)
+    let token = params.get("token").cloned().unwrap_or_default();
+
+    // Verify token and session ownership before upgrading
+    let allowed = async {
+        if token.is_empty() { return false; }
+        // Look up session by session_id, verify ownership via attach_token or admin token
+        let admin_tok = std::env::var("MC_TOKEN").unwrap_or_default();
+        if !admin_tok.is_empty() && token == admin_tok { return true; }
+
+        // Check attach token
+        let hash = hash_token_local(&token);
+        let row = sqlx::query(
+            "SELECT es.id FROM executionsession es \
+             WHERE es.id=$1 AND es.attach_token_hash=$2 LIMIT 1",
+        )
+        .bind(&session_id)
+        .bind(&hash)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+        row.is_some()
+    }
+    .await;
+
+    if !allowed {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+
+    let conn_id = uuid::Uuid::new_v4().to_string();
+    ws.on_upgrade(move |socket| handle_pty_ws(socket, session_id, conn_id))
+}
+
+async fn handle_pty_ws(socket: WebSocket, session_id: String, conn_id: String) {
+    use futures_util::{SinkExt, StreamExt};
+
+    let (mut sink, mut stream) = socket.split();
+
+    // Get or create broadcast channel for this session (capacity 256 messages)
+    let sender = {
+        let mut reg = pty_registry().lock().await;
+        let tx = reg.entry(session_id.clone()).or_insert_with(|| {
+            let (tx, _) = broadcast::channel::<(String, String)>(256);
+            tx
+        });
+        tx.clone()
+    };
+    let mut receiver = sender.subscribe();
+
+    let conn_id_read = conn_id.clone();
+    let sender_clone = sender.clone();
+    let session_id_clean = session_id.clone();
+
+    // Read task: forward incoming WebSocket messages to broadcast channel
+    let read_task = tokio::spawn(async move {
+        while let Some(msg) = stream.next().await {
+            match msg {
+                Ok(Message::Text(txt)) => {
+                    let _ = sender_clone.send((conn_id_read.clone(), txt.to_string()));
+                }
+                Ok(Message::Close(_)) | Err(_) => break,
+                _ => {}
+            }
+        }
+        // Cleanup empty sessions
+        let mut reg = pty_registry().lock().await;
+        if let Some(tx) = reg.get(&session_id_clean) {
+            if tx.receiver_count() == 0 {
+                reg.remove(&session_id_clean);
+            }
+        }
+    });
+
+    // Write task: forward broadcast messages (from other clients) to this WebSocket
+    let write_task = tokio::spawn(async move {
+        loop {
+            match receiver.recv().await {
+                Ok((src_conn_id, msg)) => {
+                    if src_conn_id == conn_id { continue; } // skip own messages
+                    if sink.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            }
+        }
+    });
+
+    tokio::select! {
+        _ = read_task => {}
+        _ = write_task => {}
+    }
 }

@@ -31,16 +31,20 @@ struct BackupRequest {
 
 #[derive(Deserialize)]
 struct SecretsBootstrapRequest {
-    #[allow(dead_code)]
     profile: Option<String>,
+    provider: Option<String>,
+    keep_existing: Option<bool>,
+    infisical_project_id: Option<String>,
+    infisical_env: Option<String>,
+    infisical_path: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct SecretsRotateRequest {
-    #[allow(dead_code)]
     profile: Option<String>,
-    #[allow(dead_code)]
-    key: Option<String>,
+    name: Option<String>,
+    value: Option<String>,
+    generator: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -84,6 +88,66 @@ async fn write_backup_records(records: &[serde_json::Value]) -> std::io::Result<
     file.write_all(json.as_bytes()).await?;
     file.flush().await?;
     Ok(())
+}
+
+fn mc_home() -> std::path::PathBuf {
+    let val = std::env::var("MC_HOME").unwrap_or_default();
+    if !val.is_empty() {
+        return std::path::PathBuf::from(val);
+    }
+    dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/root")).join(".mc")
+}
+
+fn profile_secrets_path(profile: &str) -> std::path::PathBuf {
+    mc_home().join("profiles").join(profile).join("secrets.json")
+}
+
+fn load_profile_data(path: &std::path::Path) -> serde_json::Value {
+    match std::fs::read_to_string(path) {
+        Ok(s) => serde_json::from_str(&s).unwrap_or(serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    }
+}
+
+async fn save_profile_data(path: &std::path::Path, data: &serde_json::Value) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let s = serde_json::to_string_pretty(data).unwrap_or_else(|_| "{}".to_string());
+    tokio::fs::write(path, s.as_bytes()).await
+}
+
+fn build_secret_ref(
+    name: &str,
+    provider: &str,
+    project_id: Option<&str>,
+    env: Option<&str>,
+    path: Option<&str>,
+) -> String {
+    if provider == "infisical" {
+        let mut parts = Vec::new();
+        if let Some(p) = project_id { parts.push(format!("projectId={p}")); }
+        if let Some(e) = env { parts.push(format!("env={e}")); }
+        if let Some(p) = path { parts.push(format!("path={p}")); }
+        let query = if parts.is_empty() { String::new() } else { format!("?{}", parts.join("&")) };
+        format!("secret://infisical/{name}{query}")
+    } else {
+        format!("secret://env/{name}")
+    }
+}
+
+fn generate_secret(generator: &str) -> String {
+    use base64::Engine;
+    use rand::RngCore;
+    if generator == "hex" {
+        let mut bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        hex::encode(bytes)
+    } else {
+        let mut bytes = [0u8; 48];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    }
 }
 
 fn require_admin(principal: &Principal) -> Option<axum::response::Response> {
@@ -192,42 +256,184 @@ async fn get_secrets_status(
     if let Some(r) = require_admin(&principal) {
         return r;
     }
-    // Secrets management is Python-managed; not implemented in the Rust server.
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({"ok": false, "error": "use_python_api"})),
-    )
-        .into_response()
+    let profile_name = {
+        let p = std::env::var("MC_SECRETS_PROFILE").unwrap_or_default();
+        if p.trim().is_empty() {
+            std::env::var("MC_AGENT_PROFILE").unwrap_or_else(|_| "default".into())
+        } else {
+            p
+        }
+    };
+    let profile_name = if profile_name.trim().is_empty() { "default".to_string() } else { profile_name.trim().to_string() };
+    let path = profile_secrets_path(&profile_name);
+    let provider_env = {
+        let raw = std::env::var("MC_SECRETS_PROVIDER").unwrap_or_default();
+        if raw.trim().eq_ignore_ascii_case("infisical") { "infisical" } else { "env" }
+    };
+    let profile_exists = path.exists();
+    let data = load_profile_data(&path);
+    let refs_count = data.get("refs").and_then(|v| v.as_object()).map(|m| m.len()).unwrap_or(0);
+    let provider_profile = data.get("provider").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let infisical = serde_json::json!({
+        "project_id": data.get("infisical_project_id"),
+        "env": data.get("infisical_env"),
+        "path": data.get("infisical_path"),
+    });
+    Json(serde_json::json!({
+        "secrets": {
+            "provider_env": provider_env,
+            "provider_profile": provider_profile,
+            "effective_profile": profile_name,
+            "profile_path": path.to_string_lossy(),
+            "profile_exists": profile_exists,
+            "refs_count": refs_count,
+            "infisical": infisical,
+        }
+    })).into_response()
 }
 
 async fn post_secrets_bootstrap(
     State(_state): State<Arc<AppState>>,
     principal: Principal,
-    Json(_payload): Json<SecretsBootstrapRequest>,
+    Json(payload): Json<SecretsBootstrapRequest>,
 ) -> impl IntoResponse {
     if let Some(r) = require_admin(&principal) {
         return r;
     }
-    // Secrets management is Python-managed; not implemented in the Rust server.
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({"ok": false, "error": "use_python_api"})),
-    )
-        .into_response()
+    let profile_name = payload.profile
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "default".into());
+    let provider_raw = payload.provider
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "env".into());
+    let provider = if provider_raw.trim().eq_ignore_ascii_case("infisical") { "infisical" } else { "env" };
+    if provider != "env" && provider != "infisical" {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"ok": false, "error": "provider must be env or infisical"}))).into_response();
+    }
+    let keep_existing = payload.keep_existing.unwrap_or(true);
+    let project_id = payload.infisical_project_id.filter(|s| !s.is_empty());
+    let infisical_env = payload.infisical_env.filter(|s| !s.is_empty());
+    let infisical_path = payload.infisical_path.filter(|s| !s.is_empty());
+
+    let path = profile_secrets_path(&profile_name);
+    let existing = load_profile_data(&path);
+
+    let mut refs: serde_json::Map<String, serde_json::Value> = existing
+        .get("refs")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+
+    const DEFAULT_NAMES: &[&str] = &[
+        "MC_TOKEN", "MQTT_PASSWORD", "POSTGRES_PASSWORD",
+        "MC_OBJECT_STORAGE_ACCESS_KEY", "MC_OBJECT_STORAGE_ACCESS_SECRET",
+    ];
+    for &name in DEFAULT_NAMES {
+        if keep_existing && refs.contains_key(name) { continue; }
+        let ref_val = build_secret_ref(name, provider, project_id.as_deref(), infisical_env.as_deref(), infisical_path.as_deref());
+        refs.insert(name.to_string(), serde_json::json!(ref_val));
+    }
+
+    let refs_count = refs.len();
+    let mut new_data = serde_json::json!({
+        "refs": refs,
+        "provider": provider,
+    });
+    if provider == "infisical" {
+        new_data["infisical_project_id"] = serde_json::json!(project_id);
+        new_data["infisical_env"] = serde_json::json!(infisical_env);
+        new_data["infisical_path"] = serde_json::json!(infisical_path);
+    }
+
+    if let Err(e) = save_profile_data(&path, &new_data).await {
+        tracing::error!("secrets_bootstrap save: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    Json(serde_json::json!({
+        "ok": true,
+        "result": {
+            "profile": profile_name,
+            "provider": provider,
+            "path": path.to_string_lossy(),
+            "refs_count": refs_count,
+        }
+    })).into_response()
 }
 
 async fn post_secrets_rotate(
     State(_state): State<Arc<AppState>>,
     principal: Principal,
-    Json(_payload): Json<SecretsRotateRequest>,
+    Json(payload): Json<SecretsRotateRequest>,
 ) -> impl IntoResponse {
     if let Some(r) = require_admin(&principal) {
         return r;
     }
-    // Secrets management is Python-managed; not implemented in the Rust server.
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({"ok": false, "error": "use_python_api"})),
-    )
-        .into_response()
+    let profile_name = payload.profile
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "default".into());
+    let secret_name = match payload.name.filter(|s| !s.trim().is_empty()) {
+        Some(n) => n,
+        None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"ok": false, "error": "name is required"}))).into_response(),
+    };
+    let generator = payload.generator.filter(|s| !s.is_empty()).unwrap_or_else(|| "token".into());
+
+    let path = profile_secrets_path(&profile_name);
+    let data = load_profile_data(&path);
+
+    let ref_val = data.get("refs")
+        .and_then(|v| v.as_object())
+        .and_then(|r| r.get(&secret_name))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    let ref_val = match ref_val {
+        Some(r) => r,
+        None => return (StatusCode::CONFLICT, Json(serde_json::json!({"ok": false, "error": format!("Secret '{}' is not mapped in profile '{}'", secret_name, profile_name)}))).into_response(),
+    };
+
+    let next_value = payload.value.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| generate_secret(&generator));
+
+    let (provider, target_name) = if let Some(rest) = ref_val.strip_prefix("secret://infisical/") {
+        ("infisical", rest.split('?').next().unwrap_or(&secret_name).to_string())
+    } else if let Some(rest) = ref_val.strip_prefix("secret://env/") {
+        ("env", rest.split('?').next().unwrap_or(&secret_name).to_string())
+    } else {
+        ("env", secret_name.clone())
+    };
+
+    if provider == "env" {
+        // SAFETY: single-threaded context during startup config; best-effort env update
+        unsafe { std::env::set_var(&target_name, &next_value) };
+    } else {
+        let cli = std::env::var("MC_SECRETS_INFISICAL_CLI_BIN").unwrap_or_else(|_| "infisical".into());
+        let project_id = data.get("infisical_project_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let infisical_env = data.get("infisical_env").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let infisical_path_val = data.get("infisical_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let mut cmd = std::process::Command::new(&cli);
+        cmd.args(["secrets", "set", &target_name, &next_value]);
+        if !project_id.is_empty() { cmd.args(["--projectId", &project_id]); }
+        if !infisical_env.is_empty() { cmd.args(["--env", &infisical_env]); }
+        if !infisical_path_val.is_empty() { cmd.args(["--path", &infisical_path_val]); }
+        match cmd.output() {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr).to_string();
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": err}))).into_response();
+            }
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))).into_response(),
+        }
+    }
+
+    Json(serde_json::json!({
+        "ok": true,
+        "result": {
+            "profile": profile_name,
+            "name": secret_name,
+            "provider": provider,
+            "reference": ref_val,
+            "updated": true,
+        }
+    })).into_response()
 }

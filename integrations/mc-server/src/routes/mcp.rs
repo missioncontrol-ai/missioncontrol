@@ -127,8 +127,42 @@ fn err_result(error: &str) -> Value {
     json!({"ok": false, "error": error, "result": {}})
 }
 
+#[allow(dead_code)]
 fn not_impl() -> Value {
     err_result("not_implemented_in_rust_server")
+}
+
+fn uri_encode_path(s: &str) -> String {
+    s.split('/').map(|seg| uri_encode(seg)).collect::<Vec<_>>().join("/")
+}
+
+fn uri_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                out.push('%');
+                out.push_str(&format!("{b:02X}"));
+            }
+        }
+    }
+    out
+}
+
+fn sigv4_signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
+    use hmac::Mac;
+    fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+        let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(key).unwrap();
+        mac.update(data);
+        mac.finalize().into_bytes().to_vec()
+    }
+    let k_date = hmac_sha256(format!("AWS4{secret}").as_bytes(), date.as_bytes());
+    let k_region = hmac_sha256(&k_date, region.as_bytes());
+    let k_service = hmac_sha256(&k_region, service.as_bytes());
+    hmac_sha256(&k_service, b"aws4_request")
 }
 
 async fn call_tool(
@@ -2301,8 +2335,124 @@ async fn dispatch(
             ok_result(json!({"published_count": published_count, "commit_sha": commit_sha, "branch": branch, "repo_url": clean_repo_url}))
         }
 
-        // ── get_artifact_download_url (S3 presigning — Python only) ─────────────
-        "get_artifact_download_url" => not_impl(),
+        // ── get_artifact_download_url — SigV4 presigned S3 URL ──────────────────
+        "get_artifact_download_url" => {
+            let artifact_id = int_arg(args, "artifact_id").unwrap_or(0) as i32;
+            let expires: u64 = int_arg(args, "expires_seconds").unwrap_or(60).clamp(1, 3600) as u64;
+            if artifact_id <= 0 { return err_result("artifact_id is required"); }
+
+            // Look up artifact
+            let artifact = sqlx::query("SELECT * FROM artifact WHERE id=$1")
+                .bind(artifact_id).fetch_optional(&state.db).await;
+            let artifact = match artifact {
+                Ok(Some(r)) => r,
+                Ok(None) => return err_result("Artifact not found"),
+                Err(e) => { tracing::error!("get_artifact_download_url artifact: {e}"); return err_result("database_error"); }
+            };
+            let storage_backend: String = artifact.try_get("storage_backend").unwrap_or_default();
+            let uri: String = artifact.try_get("uri").unwrap_or_default();
+            if storage_backend != "s3" || !uri.starts_with("s3://") {
+                return err_result("Artifact does not have retrievable S3-backed content");
+            }
+
+            // Parse s3://bucket/key
+            let rest = match uri.strip_prefix("s3://") {
+                Some(r) => r,
+                None => return err_result("uri must be an s3:// URI"),
+            };
+            let (bucket, key) = match rest.split_once('/') {
+                Some((b, k)) if !b.is_empty() && !k.is_empty() => (b.to_string(), k.to_string()),
+                _ => return err_result("invalid s3 URI"),
+            };
+
+            // Read config from env
+            let endpoint = std::env::var("MC_OBJECT_STORAGE_ENDPOINT").unwrap_or_default();
+            let region = std::env::var("MC_OBJECT_STORAGE_REGION").unwrap_or_else(|_| "us-east-1".into());
+            let access_key = std::env::var("MC_OBJECT_STORAGE_ACCESS_KEY")
+                .or_else(|_| std::env::var("MC_OBJECT_STORAGE_KEY"))
+                .unwrap_or_default();
+            let secret_key = std::env::var("MC_OBJECT_STORAGE_ACCESS_SECRET")
+                .or_else(|_| std::env::var("MC_OBJECT_STORAGE_SECRET"))
+                .unwrap_or_default();
+
+            if access_key.is_empty() || secret_key.is_empty() {
+                return err_result("object storage not configured (missing access key or secret)");
+            }
+
+            // Build SigV4 presigned URL
+            let now = chrono::Utc::now();
+            let date_stamp = now.format("%Y%m%d").to_string();
+            let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+
+            // Determine host and path style
+            // Custom endpoint → path-style (MinIO); no endpoint → virtual-hosted (AWS)
+            let (host, canonical_path, url_path) = if endpoint.is_empty() {
+                // AWS virtual-hosted: bucket in hostname
+                let h = format!("{bucket}.s3.{region}.amazonaws.com");
+                let cp = format!("/{}", uri_encode_path(&key));
+                let up = format!("/{key}");
+                (h, cp, up)
+            } else {
+                let stripped = endpoint
+                    .trim_start_matches("https://")
+                    .trim_start_matches("http://")
+                    .trim_end_matches('/');
+                let h = stripped.to_string();
+                let cp = format!("/{}/{}", uri_encode_path(&bucket), uri_encode_path(&key));
+                let up = format!("/{bucket}/{key}");
+                (h, cp, up)
+            };
+
+            let scope = format!("{date_stamp}/{region}/s3/aws4_request");
+            let algorithm = "AWS4-HMAC-SHA256";
+            let credential = format!("{access_key}/{scope}");
+
+            // Canonical query string — params sorted lexicographically
+            let signed_headers = "host";
+            let mut qparams = vec![
+                ("X-Amz-Algorithm", algorithm.to_string()),
+                ("X-Amz-Credential", credential.clone()),
+                ("X-Amz-Date", amz_date.clone()),
+                ("X-Amz-Expires", expires.to_string()),
+                ("X-Amz-SignedHeaders", signed_headers.to_string()),
+            ];
+            qparams.sort_by(|a, b| a.0.cmp(b.0));
+            let canonical_qs: String = qparams
+                .iter()
+                .map(|(k, v)| format!("{}={}", uri_encode(k), uri_encode(v)))
+                .collect::<Vec<_>>()
+                .join("&");
+
+            let canonical_headers = format!("host:{host}\n");
+            let payload_hash = "UNSIGNED-PAYLOAD";
+            let canonical_request = format!(
+                "GET\n{canonical_path}\n{canonical_qs}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+            );
+
+            use sha2::Digest;
+            let cr_hash = hex::encode(sha2::Sha256::digest(canonical_request.as_bytes()));
+            let string_to_sign = format!("{algorithm}\n{amz_date}\n{scope}\n{cr_hash}");
+
+            let signing_key = sigv4_signing_key(&secret_key, &date_stamp, &region, "s3");
+            use hmac::Mac;
+            let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(&signing_key).unwrap();
+            mac.update(string_to_sign.as_bytes());
+            let signature = hex::encode(mac.finalize().into_bytes());
+
+            let scheme = if std::env::var("MC_OBJECT_STORAGE_SECURE")
+                .map(|v| v.to_lowercase() == "false" || v == "0")
+                .unwrap_or(false)
+            {
+                "http"
+            } else {
+                "https"
+            };
+            let presigned_url = format!(
+                "{scheme}://{host}{url_path}?{canonical_qs}&X-Amz-Signature={signature}"
+            );
+
+            ok_result(json!({"url": presigned_url, "expires_seconds": expires}))
+        }
 
         // ── Workspace leases ──────────────────────────────────────────────────
 

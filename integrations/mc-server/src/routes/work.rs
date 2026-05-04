@@ -1,5 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, patch, post},
@@ -34,7 +35,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/work/missions/{mission_id}/agents", get(list_mission_agents))
         .route("/work/missions/{mission_id}/messages", get(list_mission_messages).post(send_mission_message))
         .route("/work/missions/{mission_id}/roster", get(mission_roster))
-        .route("/work/missions/{mission_id}/stream", get(mission_stream_stub))
+        .route("/work/missions/{mission_id}/stream", get(mission_stream))
         // Agents
         .route("/work/agents/{agent_id}/heartbeat", post(agent_heartbeat))
         .route("/work/agents/{agent_id}/status", post(set_agent_status))
@@ -43,7 +44,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/work/agents/{agent_id}/messages", get(get_agent_messages))
         // Kluster messages + stream
         .route("/work/klusters/{kluster_id}/messages", get(list_kluster_messages).post(send_kluster_message))
-        .route("/work/klusters/{kluster_id}/stream", get(kluster_stream_stub))
+        .route("/work/klusters/{kluster_id}/stream", get(kluster_stream))
 }
 
 // ── Error helpers ──────────────────────────────────────────────────────────────
@@ -1970,18 +1971,73 @@ async fn send_kluster_message(
     }
 }
 
-// ── WebSocket stubs ────────────────────────────────────────────────────────────
+// ── WebSocket streams ──────────────────────────────────────────────────────────
 
-async fn kluster_stream_stub(
-    _principal: Principal,
-    Path(_kluster_id): Path<String>,
+async fn kluster_stream(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    Path(kluster_id): Path<String>,
 ) -> impl IntoResponse {
-    StatusCode::NOT_IMPLEMENTED.into_response()
+    ws.on_upgrade(move |socket| poll_ledger_stream(socket, state, "kluster_id".into(), kluster_id))
 }
 
-async fn mission_stream_stub(
-    _principal: Principal,
-    Path(_mission_id): Path<String>,
+async fn mission_stream(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    Path(mission_id): Path<String>,
 ) -> impl IntoResponse {
-    StatusCode::NOT_IMPLEMENTED.into_response()
+    ws.on_upgrade(move |socket| poll_ledger_stream(socket, state, "mission_id".into(), mission_id))
+}
+
+async fn poll_ledger_stream(
+    mut socket: WebSocket,
+    state: Arc<AppState>,
+    filter_col: String,
+    filter_val: String,
+) {
+    let mut last_id: i32 = 0;
+    let mut ticks_since_ping: u32 = 0;
+    loop {
+        // Fetch new events since last seen id
+        let query_str = format!(
+            "SELECT id, event_id, entity_type, entity_id, action, state, created_at \
+             FROM ledgerevent WHERE {filter_col}=$1 AND id>$2 ORDER BY id ASC LIMIT 50"
+        );
+        let rows = sqlx::query(&query_str)
+            .bind(&filter_val)
+            .bind(last_id)
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_default();
+
+        for row in &rows {
+            let id: i32 = row.get("id");
+            if id > last_id { last_id = id; }
+            let evt = serde_json::json!({
+                "type": "event",
+                "id": id,
+                "event_id": row.get::<String, _>("event_id"),
+                "entity_type": row.get::<String, _>("entity_type"),
+                "entity_id": row.get::<String, _>("entity_id"),
+                "action": row.get::<String, _>("action"),
+                "state": row.get::<String, _>("state"),
+                "created_at": row.get::<chrono::NaiveDateTime, _>("created_at"),
+                filter_col.as_str(): filter_val,
+            });
+            if socket.send(Message::Text(evt.to_string().into())).await.is_err() {
+                return;
+            }
+        }
+
+        ticks_since_ping += 1;
+        if ticks_since_ping >= 15 {
+            ticks_since_ping = 0;
+            let ping = serde_json::json!({"type": "ping"});
+            if socket.send(Message::Text(ping.to_string().into())).await.is_err() {
+                return;
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
 }
