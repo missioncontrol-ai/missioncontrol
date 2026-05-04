@@ -1,22 +1,27 @@
 pub mod agents;
+pub mod ai;
 pub mod approvals;
 pub mod artifacts;
 pub mod auth;
 pub mod budgets;
 pub mod chat_integrations;
 pub mod docs;
-pub mod explorer;
-pub mod google_chat_integrations;
 pub mod event_triggers;
+pub mod evolve;
+pub mod explorer;
 pub mod feedback;
+pub mod google_chat_integrations;
 pub mod governance;
 pub mod health;
 pub mod hooks;
 pub mod ingestion;
 pub mod klusters;
+pub mod mcp;
 pub mod mission_packs;
 pub mod missions;
+pub mod oidc_web;
 pub mod onboarding;
+pub mod ops;
 pub mod persistence;
 pub mod profiles;
 pub mod proxy;
@@ -28,6 +33,7 @@ pub mod scheduled_jobs;
 pub mod schema_pack;
 pub mod search;
 pub mod skills;
+pub mod slack_integrations;
 pub mod tasks;
 pub mod teams_integrations;
 pub mod work;
@@ -42,6 +48,7 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(health::router())
         .merge(raft::router())
         .merge(auth::router())
+        .merge(oidc_web::router())
         .merge(missions::router())
         .merge(agents::router())
         .merge(klusters::router())
@@ -70,7 +77,12 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(skills::router())
         .merge(google_chat_integrations::router())
         .merge(teams_integrations::router())
-        .merge(explorer::router());
+        .merge(explorer::router())
+        .merge(ai::router())
+        .merge(evolve::router())
+        .merge(mcp::router())
+        .merge(ops::router())
+        .merge(slack_integrations::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }

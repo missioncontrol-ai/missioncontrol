@@ -1,3 +1,17 @@
+# ── mc-server builder ────────────────────────────────────────────────────────
+FROM rust:1.88-slim AS mc-server-builder
+WORKDIR /build
+
+COPY integrations/mc-server/Cargo.toml integrations/mc-server/Cargo.lock ./integrations/mc-server/
+RUN mkdir -p integrations/mc-server/src && \
+    echo 'fn main() {}' > integrations/mc-server/src/main.rs && \
+    echo 'pub fn stub() {}' > integrations/mc-server/src/lib.rs
+RUN cargo build --release --manifest-path integrations/mc-server/Cargo.toml
+
+COPY integrations/mc-server ./integrations/mc-server
+RUN touch integrations/mc-server/src/main.rs integrations/mc-server/src/lib.rs && \
+    cargo build --release --manifest-path integrations/mc-server/Cargo.toml
+
 # ── base: shared deps layer ─────────────────────────────────────────────────
 FROM python:3.11-slim AS base
 
@@ -37,6 +51,7 @@ FROM base AS prod
 
 COPY backend /app
 COPY web /app/web
+COPY --from=mc-server-builder /build/integrations/mc-server/target/release/mc-server /usr/local/bin/mc-server
 RUN mkdir -p /app/chroma /data \
     && chown -R missioncontrol:missioncontrol /app /data
 

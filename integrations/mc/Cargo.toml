@@ -52,6 +52,7 @@ mc-mesh-secrets = { path = "../mc-mesh/crates/mc-mesh-secrets" }
 mc-tui = { path = "crates/mc-tui", optional = true }
 
 [features]
+default = ["tui"]
 tui = ["mc-tui"]
 
 [dev-dependencies]

@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: write
-  packages: write
+  id-token: write  # required for Infisical OIDC auth
 
 jobs:
   build:
@@ -14,17 +14,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Pull secrets from Infisical
+        uses: infisical/secrets-action@v1
+        with:
+          method: "oidc"
+          env-slug: "prod"
+          project-slug: "missioncontrol"
+          identity-id: ${{ vars.INFISICAL_MACHINE_IDENTITY_ID }}
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ryanmerlin
+          password: ${{ env.GHCR_PAT }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push missioncontrol API
+      - name: Build and push missioncontrol
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -32,37 +40,27 @@ jobs:
           target: prod
           push: true
           tags: |
+            ghcr.io/ryanmerlin/missioncontrol:${{ github.sha }}
+            ghcr.io/ryanmerlin/missioncontrol:latest
             ghcr.io/missioncontrol-ai/missioncontrol:${{ github.sha }}
             ghcr.io/missioncontrol-ai/missioncontrol:latest
           cache-from: type=gha,scope=missioncontrol
           cache-to: type=gha,mode=max,scope=missioncontrol
 
-      - name: Build and push mc-server
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: integrations/mc-server/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/missioncontrol-ai/mc-server:${{ github.sha }}
-            ghcr.io/missioncontrol-ai/mc-server:latest
-          cache-from: type=gha,scope=mc-server
-          cache-to: type=gha,mode=max,scope=mc-server
-
       - name: Update gitops image tags
-        env:
-          GH_TOKEN: ${{ secrets.GITOPS_DEPLOY_TOKEN }}
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
-          git clone https://x-access-token:${GH_TOKEN}@github.com/RyanMerlin/gitops-merlinlabs.git /tmp/gitops
+          git clone https://x-access-token:${GITOPS_DEPLOY_TOKEN}@github.com/RyanMerlin/gitops-merlinlabs.git /tmp/gitops
           cd /tmp/gitops
-          sed -i "s|ghcr.io/missioncontrol-ai/missioncontrol:[a-f0-9]*|ghcr.io/missioncontrol-ai/missioncontrol:${SHORT_SHA}|g" \
-            merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml
-          sed -i "s|ghcr.io/missioncontrol-ai/mc-server:[a-f0-9]*|ghcr.io/missioncontrol-ai/mc-server:${SHORT_SHA}|g" \
+          sed -i "s|ghcr.io/ryanmerlin/missioncontrol:[a-f0-9]*|ghcr.io/ryanmerlin/missioncontrol:${SHORT_SHA}|g" \
+            merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml \
             merlinlabs/applications/missioncontrol/mc-server-deployment.yaml
-          git config user.email "ci@missioncontrol-ai"
+          sed -i "s|ghcr.io/missioncontrol-ai/missioncontrol:[a-f0-9]*|ghcr.io/missioncontrol-ai/missioncontrol:${SHORT_SHA}|g" \
+            merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml \
+            merlinlabs/applications/missioncontrol/mc-server-deployment.yaml
+          git config user.email "ci@ryanmerlin.dev"
           git config user.name "MC CI"
           git add merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml \
                   merlinlabs/applications/missioncontrol/mc-server-deployment.yaml
-          git diff --staged --quiet || git commit -m "chore(deploy): bump images to ${SHORT_SHA}"
+          git diff --staged --quiet || git commit -m "chore(deploy): bump missioncontrol to ${SHORT_SHA}"
           git push

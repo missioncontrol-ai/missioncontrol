@@ -35,6 +35,8 @@ sha2 = "0.10"
 base64 = "0.22"
 flate2 = "1.0"
 tar = "0.4"
+tokio-stream = "0.1"
+futures-util = "0.3"
 
 [dev-dependencies]
 axum-test = "20"
