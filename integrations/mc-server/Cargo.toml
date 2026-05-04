@@ -28,6 +28,7 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "4"
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "macros"] }
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 rand = "0.8"
 hex = "0.4"
 hmac = "0.12"

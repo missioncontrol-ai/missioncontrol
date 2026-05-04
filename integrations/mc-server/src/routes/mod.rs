@@ -9,6 +9,7 @@ pub mod docs;
 pub mod event_triggers;
 pub mod evolve;
 pub mod explorer;
+pub mod family_governance;
 pub mod feedback;
 pub mod google_chat_integrations;
 pub mod governance;
@@ -82,7 +83,8 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(evolve::router())
         .merge(mcp::router())
         .merge(ops::router())
-        .merge(slack_integrations::router());
+        .merge(slack_integrations::router())
+        .merge(family_governance::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }
