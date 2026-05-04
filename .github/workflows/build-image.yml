@@ -57,28 +57,16 @@ jobs:
           cache-from: type=gha,scope=missioncontrol
           cache-to: type=gha,mode=max,scope=missioncontrol
 
-      - name: Build and push mc-server
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: integrations/mc-server/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/missioncontrol-ai/mc-server:${{ github.sha }}
-            ghcr.io/missioncontrol-ai/mc-server:latest
-          cache-from: type=gha,scope=mc-server
-          cache-to: type=gha,mode=max,scope=mc-server
-
       - name: Update gitops image tags
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
           git clone https://x-access-token:${MC_GIT_PUBLISH_TOKEN}@github.com/RyanMerlin/gitops-merlinlabs.git /tmp/gitops
           cd /tmp/gitops
           sed -i "s|ghcr.io/ryanmerlin/missioncontrol:[a-f0-9]*|ghcr.io/ryanmerlin/missioncontrol:${SHORT_SHA}|g" \
-            merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml
+            merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml \
+            merlinlabs/applications/missioncontrol/mc-server-deployment.yaml
           sed -i "s|ghcr.io/missioncontrol-ai/missioncontrol:[a-f0-9]*|ghcr.io/missioncontrol-ai/missioncontrol:${SHORT_SHA}|g" \
-            merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml
-          sed -i "s|ghcr.io/missioncontrol-ai/mc-server:[a-f0-9]*|ghcr.io/missioncontrol-ai/mc-server:${SHORT_SHA}|g" \
+            merlinlabs/applications/missioncontrol/missioncontrol-deployment.yaml \
             merlinlabs/applications/missioncontrol/mc-server-deployment.yaml
           git config user.email "ci@ryanmerlin.dev"
           git config user.name "MC CI"
