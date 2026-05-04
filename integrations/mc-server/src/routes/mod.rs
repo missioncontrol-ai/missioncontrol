@@ -36,6 +36,7 @@ pub mod search;
 pub mod skills;
 pub mod slack_integrations;
 pub mod tasks;
+pub mod webhooks_tailscale;
 pub mod teams_integrations;
 pub mod work;
 
@@ -84,7 +85,8 @@ pub fn build_router(include_proxy: bool) -> Router<Arc<AppState>> {
         .merge(mcp::router())
         .merge(ops::router())
         .merge(slack_integrations::router())
-        .merge(family_governance::router());
+        .merge(family_governance::router())
+        .merge(webhooks_tailscale::router());
     if include_proxy {
         router = router.merge(proxy::router());
     }
