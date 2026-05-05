@@ -19,7 +19,7 @@ jobs:
         with:
           method: "oidc"
           env-slug: "prod"
-          project-slug: "aria-merlinlabs"
+          project-slug: "merlinlabs"
           identity-id: ${{ vars.INFISICAL_MACHINE_IDENTITY_ID }}
           secret-path: "/ghcr"
 
@@ -28,7 +28,7 @@ jobs:
         with:
           method: "oidc"
           env-slug: "prod"
-          project-slug: "aria-merlinlabs"
+          project-slug: "merlinlabs"
           identity-id: ${{ vars.INFISICAL_MACHINE_IDENTITY_ID }}
           secret-path: "/missioncontrol"
 
