@@ -45,7 +45,7 @@ EOF
 chmod +x "$TEST_BIN/"*
 export PATH="$TEST_BIN:$PATH"
 
-# mc run: codex and claude use the new profile-based layout
+# mc run: codex and claude use the profile-based layout (default profile)
 run_mc_run() {
   local agent="$1"
   shift
@@ -75,12 +75,12 @@ assert_not_exists() {
 
 echo "[launch-regression] codex: profile-based config layout"
 run_mc_run codex
-assert_exists "$MC_HOME/profiles/codex/codex-home/config.toml"
+assert_exists "$MC_HOME/profiles/codex/default/codex-home/config.toml"
 assert_not_exists "$HOME/.codex/config.toml"
 
 echo "[launch-regression] claude: profile-based config layout"
 run_mc_run claude
-assert_exists "$MC_HOME/profiles/claude/runtime/home/.claude.json"
+assert_exists "$MC_HOME/profiles/default/claude/runtime/home/.claude.json"
 assert_not_exists "$HOME/.claude.json"
 
 echo "[launch-regression] gemini: instance config behavior"
