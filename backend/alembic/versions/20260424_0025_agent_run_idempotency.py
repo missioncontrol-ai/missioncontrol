@@ -27,25 +27,30 @@ def _constraint_names(conn, table: str) -> set:
 
 def upgrade() -> None:
     conn = op.get_bind()
+    cols = _col_set(conn, "agentrun")
+    constraints = _constraint_names(conn, "agentrun")
 
-    if "idempotency_key" not in _col_set(conn, "agentrun"):
-        op.add_column("agentrun", sa.Column("idempotency_key", sa.String(), nullable=True))
+    needs_col = "idempotency_key" not in cols
+    needs_constraint = "uq_agentrun_owner_idempotency" not in constraints
 
-    if "uq_agentrun_owner_idempotency" not in _constraint_names(conn, "agentrun"):
-        op.create_unique_constraint(
-            "uq_agentrun_owner_idempotency",
-            "agentrun",
-            ["owner_subject", "idempotency_key"],
-        )
+    if needs_col or needs_constraint:
+        with op.batch_alter_table("agentrun") as batch_op:
+            if needs_col:
+                batch_op.add_column(sa.Column("idempotency_key", sa.String(), nullable=True))
+            if needs_constraint:
+                batch_op.create_unique_constraint(
+                    "uq_agentrun_owner_idempotency",
+                    ["owner_subject", "idempotency_key"],
+                )
 
-    # DIAGNOSTIC: log which tables exist after this migration
-    from sqlalchemy import inspect as _inspect
     import logging
     _log = logging.getLogger(__name__)
+    from sqlalchemy import inspect as _inspect
     tables = _inspect(conn).get_table_names()
     _log.warning("DIAG 0025 post-upgrade tables: %s", sorted(tables))
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_agentrun_owner_idempotency", "agentrun", type_="unique")
-    op.drop_column("agentrun", "idempotency_key")
+    with op.batch_alter_table("agentrun") as batch_op:
+        batch_op.drop_constraint("uq_agentrun_owner_idempotency", type_="unique")
+        batch_op.drop_column("idempotency_key")
