@@ -13,7 +13,6 @@ TEST_MC_HOME="$WORKDIR/mc-home"
 TEST_BIN="$WORKDIR/bin"
 mkdir -p "$TEST_HOME" "$TEST_MC_HOME" "$TEST_BIN"
 
-# Preserve rust toolchain resolution after overriding HOME for isolation.
 ORIG_HOME="${HOME:-}"
 export CARGO_HOME="${CARGO_HOME:-$ORIG_HOME/.cargo}"
 export RUSTUP_HOME="${RUSTUP_HOME:-$ORIG_HOME/.rustup}"
@@ -46,6 +45,14 @@ EOF
 chmod +x "$TEST_BIN/"*
 export PATH="$TEST_BIN:$PATH"
 
+# mc run: codex and claude use the new profile-based layout
+run_mc_run() {
+  local agent="$1"
+  shift
+  cargo run --quiet --manifest-path "$MC_MANIFEST_PATH" -- run "$agent" --headless "$@"
+}
+
+# mc launch: gemini, openclaw, custom still use the legacy launch path
 run_launch() {
   local agent="$1"
   shift
@@ -66,37 +73,33 @@ assert_not_exists() {
   [[ ! -e "$path" ]] || { echo "[launch-regression] unexpected path exists: $path" >&2; exit 1; }
 }
 
-echo "[launch-regression] default instance-local config behavior"
-run_launch codex
-inst="$(latest_instance_dir)"
-assert_exists "$inst/home/.codex/config.toml"
+echo "[launch-regression] codex: profile-based config layout"
+run_mc_run codex
+assert_exists "$MC_HOME/profiles/codex/codex-home/config.toml"
 assert_not_exists "$HOME/.codex/config.toml"
 
-run_launch claude
-inst="$(latest_instance_dir)"
-assert_exists "$inst/home/.claude.json"
+echo "[launch-regression] claude: profile-based config layout"
+run_mc_run claude
+assert_exists "$MC_HOME/profiles/claude/runtime/home/.claude.json"
 assert_not_exists "$HOME/.claude.json"
 
+echo "[launch-regression] gemini: instance config behavior"
 run_launch gemini
 inst="$(latest_instance_dir)"
 assert_exists "$inst/home/.gemini/settings.json"
 assert_not_exists "$HOME/.gemini/settings.json"
 
+echo "[launch-regression] openclaw: instance config behavior"
 run_launch openclaw
 inst="$(latest_instance_dir)"
 assert_exists "$inst/mc/config/openclaw.acp.json"
 
+echo "[launch-regression] custom: instance config behavior"
 run_launch custom
 inst="$(latest_instance_dir)"
 assert_exists "$inst/mc/config/custom.acp.json"
 
-echo "[launch-regression] legacy global config escape hatch"
-run_launch codex --legacy-global-config
-assert_exists "$HOME/.codex/config.toml"
-
-run_launch claude --legacy-global-config
-assert_exists "$HOME/.claude.json"
-
+echo "[launch-regression] gemini: legacy global config escape hatch"
 run_launch gemini --legacy-global-config
 assert_exists "$HOME/.gemini/settings.json"
 
