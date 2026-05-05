@@ -26,12 +26,13 @@ def upgrade() -> None:
         op.create_table(
             "serviceaccount",
             sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-            sa.Column("name", sa.String(), nullable=False, unique=True),
+            sa.Column("name", sa.String(), nullable=False),
             sa.Column("owner_subject", sa.String(), nullable=False, index=True),
             sa.Column("client_secret_hash", sa.String(), nullable=False),
             sa.Column("client_secret_prefix", sa.String(), nullable=False, server_default=""),
             sa.Column("created_at", sa.DateTime(), nullable=False),
             sa.Column("revoked", sa.Boolean(), nullable=False, server_default=sa.false(), index=True),
+            sa.UniqueConstraint("name", name="uq_serviceaccount_name"),
         )
 
     if not _has_table(conn, "serviceaccounttoken"):
@@ -45,12 +46,13 @@ def upgrade() -> None:
                 nullable=False,
                 index=True,
             ),
-            sa.Column("token_hash", sa.String(), nullable=False, unique=True, index=True),
+            sa.Column("token_hash", sa.String(), nullable=False, index=True),
             sa.Column("token_prefix", sa.String(), nullable=False, server_default=""),
             sa.Column("expires_at", sa.DateTime(), nullable=True),
             sa.Column("created_at", sa.DateTime(), nullable=False),
             sa.Column("last_used_at", sa.DateTime(), nullable=True),
             sa.Column("revoked", sa.Boolean(), nullable=False, server_default=sa.false(), index=True),
+            sa.UniqueConstraint("token_hash", name="uq_serviceaccounttoken_token_hash"),
         )
 
 
