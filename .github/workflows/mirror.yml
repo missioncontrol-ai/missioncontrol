@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   mirror:
+    if: github.repository != 'missioncontrol-ai/missioncontrol'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
